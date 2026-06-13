@@ -112,11 +112,15 @@ def build_market_context(client, symbol: str, positions: list = None,
     if positions:
         lines.append("")
         lines.append("--- Posiciones abiertas en este símbolo ---")
+        total_profit = 0.0
         for p in positions:
             direction = getattr(p, "direction", None) or (p.get("type") if isinstance(p, dict) else "?")
-            profit = getattr(p, "profit", None) if not isinstance(p, dict) else p.get("profit", "?")
+            profit = getattr(p, "profit", None) if not isinstance(p, dict) else p.get("profit", 0)
             open_price = getattr(p, "open_price", None) if not isinstance(p, dict) else p.get("open_price", "?")
-            lines.append(f"{direction} @ {open_price} | P/L flotante: {profit}")
+            current_price = getattr(p, "current_price", None) if not isinstance(p, dict) else p.get("current_price", "?")
+            total_profit += profit
+            lines.append(f"{direction} @ {open_price} | Actual: {current_price} | P/L flotante: ${profit:+.2f}")
+        lines.append(f"Profit no realizado total ({symbol}): ${total_profit:+.2f}")
 
     if news_context:
         lines.append("")

@@ -347,6 +347,25 @@ class AgentOrchestrator:
         self._detect_closed_trades(symbol, positions)
         bot_state.sync_positions(symbol, positions)
 
+        # ----- Resumen de posiciones abiertas con profit no realizado -----
+        if positions:
+            total_profit = 0.0
+            print(f"\n  📊 Posiciones abiertas en {symbol}:")
+            for i, pos in enumerate(positions, 1):
+                ticket = _pos_get(pos, "ticket", default="?")
+                direction = _pos_direction(pos)
+                volume = _pos_to_float(_pos_get(pos, "volume"))
+                open_price = _pos_to_float(_pos_get(pos, "open_price", "price_open"))
+                current_price = _pos_to_float(_pos_get(pos, "current_price"))
+                profit = _pos_to_float(_pos_get(pos, "profit"))
+                total_profit += profit
+                print(f"    {i}. Ticket #{ticket} | {direction} {volume} lotes | "
+                      f"Entry: {open_price} | Actual: {current_price} | "
+                      f"P/L: ${profit:+.2f}")
+            print(f"\n  💰 Profit no realizado total ({symbol}): ${total_profit:+.2f}")
+        else:
+            print(f"\n  ✅ No hay posiciones abiertas en {symbol}.")
+
         # Si el símbolo está en su máximo de posiciones, espaciar el análisis a
         # AT_MAX_ANALYSIS_INTERVAL: solo lo justifica una señal de confianza muy
         # alta (>=90%) que se salte el límite, así que no merece la pena consultar
