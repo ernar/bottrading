@@ -23,6 +23,7 @@ socketio = SocketIO(
 )
 
 _mt_client = None
+_orchestrator = None
 connected_clients = set()
 
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +33,12 @@ logger = logging.getLogger(__name__)
 def set_mt_client(client):
     global _mt_client
     _mt_client = client
+
+
+def set_orchestrator(orchestrator):
+    """Registra el orquestador de agentes para exponer su estado en /api/agents."""
+    global _orchestrator
+    _orchestrator = orchestrator
 
 
 @app.route("/health", methods=["GET"])
@@ -84,28 +91,32 @@ def notify_duplicate():
     return jsonify({"status": "notified"}), 200
 
 
+def _read_csv_rows(path: str, limit: int) -> list:
+    """Lee un CSV de logs de forma resiliente.
+
+    restkey='_extra' evita que campos sobrantes (CSV con esquema desalineado)
+    acaben bajo una clave None, lo que rompía jsonify al ordenar claves.
+    """
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f, restkey="_extra")
+        rows = [{k: v for k, v in row.items() if k is not None} for row in reader]
+    return rows[-limit:]
+
+
 @app.route("/api/csv/signals", methods=["GET"])
 def get_csv_signals():
     limit = int(request.args.get("limit", 15))
     platform = request.args.get("platform", "mt5").lower()
-    path = f"logs/{platform}/signals.csv"
-    if not os.path.exists(path):
-        return jsonify([]), 200
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    return jsonify(rows[-limit:]), 200
+    return jsonify(_read_csv_rows(f"logs/{platform}/signals.csv", limit)), 200
 
 
 @app.route("/api/csv/trades", methods=["GET"])
 def get_csv_trades():
     limit = int(request.args.get("limit", 50))
     platform = request.args.get("platform", "mt5").lower()
-    path = f"logs/{platform}/trades.csv"
-    if not os.path.exists(path):
-        return jsonify([]), 200
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    return jsonify(rows[-limit:]), 200
+    return jsonify(_read_csv_rows(f"logs/{platform}/trades.csv", limit)), 200
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -164,6 +175,27 @@ def get_stats():
     return jsonify(stats), 200
 
 
+@app.route("/api/agents", methods=["GET"])
+def get_agents():
+    """Resumen de agentes activos: config, stats de sesión, rendimiento y
+    última optimización. Vacío si el sistema agéntico no está en marcha."""
+    if _orchestrator is None:
+        return jsonify({"agents": [], "last_optimization": None,
+                        "last_optimization_at": None, "optimize_every_cycles": 0}), 200
+    return jsonify(_orchestrator.agents_overview()), 200
+
+
+@app.route("/api/agents/optimize", methods=["POST"])
+def optimize_agents():
+    """Lanza una optimización. Por defecto dry-run (no modifica parámetros);
+    pasa {"apply": true} para aplicarla en caliente."""
+    if _orchestrator is None:
+        return jsonify({"error": "orchestrator not running"}), 503
+    apply = bool((request.get_json(silent=True) or {}).get("apply", False))
+    report = _orchestrator.optimize(apply=apply)
+    return jsonify({"applied": apply, "report": report}), 200
+
+
 @app.route("/api/positions/<symbol>/close", methods=["POST"])
 def close_position(symbol):
     if _mt_client is None:
@@ -183,7 +215,7 @@ def close_position(symbol):
 
 
 @socketio.on("connect")
-def handle_connect():
+def handle_connect(auth=None):
     logger.info(f"Client connected: {request.sid}")
     connected_clients.add(request.sid)
     emit("initial_state", bot_state.get_state())

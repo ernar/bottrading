@@ -67,9 +67,17 @@ class StrategyEngine:
     MIN_RR = 1.0
     MAX_ENTRY_DEVIATION_PCT = 0.5  # entry no puede alejarse más de 0.5% del precio real
 
-    def __init__(self, config: BotConfig, provider: str = "ollama"):
+    def __init__(self, config: BotConfig, provider: str = "ollama",
+                 system_suffix: str = "", min_confidence: float = None,
+                 min_rr: float = None):
         self.config = config
         self.provider = provider.lower()
+        # Persona/contexto adicional inyectado por un agente especializado.
+        self.system_suffix = system_suffix
+        # Umbrales por instancia: un agente puede ser más o menos conservador
+        # que el resto sin tocar la clase global.
+        self.min_confidence = self.MIN_CONFIDENCE if min_confidence is None else min_confidence
+        self.min_rr = self.MIN_RR if min_rr is None else min_rr
         if self.provider == "ollama":
             self._ollama = ollama.Client()
 
@@ -101,7 +109,10 @@ class StrategyEngine:
 {market_data if market_data else 'No hay datos disponibles.'}
 
 Devuelve solo el JSON con el formato especificado."""
-        return self._call_ai(SYSTEM_PROMPT, user_prompt)
+        system = SYSTEM_PROMPT
+        if self.system_suffix:
+            system = f"{SYSTEM_PROMPT}\n\n--- Especialización del agente ---\n{self.system_suffix}"
+        return self._call_ai(system, user_prompt)
 
     @staticmethod
     def _to_float(value, default: float = 0.0) -> float:
@@ -153,8 +164,8 @@ Devuelve solo el JSON con el formato especificado."""
             return False
         if action not in ("BUY", "SELL"):
             return reject(f"acción desconocida '{action}'")
-        if signal["confidence"] < self.MIN_CONFIDENCE:
-            return reject(f"confianza {signal['confidence']:.0%} < {self.MIN_CONFIDENCE:.0%}")
+        if signal["confidence"] < self.min_confidence:
+            return reject(f"confianza {signal['confidence']:.0%} < {self.min_confidence:.0%}")
         if signal.get("risk_level") == "high" and positions:
             return reject("riesgo alto con posiciones abiertas")
         if self.config.max_open_positions and len(positions or []) >= self.config.max_open_positions:
@@ -184,8 +195,8 @@ Devuelve solo el JSON con el formato especificado."""
                 return reject(f"niveles incoherentes para SELL (TP={tp}, entry={entry}, SL={sl})")
             risk = abs(entry - sl)
             reward = abs(tp - entry)
-            if risk and reward / risk < self.MIN_RR:
-                return reject(f"R:R 1:{reward / risk:.2f} por debajo del mínimo 1:{self.MIN_RR}")
+            if risk and reward / risk < self.min_rr:
+                return reject(f"R:R 1:{reward / risk:.2f} por debajo del mínimo 1:{self.min_rr}")
 
         return True
 

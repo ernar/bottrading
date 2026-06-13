@@ -7,6 +7,7 @@ import { DashboardPage } from './pages/Dashboard'
 import { SignalsPage } from './pages/Signals'
 import { PositionsPage } from './pages/Positions'
 import { HistoryPage } from './pages/History'
+import { AgentsPage } from './pages/Agents'
 
 function App() {
   const { state, connected, duplicateInstance, clearDuplicate } = useWebSocket()
@@ -19,6 +20,7 @@ function App() {
         <Navigation />
         <Routes>
           <Route path="/" element={<DashboardPage state={state} />} />
+          <Route path="/agents" element={<AgentsPage />} />
           <Route path="/signals" element={<SignalsPage state={state} />} />
           <Route path="/positions" element={<PositionsPage state={state} />} />
           <Route path="/history" element={<HistoryPage state={state} />} />

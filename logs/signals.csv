@@ -1,0 +1,44 @@
+timestamp,symbol,action,confidence,trend,risk_level,entry,stop_loss,take_profit,reason
+2026-06-13 01:25:41,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,"El precio se mueve en rango sin dirección clara, con volatilidad moderada y sin señales de tendencia definida."
+2026-06-13 01:26:52,BTCUSD,HOLD,0.20,sideways,low,0.0,0.0,0.0,"El precio muestra consolidación horizontal sin dirección clara en el H1, con volatilidad contenida y falta de señales de tendencia fuerte."
+2026-06-13 01:27:31,BTCUSD,HOLD,0.00,sideways,low,0.0,0.0,0.0,No señal clara de tendencia alcista o bajista en el marco H1. El precio muestra consolidación lateral sin ruptura significativa.
+2026-06-13 01:28:46,BTCUSD,HOLD,0.30,sideways,medium,0.0,0.0,0.0,"El precio se mueve en rango lateral entre 63463 y 63694, sin señales claras de ruptura. Volumen reducido en la zona de soporte actual sugiere falta de impulso."
+2026-06-13 01:30:07,BTCUSD,BUY,0.60,sideways,medium,63453.31,63400.0,63501.99,"El precio se mueve en un rango lateral cerca de la zona de soporte, con señales de posible rebote hacia la resistencia."
+2026-06-13 01:31:22,BTCUSD,HOLD,0.20,sideways,low,0.0,0.0,0.0,El precio se mueve en rango lateral sin confirmación de tendencia clara. No hay señales de ruptura significativa.
+2026-06-13 01:32:33,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,Precio en consolidación horizontal entre 63400 y 64000 sin dirección clara
+2026-06-13 01:33:45,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,"El precio se mueve en rango lateral entre 63400 y 64000 sin dirección clara, falta de señal de ruptura o consolidación definida."
+2026-06-13 01:34:57,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,Consolidation near recent low with mixed volume; no clear breakout or trend confirmation.
+2026-06-13 01:36:10,BTCUSD,HOLD,0.50,sideways,low,0.0,0.0,0.0,"Consolidación en rango entre 63426.83 y 63522.54 con volumen decreciente, sin claridad en dirección"
+2026-06-13 01:37:24,BTCUSD,HOLD,0.45,sideways,medium,0.0,0.0,0.0,Consolidation near key support levels with mixed bullish/bearish patterns. No clear breakout signal.
+2026-06-13 01:38:36,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,"Precio en rango lateral sin dirección clara, volumen disperso y falta de breakout significativo"
+2026-06-13 01:39:51,BTCUSD,HOLD,0.20,sideways,low,0.0,0.0,0.0,Consolidación en rango con volumen decreciente y falta de dirección clara
+2026-06-13 01:41:03,BTCUSD,HOLD,0.45,sideways,medium,0.0,0.0,0.0,Consolidation between 63501.99-63696.4 with no clear trend direction. Price near upper range boundary but lacks confirmation for bullish/bearish breakout.
+2026-06-13 01:42:14,BTCUSD,HOLD,0.45,sideways,medium,0.0,0.0,0.0,"El precio se mueve en rango lateral entre 63400 y 64000, sin confirmación de tendencia clara. La última candela cierra cerca del nivel de soporte anterior, pero falta volumen para justificar una acción."
+2026-06-13 01:43:24,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,"El precio se mueve en rango sin dirección clara en el H1, con volatilidad lateral entre 63500 y 64000."
+2026-06-13 01:44:35,BTCUSD,HOLD,0.20,sideways,low,0.0,0.0,0.0,Precio en consolidación horizontal sin dirección clara en los últimos 20 velas
+2026-06-13 01:45:45,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,El precio se mueve en rango lateral entre 63426 y 63658 sin ruptura clara de niveles clave. Volumen moderado y falta de dirección definida.
+2026-06-13 01:46:55,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,Consolidation after recent dip with no clear breakout pattern
+2026-06-13 01:48:08,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,"El precio se mueve en rango lateral entre 63500 y 64000 sin ruptura clara, con cierre reciente cerca del nivel de soporte."
+2026-06-13 01:49:19,BTCUSD,HOLD,0.50,sideways,low,0.0,0.0,0.0,"El precio se mueve en rango lateral sin claridad alcista o bajista, con volatilidad limitada y falta de confirmación técnica."
+2026-06-13 01:50:29,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,Consolidation between 63400-63900 with no clear breakout pattern
+2026-06-13 01:51:47,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,"Rango lateral entre 63400 y 63700 sin ruptura clara, volumen bajo en últimas velas"
+2026-06-13 01:52:55,BTCUSD,HOLD,0.30,sideways,medium,0.0,0.0,0.0,"El precio muestra volatilidad lateral sin dirección clara en el H1, con niveles de soporte/resistencia no confirmados. No hay señales de ruptura o consolidación definida."
+2026-06-13 01:54:07,BTCUSD,BUY,0.70,sideways,medium,63570.0,63500.0,63953.83,"Consolidation after bullish rally with support at 63570.0, potential breakout bias"
+2026-06-13 01:55:18,BTCUSD,HOLD,0.50,sideways,low,0.0,0.0,0.0,Consolidación lateral sin señal clara de tendencia
+2026-06-13 01:56:28,BTCUSD,HOLD,0.30,sideways,low,63578.0,63578.0,63578.0,Precio en consolidación horizontal sin tendencia clara
+2026-06-13 01:57:37,BTCUSD,HOLD,0.30,sideways,medium,63570.0,63400.0,63750.0,Precio en rango lateral entre 63400 y 63999 sin dirección clara
+2026-06-13 01:58:49,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,"Precio en rango lateral sin tendencia clara, volumen moderado y falta de señal de ruptura"
+2026-06-13 01:59:59,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,Precio en consolidación horizontal entre 63500 y 63999 sin dirección clara
+2026-06-13 02:01:12,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,El precio muestra fluctuaciones laterales entre 63400 y 64000 sin dirección clara. No hay señales de ruptura de niveles clave en los últimos 20 velas.
+2026-06-13 02:02:24,BTCUSD,HOLD,0.45,sideways,medium,0.0,0.0,0.0,"Precio en consolidación lateral entre 63350 y 63750 sin dirección clara, volumen decreciente en últimas velas"
+2026-06-13 02:03:39,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,El precio se mueve en un rango lateral alrededor de 63589 con falta de dirección clara en los últimos datos.
+2026-06-13 02:04:49,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,Consolidation near recent close without clear trend breakout
+2026-06-13 02:05:59,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,"El precio muestra consolidación horizontal sin dirección clara en el H1, con volatilidad moderada y falta de señales de ruptura significativa."
+2026-06-13 02:10:46,BTCUSD,HOLD,0.30,sideways,medium,0.0,0.0,0.0,"Precio en consolidación horizontal sin tendencia clara, volatilidad moderada sin señales de ruptura"
+2026-06-13 02:12:10,BTCUSD,HOLD,0.00,sideways,low,0.0,0.0,0.0,No data available for analysis
+2026-06-13 02:13:51,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,Precio consolidándose entre 63500-63700 sin dirección clara en 20 velas H1
+2026-06-13 02:21:23,BTCUSD,HOLD,0.50,sideways,medium,0.0,0.0,0.0,No hay datos suficientes para análisis técnico; se recomienda mantener posición.
+2026-06-13 02:28:19,BTCUSD,HOLD,0.00,sideways,low,0.0,0.0,0.0,No data provided for OHLCV analysis
+2026-06-13 02:29:50,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,"El precio se mueve en rango sin claridad alcista o bajista, volumen decreciente y falta de confirmación técnica."
+2026-06-13 02:31:42,BTCUSD,HOLD,0.30,sideways,low,0.0,0.0,0.0,Precio en consolidación horizontal sin señal clara de ruptura o tendencia definida
+2026-06-13 02:33:48,BTCUSD,HOLD,0.00,sideways,low,0.0,0.0,0.0,No data available for analysis

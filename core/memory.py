@@ -112,3 +112,33 @@ class SignalMemory:
         with self._lock:
             records = self._data.get(symbol, [])
             return dict(records[-1]) if records else None
+
+    def get_performance(self, symbol: str, last_n: int = 10) -> dict:
+        """Métricas de rendimiento sobre las últimas señales evaluadas.
+
+        Base cuantitativa para que el orquestador decida cómo ajustar los
+        parámetros de un agente. Solo cuenta señales BUY/SELL ya evaluadas.
+        """
+        with self._lock:
+            evaluated = [
+                r for r in self._data.get(symbol, [])
+                if r["outcome"] is not None and r["action"] in ("BUY", "SELL")
+            ]
+        recent = evaluated[-last_n:]
+        total = len(recent)
+        if total == 0:
+            return {"samples": 0, "win_rate": 0.0, "sl_hit_rate": 0.0,
+                    "tp_hit_rate": 0.0, "avg_move_pct": 0.0}
+
+        wins = sum(1 for r in recent if r["outcome"] in ("favorable", "TP alcanzado"))
+        sl_hits = sum(1 for r in recent if r["outcome"] == "SL tocado")
+        tp_hits = sum(1 for r in recent if r["outcome"] == "TP alcanzado")
+        moves = [r["move_pct"] for r in recent if r.get("move_pct") is not None]
+
+        return {
+            "samples": total,
+            "win_rate": round(wins / total, 3),
+            "sl_hit_rate": round(sl_hits / total, 3),
+            "tp_hit_rate": round(tp_hits / total, 3),
+            "avg_move_pct": round(sum(moves) / len(moves), 3) if moves else 0.0,
+        }

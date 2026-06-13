@@ -29,11 +29,17 @@ if not exist ".env" (
 echo [OK] Archivo .env encontrado.
 
 REM Iniciar bot + API server (proceso unico con estado compartido)
+REM cmd /k mantiene la ventana abierta: aqui debes responder los prompts
+REM (1) plataforma MT4/MT5 y (2) seleccion de agente; si MT5 no conecta,
+REM el error queda visible en vez de cerrarse la ventana.
 echo.
 echo Iniciando bot...
-start "MT5 Bot" python main.py
+echo   IMPORTANTE: en la ventana "MT5 Bot" responde los DOS prompts
+echo   (plataforma y agente). El dashboard no tendra datos hasta que
+echo   el bot conecte a MT4/MT5.
+start "MT5 Bot" cmd /k python main.py
 
-REM Esperar a que el API server este listo
+REM Esperar a que el API server este listo (tras conectar a la plataforma)
 timeout /t 4 /nobreak >nul
 
 REM Iniciar dashboard React

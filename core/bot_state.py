@@ -1,7 +1,7 @@
 import threading
 from typing import Dict, List, Optional
 from datetime import datetime
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, is_dataclass
 from core.models import Position
 
 
@@ -18,6 +18,7 @@ class Signal:
     reason: str
     timestamp: str
     platform: str = "MT5"
+    agent: str = ""
 
 
 @dataclass
@@ -41,6 +42,7 @@ class AccountInfo:
     used_margin: float
     margin_level: float
     leverage: int
+    platform: str = "MT5"
 
 
 class BotState:
@@ -68,6 +70,7 @@ class BotState:
                 reason=signal_dict["reason"],
                 timestamp=datetime.now().isoformat(),
                 platform=signal_dict.get("platform", "MT5"),
+                agent=signal_dict.get("agent", ""),
             )
             self.signals[signal.symbol] = signal
             self.last_update = datetime.now().isoformat()
@@ -97,6 +100,7 @@ class BotState:
                 used_margin=account_dict.get("used_margin", 0),
                 margin_level=account_dict.get("margin_level", 0),
                 leverage=account_dict.get("leverage", 1),
+                platform=account_dict.get("platform", "MT5"),
             )
             self.last_update = datetime.now().isoformat()
 
@@ -114,12 +118,18 @@ class BotState:
         with self._lock:
             positions = {}
             for k, v in self.positions.items():
-                if hasattr(v, "model_dump"):
+                # MT5 devuelve modelos Position (pydantic); MT4 devuelve dicts
+                # planos. Soportamos ambos + dataclasses sin reventar.
+                if isinstance(v, dict):
+                    positions[k] = v
+                elif hasattr(v, "model_dump"):
                     positions[k] = v.model_dump()
                 elif hasattr(v, "dict"):
                     positions[k] = v.dict()
-                else:
+                elif is_dataclass(v):
                     positions[k] = asdict(v)
+                else:
+                    positions[k] = v
             return {
                 "signals": {k: asdict(v) for k, v in self.signals.items()},
                 "positions": positions,

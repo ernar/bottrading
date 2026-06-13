@@ -10,6 +10,7 @@ export interface Signal {
   reason: string
   timestamp: string
   platform?: string
+  agent?: string
 }
 
 export interface Position {
@@ -43,6 +44,50 @@ export interface AccountInfo {
   margin_level: number
   leverage: number
   platform?: string
+}
+
+export interface AgentPerformance {
+  samples: number
+  win_rate: number
+  sl_hit_rate: number
+  tp_hit_rate: number
+  avg_move_pct: number
+}
+
+export interface AgentParams {
+  min_confidence: number
+  min_rr: number
+  atr_sl_mult: number
+  atr_tp_mult: number
+  lot_size: number
+}
+
+export interface AgentInfo {
+  name: string
+  symbol: string
+  description: string
+  provider: string
+  model: string
+  params: AgentParams
+  stats: { signals: number; trades: number; holds: number }
+  performance: AgentPerformance
+}
+
+export interface OptimizationEntry {
+  agent: string
+  symbol: string
+  performance: AgentPerformance
+  hold_rate: number
+  reasons: string[]
+  changes: string[]
+  applied: boolean
+}
+
+export interface AgentsOverview {
+  agents: AgentInfo[]
+  optimize_every_cycles: number
+  last_optimization: OptimizationEntry[] | null
+  last_optimization_at: string | null
 }
 
 export interface BotState {

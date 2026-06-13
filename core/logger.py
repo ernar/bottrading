@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 SIGNALS_HEADERS = [
-    "timestamp", "platform", "symbol", "action", "confidence", "trend",
+    "timestamp", "platform", "agent", "symbol", "action", "confidence", "trend",
     "risk_level", "entry", "stop_loss", "take_profit", "reason",
 ]
 
@@ -23,9 +23,17 @@ def _trades_path(platform: str) -> str:
 
 def _ensure_file(path: str, headers: list):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    if not os.path.exists(path):
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(headers)
+    if os.path.exists(path):
+        # Si la cabecera existente no coincide con la actual (p.ej. se añadió
+        # la columna 'agent'), archiva el CSV viejo y crea uno nuevo: así no se
+        # mezclan esquemas y la API no peta al leer filas desalineadas.
+        with open(path, newline="", encoding="utf-8") as f:
+            existing = next(csv.reader(f), None)
+        if existing == headers:
+            return
+        os.replace(path, path + ".old")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(headers)
 
 
 def log_signal(signal: dict, platform: str = "mt5"):
@@ -34,6 +42,7 @@ def log_signal(signal: dict, platform: str = "mt5"):
     row = [
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         platform.upper(),
+        signal.get("agent", ""),
         signal.get("symbol", ""),
         signal.get("action", ""),
         f"{signal.get('confidence', 0):.2f}",

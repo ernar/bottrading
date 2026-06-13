@@ -4,6 +4,7 @@ import { StatusBadge } from '../components/StatusBadge'
 
 interface CsvSignal {
   timestamp: string
+  agent: string
   symbol: string
   action: string
   confidence: string
@@ -48,6 +49,7 @@ export function SignalsPage({ state }: SignalsPageProps) {
             <table className="w-full text-sm text-left text-gray-300">
               <thead className="bg-gray-800 text-white">
                 <tr>
+                  <th className="px-4 py-3">Agent</th>
                   <th className="px-4 py-3">Symbol</th>
                   <th className="px-4 py-3">Trend</th>
                   <th className="px-4 py-3">Action</th>
@@ -62,6 +64,7 @@ export function SignalsPage({ state }: SignalsPageProps) {
               <tbody>
                 {liveSignals.map((signal: Signal) => (
                   <tr key={signal.symbol} className="border-b border-gray-700 hover:bg-gray-800">
+                    <td className="px-4 py-3 text-xs text-cyan-300">{signal.agent || '—'}</td>
                     <td className="px-4 py-3 font-semibold">{signal.symbol}</td>
                     <td className="px-4 py-3"><StatusBadge status={signal.trend as any} /></td>
                     <td className="px-4 py-3 font-semibold">{signal.action.toUpperCase()}</td>
@@ -95,6 +98,7 @@ export function SignalsPage({ state }: SignalsPageProps) {
               <thead className="bg-gray-800 text-white">
                 <tr>
                   <th className="px-4 py-3">Time</th>
+                  <th className="px-4 py-3">Agent</th>
                   <th className="px-4 py-3">Symbol</th>
                   <th className="px-4 py-3">Trend</th>
                   <th className="px-4 py-3">Action</th>
@@ -110,6 +114,7 @@ export function SignalsPage({ state }: SignalsPageProps) {
                 {[...csvSignals].reverse().map((s, i) => (
                   <tr key={i} className="border-b border-gray-700 hover:bg-gray-800">
                     <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{s.timestamp}</td>
+                    <td className="px-4 py-3 text-xs text-cyan-300">{s.agent || '—'}</td>
                     <td className="px-4 py-3 font-semibold">{s.symbol}</td>
                     <td className="px-4 py-3"><StatusBadge status={s.trend as any} /></td>
                     <td className="px-4 py-3 font-semibold">{s.action}</td>
