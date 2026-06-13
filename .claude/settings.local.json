@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(mkdir -p \"c:/Users/luism/Desktop/mt5_ollama_bot/mt4_ea\")",
+      "PowerShell(cd \"C:\\\\Users\\\\luism\\\\Desktop\\\\mt5_ollama_bot\\\\frontend\"; npm install --prefer-offline 2>&1; Write-Host \"EXIT: $LASTEXITCODE\")",
+      "Bash(find \"/c/Program Files \\(x86\\)/RoboForex MT4 Terminal\" -type d 2>/dev/null | head -30)",
+      "Read(//c/Program Files \\(x86\\)/RoboForex MT4 Terminal/**)",
+      "Bash(find \"/c/Users/luism/AppData/Roaming\" -type d -name \"MQL4\" 2>/dev/null)",
+      "Read(//c/Users/luism/AppData/Roaming/**)",
+      "PowerShell(cd \"C:\\\\Users\\\\luism\\\\Desktop\\\\mt5_ollama_bot\\\\frontend\"; npm install --legacy-peer-deps --strict-ssl=false 2>&1; Write-Host \"EXIT: $LASTEXITCODE\")",
+      "Bash(ollama list *)",
+      "Bash(python -m py_compile main.py)",
+      "Bash(pip show *)",
+      "Bash(python -c \"import flask_socketio, socketio, engineio; print\\('flask-socketio', flask_socketio.__version__\\); print\\('python-socketio', socketio.__version__\\); print\\('engineio', engineio.__version__\\)\")",
+      "Bash(python -m py_compile api/server.py)",
+      "Bash(python -c ' *)",
+      "Bash(pip uninstall *)",
+      "Read(//tmp/**)",
+      "Bash(netstat -ano)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"
+    ]
+  }
+}
