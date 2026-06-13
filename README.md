@@ -50,12 +50,70 @@ mt5_ollama_bot/
   ```
 - Node.js 18+ (solo para el dashboard)
 
-## Instalación
+## Instalación (VPS Windows)
 
-```bash
-pip install -r requirements.txt
-cd frontend && npm install
+Pasos pensados para una instalación limpia en un VPS Windows. Ejecuta los comandos en **PowerShell** o **CMD**.
+
+### 1. Requisitos previos
+
+Instala estos programas en el VPS (puedes usar [winget](https://learn.microsoft.com/windows/package-manager/winget/), ya incluido en Windows Server 2022+):
+
+```bat
+winget install Python.Python.3.12
+winget install OpenJS.NodeJS.LTS
+winget install Ollama.Ollama
 ```
+
+> Si `winget` no está disponible, descarga e instala manualmente: [Python 3.8+](https://www.python.org/downloads/) (marca **"Add python.exe to PATH"**), [Node.js 18+](https://nodejs.org/) y [Ollama](https://ollama.ai). Cierra y reabre la terminal tras instalar para refrescar el PATH.
+
+### 2. Plataforma de trading (MT5 y/o MT4)
+
+El VPS debe tener instalado y abierto el terminal del broker.
+
+**MT5:**
+```bat
+winget install MetaQuotes.MetaTrader5
+```
+O descarga el instalador de tu broker. Abre MT5, inicia sesión con tu cuenta y deja el terminal **abierto** mientras el bot corre.
+
+**MT4** (solo si vas a operar en MT4):
+```bat
+winget install MetaQuotes.MetaTrader4
+```
+O descarga el MT4 de tu broker. Además del terminal hay que instalar el **EA puente**:
+
+1. En MT4: *Archivo → Abrir carpeta de datos*.
+2. Copia [`mt4_ea/PythonBridge.mq4`](mt4_ea/PythonBridge.mq4) a `MQL4\Experts\`.
+3. En MetaEditor compila `PythonBridge.mq4` (F7) o reinicia MT4 para que aparezca en el *Navegador*.
+4. Arrastra `PythonBridge` a cualquier gráfico.
+5. Activa **"Permitir trading automático"** (botón AutoTrading en verde) y, en *Herramientas → Opciones → Expert Advisors*, marca *"Permitir WebRequest/DLL"* si tu configuración lo requiere.
+
+### 3. Backend (Python)
+
+Desde la raíz del proyecto, actualiza `pip` e instala las dependencias:
+
+```bat
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+> **No instales `eventlet`**: rompe el WebSocket del API (corre en hilo plano sin monkey-patch). El proyecto usa `simple-websocket`.
+
+### 4. Frontend (dashboard)
+
+```bat
+cd frontend
+npm install
+cd ..
+```
+
+### 5. Ollama (modelo LLM local por defecto)
+
+```bat
+ollama pull qwen3:8b
+```
+
+`ollama serve` se ejecuta como servicio en segundo plano tras instalar. Verifica los modelos disponibles con `ollama list`. (~5 GB de RAM por el modelo `qwen3:8b`.)
 
 ## Configuración
 
@@ -66,9 +124,26 @@ MT5_LOGIN=tu_numero_cuenta
 MT5_PASSWORD=tu_contraseña
 MT5_SERVER=nombre_servidor
 NEWS_ENABLED=true   # noticias/calendario económico en el contexto del LLM (por defecto: true)
+
+# Catálogo de modelos Ollama disponibles (los que muestra `ollama list`)
+OLLAMA_MODELS=qwen3:8b,deepseek-r1:8b,llama3.1:latest
+
+# Proveedores LLM en la nube (opcionales): rellena la clave para activarlos.
+# Solo aparecen en el selector de modelo si su clave está configurada.
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.0-flash
 ```
 
-> El modelo, los símbolos y los umbrales **ya no se configuran en `.env`**: cada agente trae su propio modelo y parámetros en su blueprint (`agents/registry.py`).
+> Los umbrales y símbolos **no se configuran en `.env`**: cada agente trae los suyos en su blueprint (`agents/registry.py`). El **modelo** se elige al arrancar (menú interactivo) o en caliente desde el dashboard.
+
+### Elegir el modelo de cada agente
+
+Cada agente trae un modelo por defecto en su blueprint, pero puedes cambiarlo:
+
+- **Al arrancar (`python main.py`)**: tras elegir los agentes, el menú pregunta el provider/modelo de cada uno. Solo lista proveedores con clave configurada (Ollama siempre disponible; OpenAI/Gemini solo si pusiste su API key). Pulsa Enter para mantener el del blueprint.
+- **En caliente desde el dashboard**: en la pestaña **Agentes**, el desplegable "Modelo LLM" de cada tarjeta cambia el modelo sin reiniciar el bot (efectivo en el siguiente ciclo de análisis).
 
 ## Arranque
 
@@ -129,6 +204,8 @@ GET  /api/history                   Trades cerrados
 GET  /api/stats                     Estadísticas agregadas (señales, win rate de memoria)
 GET  /api/agents                    Resumen de agentes: config, stats de sesión y última optimización
 POST /api/agents/optimize           Lanza optimización (dry-run; {"apply": true} para aplicar en caliente)
+GET  /api/models                    Proveedores/modelos LLM disponibles (según claves del .env)
+POST /api/agents/{name}/model       Cambia el modelo de un agente en caliente ({"provider","model"})
 GET  /api/csv/signals               Últimas señales del CSV (?limit=&platform=)
 GET  /api/csv/trades                Últimos trades del CSV (?limit=&platform=)
 POST /api/bot/start                 Iniciar bot
