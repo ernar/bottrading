@@ -5,6 +5,7 @@ Permite que el menú de selección de agentes ofrezca elegir provider/modelo
 un proveedor de pago no aparece en el menú (así no se elige algo que fallaría).
 """
 import os
+import sys
 
 
 def _split(value: str) -> list[str]:
@@ -75,10 +76,19 @@ def _gemini_models(default: str) -> list[str]:
                 live.append(name)
             # Más recientes primero (orden inverso por nombre).
             _gemini_live_cache = sorted(set(live), reverse=True)
-        except Exception:
-            _gemini_live_cache = []  # marca "intentado y fallido": usar respaldo
+        except Exception as e:
+            print(f"⚠️  Gemini: no se pudieron listar modelos en vivo. Error: {e}",
+                  file=sys.stderr)
+            print(f"   Usando lista estática de respaldo. Comprueba:",
+                  file=sys.stderr)
+            print(f"   - Conexión a internet y firewall",
+                  file=sys.stderr)
+            print(f"   - API key válida (GEMINI_API_KEY en .env)",
+                  file=sys.stderr)
+            _gemini_live_cache = None  # fuerza usar fallback
 
-    models = _gemini_live_cache or _GEMINI_FALLBACK
+    # Si la consulta falló o devolvió lista vacía, usa el fallback.
+    models = _gemini_live_cache if _gemini_live_cache else _GEMINI_FALLBACK
     return _dedup([default] + list(models))
 
 
