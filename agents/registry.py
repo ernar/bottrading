@@ -52,7 +52,7 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             atr_tp_mult=2.7,
             lot_size=0.01,
             risk_per_trade=0.02,
-            max_open_positions=2,
+            max_open_positions=3,
             max_spread_filter=50.0,  # el spread de BTC en puntos es alto
         ),
     ),

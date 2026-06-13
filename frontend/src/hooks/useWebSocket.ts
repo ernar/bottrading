@@ -38,15 +38,16 @@ export function useWebSocket() {
     socket.on('position_update', ({ symbol, position }: { symbol: string; position: Position }) => {
       setState(prev => prev ? {
         ...prev,
-        positions: { ...prev.positions, [symbol]: position },
+        positions: { ...prev.positions, [position.ticket ?? symbol]: position },
       } : null)
     })
 
     socket.on('position_closed', ({ symbol }: { symbol: string }) => {
       setState(prev => {
         if (!prev) return null
-        const positions = { ...prev.positions }
-        delete positions[symbol]
+        const positions = Object.fromEntries(
+          Object.entries(prev.positions).filter(([, p]) => p.symbol !== symbol)
+        )
         return { ...prev, positions }
       })
     })

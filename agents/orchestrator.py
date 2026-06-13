@@ -168,8 +168,7 @@ class AgentOrchestrator:
         print(f"  Razón: {signal['reason']}")
 
         positions = self.client.get_positions(symbol)
-        for position in positions:
-            bot_state.update_position(symbol, position)
+        bot_state.sync_positions(symbol, positions)
 
         if signal["action"] == "HOLD":
             self.stats[agent.name]["holds"] += 1

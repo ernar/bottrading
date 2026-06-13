@@ -66,6 +66,7 @@ class MT5Client(BaseMTClient):
             direction = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
             result.append(Position(
                 symbol=p.symbol,
+                ticket=p.ticket,
                 direction=direction,
                 volume=p.volume,
                 open_price=p.price_open,

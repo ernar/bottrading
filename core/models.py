@@ -23,6 +23,7 @@ class SymbolInfo(BaseModel):
 
 class Position(BaseModel):
     symbol: str
+    ticket: Optional[int] = None
     direction: OrderType
     volume: float
     open_price: float

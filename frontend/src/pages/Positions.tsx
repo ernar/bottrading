@@ -51,11 +51,11 @@ export function PositionsPage({ state }: PositionsPageProps) {
             </tr>
           </thead>
           <tbody>
-            {Object.entries(positions).map(([symbol, position]: [string, Position]) => {
+            {Object.entries(positions).map(([key, position]: [string, Position]) => {
               const pnlColor = position.profit > 0 ? 'text-green-400' : 'text-red-400'
               return (
-                <tr key={symbol} className="border-b border-gray-700 hover:bg-gray-800">
-                  <td className="px-6 py-4 font-semibold">{symbol}</td>
+                <tr key={key} className="border-b border-gray-700 hover:bg-gray-800">
+                  <td className="px-6 py-4 font-semibold">{position.symbol}</td>
                   <td className="px-6 py-4">
                     <span className={position.direction === 'BUY' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
                       {position.direction}
@@ -71,7 +71,7 @@ export function PositionsPage({ state }: PositionsPageProps) {
                   <td className="px-6 py-4 text-green-400">{position.take_profit?.toFixed(5) || 'N/A'}</td>
                   <td className="px-6 py-4">
                     <button
-                      onClick={() => handleClosePosition(symbol)}
+                      onClick={() => handleClosePosition(position.symbol)}
                       className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-xs font-semibold"
                     >
                       Close

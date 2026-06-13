@@ -15,6 +15,7 @@ export interface Signal {
 
 export interface Position {
   symbol: string
+  ticket?: number
   direction: 'BUY' | 'SELL'
   volume: number
   open_price: number

@@ -1,206 +1,6 @@
 {
  "BTCUSD": [
   {
-   "timestamp": "2026-06-13T10:49:21",
-   "action": "BUY",
-   "confidence": 0.7,
-   "price": 63870.01,
-   "stop_loss": 63440.0,
-   "take_profit": 63927.99,
-   "outcome": "adverso",
-   "move_pct": -0.06
-  },
-  {
-   "timestamp": "2026-06-13T11:06:19",
-   "action": "HOLD",
-   "confidence": 0.3,
-   "price": 63803.72,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:10:28",
-   "action": "BUY",
-   "confidence": 0.4,
-   "price": 63806.01,
-   "stop_loss": 63400.0,
-   "take_profit": 63839.99,
-   "outcome": "adverso",
-   "move_pct": -0.071
-  },
-  {
-   "timestamp": "2026-06-13T11:12:47",
-   "action": "HOLD",
-   "confidence": 0.25,
-   "price": 63803.99,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:18:16",
-   "action": "HOLD",
-   "confidence": 0.2,
-   "price": 63819.03,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:20:20",
-   "action": "HOLD",
-   "confidence": 0.25,
-   "price": 63831.99,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:24:43",
-   "action": "BUY",
-   "confidence": 0.4,
-   "price": 63827.99,
-   "stop_loss": 63426.83,
-   "take_profit": 63839.99,
-   "outcome": "adverso",
-   "move_pct": -0.119
-  },
-  {
-   "timestamp": "2026-06-13T11:31:43",
-   "action": "HOLD",
-   "confidence": 0.3,
-   "price": 63823.99,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:33:55",
-   "action": "HOLD",
-   "confidence": 0.2,
-   "price": 63808.27,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:35:46",
-   "action": "BUY",
-   "confidence": 0.55,
-   "price": 63802.01,
-   "stop_loss": 63400.0,
-   "take_profit": 63839.99,
-   "outcome": "adverso",
-   "move_pct": -0.047
-  },
-  {
-   "timestamp": "2026-06-13T11:37:58",
-   "action": "HOLD",
-   "confidence": 0.25,
-   "price": 63801.09,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:40:16",
-   "action": "HOLD",
-   "confidence": 0.3,
-   "price": 63804.78,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T11:54:11",
-   "action": "HOLD",
-   "confidence": 0.2,
-   "price": 63758.07,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T12:01:36",
-   "action": "HOLD",
-   "confidence": 0.2,
-   "price": 63752.32,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T12:05:45",
-   "action": "HOLD",
-   "confidence": 0.2,
-   "price": 63741.24,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T12:09:48",
-   "action": "HOLD",
-   "confidence": 0.25,
-   "price": 63772.18,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T12:12:03",
-   "action": "HOLD",
-   "confidence": 0.2,
-   "price": 63750.2,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T12:30:51",
-   "action": "HOLD",
-   "confidence": 0.2,
-   "price": 63782.0,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
-   "timestamp": "2026-06-13T12:32:41",
-   "action": "BUY",
-   "confidence": 0.3,
-   "price": 63797.5,
-   "stop_loss": 63417.33,
-   "take_profit": 63810.0,
-   "outcome": "TP alcanzado",
-   "move_pct": 0.117
-  },
-  {
-   "timestamp": "2026-06-13T12:34:32",
-   "action": "HOLD",
-   "confidence": 0.3,
-   "price": 63829.99,
-   "stop_loss": null,
-   "take_profit": null,
-   "outcome": null,
-   "move_pct": null
-  },
-  {
    "timestamp": "2026-06-13T12:43:53",
    "action": "BUY",
    "confidence": 0.4,
@@ -257,8 +57,8 @@
    "price": 63872.33,
    "stop_loss": 63499.8,
    "take_profit": 63909.99,
-   "outcome": null,
-   "move_pct": null
+   "outcome": "TP alcanzado",
+   "move_pct": 0.574
   },
   {
    "timestamp": "2026-06-13T13:11:34",
@@ -287,8 +87,8 @@
    "price": 63947.07,
    "stop_loss": 63426.83,
    "take_profit": 64711.28,
-   "outcome": null,
-   "move_pct": null
+   "outcome": "favorable",
+   "move_pct": 0.456
   },
   {
    "timestamp": "2026-06-13T13:27:02",
@@ -297,6 +97,206 @@
    "price": 63947.1,
    "stop_loss": null,
    "take_profit": null,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T15:37:00",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64238.74,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": "adverso",
+   "move_pct": -0.138
+  },
+  {
+   "timestamp": "2026-06-13T15:41:31",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64216.67,
+   "stop_loss": 63837.99,
+   "take_profit": 64394.43,
+   "outcome": "adverso",
+   "move_pct": -0.094
+  },
+  {
+   "timestamp": "2026-06-13T15:43:19",
+   "action": "HOLD",
+   "confidence": 0.3,
+   "price": 64198.0,
+   "stop_loss": null,
+   "take_profit": null,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T15:45:15",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64184.04,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": "adverso",
+   "move_pct": -0.091
+  },
+  {
+   "timestamp": "2026-06-13T15:50:03",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64171.76,
+   "stop_loss": 63726.57,
+   "take_profit": 64812.33,
+   "outcome": "adverso",
+   "move_pct": -0.072
+  },
+  {
+   "timestamp": "2026-06-13T15:52:00",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64114.58,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": "favorable",
+   "move_pct": 0.017
+  },
+  {
+   "timestamp": "2026-06-13T15:54:23",
+   "action": "BUY",
+   "confidence": 0.7,
+   "price": 64094.09,
+   "stop_loss": 63711.19,
+   "take_profit": 64282.42,
+   "outcome": "favorable",
+   "move_pct": 0.056
+  },
+  {
+   "timestamp": "2026-06-13T15:57:08",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64068.95,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": "favorable",
+   "move_pct": 0.113
+  },
+  {
+   "timestamp": "2026-06-13T16:01:16",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64091.37,
+   "stop_loss": 63726.57,
+   "take_profit": 64275.47,
+   "outcome": "favorable",
+   "move_pct": 0.103
+  },
+  {
+   "timestamp": "2026-06-13T16:08:04",
+   "action": "BUY",
+   "confidence": 0.8,
+   "price": 64145.99,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": "favorable",
+   "move_pct": 0.097
+  },
+  {
+   "timestamp": "2026-06-13T16:10:54",
+   "action": "BUY",
+   "confidence": 0.6,
+   "price": 64150.38,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": "favorable",
+   "move_pct": 0.079
+  },
+  {
+   "timestamp": "2026-06-13T16:19:24",
+   "action": "BUY",
+   "confidence": 0.6,
+   "price": 64157.89,
+   "stop_loss": 63726.57,
+   "take_profit": 64808.45,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:25:13",
+   "action": "HOLD",
+   "confidence": 0.2,
+   "price": 64125.59,
+   "stop_loss": null,
+   "take_profit": null,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:27:59",
+   "action": "HOLD",
+   "confidence": 0.3,
+   "price": 64130.08,
+   "stop_loss": null,
+   "take_profit": null,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:31:32",
+   "action": "BUY",
+   "confidence": 0.6,
+   "price": 64141.17,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:34:34",
+   "action": "BUY",
+   "confidence": 0.7,
+   "price": 64157.36,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:37:38",
+   "action": "BUY",
+   "confidence": 0.7,
+   "price": 64168.0,
+   "stop_loss": 63808.58,
+   "take_profit": 64394.43,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:40:37",
+   "action": "HOLD",
+   "confidence": 0.4,
+   "price": 64207.99,
+   "stop_loss": null,
+   "take_profit": null,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:46:56",
+   "action": "HOLD",
+   "confidence": 0.2,
+   "price": 64200.0,
+   "stop_loss": null,
+   "take_profit": null,
+   "outcome": null,
+   "move_pct": null
+  },
+  {
+   "timestamp": "2026-06-13T16:48:38",
+   "action": "BUY",
+   "confidence": 0.85,
+   "price": 64205.01,
+   "stop_loss": 63726.57,
+   "take_profit": 64394.43,
    "outcome": null,
    "move_pct": null
   }

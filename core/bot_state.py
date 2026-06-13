@@ -75,15 +75,49 @@ class BotState:
             self.signals[signal.symbol] = signal
             self.last_update = datetime.now().isoformat()
 
+    @staticmethod
+    def _pos_field(position, field: str):
+        """Lee un campo de una posición sea Position (pydantic) o dict (MT4)."""
+        if isinstance(position, dict):
+            return position.get(field)
+        return getattr(position, field, None)
+
+    def _pos_key(self, symbol: str, position) -> str:
+        """Clave única de la posición: ticket si existe, si no símbolo+índice.
+
+        Keyear por símbolo colapsaba varias posiciones del mismo símbolo en una
+        sola; el ticket es único por posición."""
+        ticket = self._pos_field(position, "ticket")
+        return str(ticket) if ticket else symbol
+
+    def sync_positions(self, symbol: str, positions: list) -> None:
+        """Reemplaza TODAS las posiciones de `symbol` por las actuales.
+
+        Así se reflejan varias posiciones abiertas del mismo símbolo y
+        desaparecen las que ya se cerraron, en una sola operación atómica."""
+        with self._lock:
+            self.positions = {
+                k: v for k, v in self.positions.items()
+                if self._pos_field(v, "symbol") != symbol
+            }
+            for position in positions or []:
+                self.positions[self._pos_key(symbol, position)] = position
+            self.last_update = datetime.now().isoformat()
+
     def update_position(self, symbol: str, position) -> None:
         with self._lock:
-            self.positions[symbol] = position
+            self.positions[self._pos_key(symbol, position)] = position
             self.last_update = datetime.now().isoformat()
 
     def remove_position(self, symbol: str) -> None:
+        """Quita del estado las posiciones del símbolo dado (se resincroniza
+        en el siguiente ciclo del orquestador)."""
         with self._lock:
-            if symbol in self.positions:
-                del self.positions[symbol]
+            keys = [k for k, v in self.positions.items()
+                    if self._pos_field(v, "symbol") == symbol]
+            for k in keys:
+                del self.positions[k]
+            if keys:
                 self.last_update = datetime.now().isoformat()
 
     def add_closed_trade(self, trade: Trade) -> None:
