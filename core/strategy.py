@@ -1,9 +1,14 @@
 import os
 import json
+import logging
 from typing import Optional
 from core.models import BotConfig
 
 import ollama
+
+# El SDK de Gemini loguea "AFC is enabled..." (Automatic Function Calling) en
+# cada llamada. No usamos function calling, así que silenciamos ese ruido.
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
 
 def _call_openai(model: str, system: str, user: str) -> Optional[str]:

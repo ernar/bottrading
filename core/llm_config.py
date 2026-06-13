@@ -38,6 +38,13 @@ _GEMINI_FALLBACK = [
     "gemini-1.5-pro",
 ]
 
+# Subcadenas que descartan modelos NO aptos para análisis de texto/trading:
+# generación de imágenes, TTS/audio, embeddings, etc.
+_GEMINI_EXCLUDE = (
+    "image", "imagen", "tts", "audio", "embedding", "embed",
+    "vision", "live", "aqa", "veo", "learnlm",
+)
+
 # Caché del listado en vivo: la API de modelos no cambia entre ciclos, así que
 # evitamos una llamada de red cada vez que el dashboard pide /providers.
 _gemini_live_cache: list[str] | None = None
@@ -61,8 +68,11 @@ def _gemini_models(default: str) -> list[str]:
                 if "generateContent" not in actions:
                     continue
                 name = (getattr(m, "name", "") or "").split("/")[-1]
-                if name.startswith("gemini"):
-                    live.append(name)
+                if not name.startswith("gemini"):
+                    continue
+                if any(bad in name.lower() for bad in _GEMINI_EXCLUDE):
+                    continue  # descarta imagen/TTS/embeddings/etc.
+                live.append(name)
             # Más recientes primero (orden inverso por nombre).
             _gemini_live_cache = sorted(set(live), reverse=True)
         except Exception:
