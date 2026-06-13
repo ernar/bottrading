@@ -115,7 +115,11 @@ def build_market_context(client, symbol: str, positions: list = None,
         total_profit = 0.0
         for p in positions:
             direction = getattr(p, "direction", None) or (p.get("type") if isinstance(p, dict) else "?")
-            profit = getattr(p, "profit", None) if not isinstance(p, dict) else p.get("profit", 0)
+            profit_raw = getattr(p, "profit", None) if not isinstance(p, dict) else p.get("profit", 0)
+            try:
+                profit = float(profit_raw)
+            except (TypeError, ValueError):
+                profit = 0.0
             open_price = getattr(p, "open_price", None) if not isinstance(p, dict) else p.get("open_price", "?")
             current_price = getattr(p, "current_price", None) if not isinstance(p, dict) else p.get("current_price", "?")
             total_profit += profit
