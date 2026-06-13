@@ -38,13 +38,24 @@ def select_llm(default_provider: str, default_model: str) -> tuple[str, str]:
     Solo lista proveedores con clave configurada (ollama siempre). Enter
     mantiene el modelo por defecto del blueprint."""
     providers = available_providers()
-    options: list[tuple[str, str]] = []
+    options: list[tuple[str, str]] = [
+        (prov, m) for prov, models in providers.items() for m in models
+    ]
+    if not options:
+        raise RuntimeError(
+            "No hay ningún proveedor LLM disponible. Configura una API key "
+            "(GEMINI_API_KEY/OPENAI_API_KEY) o activa Ollama (OLLAMA_ENABLED=true)."
+        )
+
+    # Si el default del blueprint no está disponible (p. ej. Ollama desactivado
+    # en el VPS), usa la primera opción disponible como nuevo default.
+    if (default_provider, default_model) not in options:
+        default_provider, default_model = options[0]
+
     print("  Modelo LLM (proveedores con clave configurada):")
-    for prov, models in providers.items():
-        for m in models:
-            options.append((prov, m))
-            tag = "  <- por defecto" if (prov == default_provider and m == default_model) else ""
-            print(f"    {len(options):2d}. {prov.upper():7} / {m}{tag}")
+    for i, (prov, m) in enumerate(options, 1):
+        tag = "  <- por defecto" if (prov == default_provider and m == default_model) else ""
+        print(f"    {i:2d}. {prov.upper():7} / {m}{tag}")
     print(f"    Enter = mantener {default_provider.upper()}/{default_model}")
 
     while True:

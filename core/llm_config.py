@@ -19,19 +19,74 @@ def _dedup(items: list[str]) -> list[str]:
     return seen
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Lee un flag booleano del entorno. Falsos: 0/false/no/off (sin distinguir
+    mayúsculas). Cualquier otro valor no vacío es verdadero."""
+    val = os.getenv(name)
+    if val is None or val.strip() == "":
+        return default
+    return val.strip().lower() not in ("0", "false", "no", "off")
+
+
+# Lista estática de respaldo si no se puede consultar la API en vivo (sin red,
+# error de SSL, etc.). Incluye los modelos Gemini de uso habitual.
+_GEMINI_FALLBACK = [
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-1.5-pro",
+]
+
+# Caché del listado en vivo: la API de modelos no cambia entre ciclos, así que
+# evitamos una llamada de red cada vez que el dashboard pide /providers.
+_gemini_live_cache: list[str] | None = None
+
+
+def _gemini_models(default: str) -> list[str]:
+    """Modelos Gemini disponibles, con el `default` (del .env) en primer lugar.
+
+    Intenta consultar TODOS los modelos que soportan generateContent en la API
+    real. Si la consulta falla, usa la lista estática de respaldo. El resultado
+    en vivo se cachea para no repetir la llamada de red."""
+    global _gemini_live_cache
+
+    if _gemini_live_cache is None:
+        try:
+            from google import genai
+            client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+            live: list[str] = []
+            for m in client.models.list():
+                actions = getattr(m, "supported_actions", None) or []
+                if "generateContent" not in actions:
+                    continue
+                name = (getattr(m, "name", "") or "").split("/")[-1]
+                if name.startswith("gemini"):
+                    live.append(name)
+            # Más recientes primero (orden inverso por nombre).
+            _gemini_live_cache = sorted(set(live), reverse=True)
+        except Exception:
+            _gemini_live_cache = []  # marca "intentado y fallido": usar respaldo
+
+    models = _gemini_live_cache or _GEMINI_FALLBACK
+    return _dedup([default] + list(models))
+
+
 def available_providers() -> dict[str, list[str]]:
     """Devuelve {provider: [modelos]} solo para los proveedores utilizables.
 
-    - ollama: siempre disponible (local); modelos de OLLAMA_MODELS (o MODEL).
+    - ollama: local; modelos de OLLAMA_MODELS (o MODEL). Se puede desactivar con
+      OLLAMA_ENABLED=false (útil en un VPS que trabaja solo con APIs en la nube).
     - openai: solo si OPENAI_API_KEY; OPENAI_MODEL + sugeridos.
-    - gemini: solo si GEMINI_API_KEY; GEMINI_MODEL + sugeridos.
+    - gemini: solo si GEMINI_API_KEY; modelos consultados en vivo a la API.
 
     El primer modelo de cada lista es el por defecto leído del .env.
     """
     providers: dict[str, list[str]] = {}
 
-    ollama_models = _split(os.getenv("OLLAMA_MODELS")) or [os.getenv("MODEL", "qwen3:8b")]
-    providers["ollama"] = _dedup(ollama_models)
+    if _env_bool("OLLAMA_ENABLED", default=True):
+        ollama_models = _split(os.getenv("OLLAMA_MODELS")) or [os.getenv("MODEL", "qwen3:8b")]
+        providers["ollama"] = _dedup(ollama_models)
 
     if os.getenv("OPENAI_API_KEY", "").strip():
         default = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -39,6 +94,6 @@ def available_providers() -> dict[str, list[str]]:
 
     if os.getenv("GEMINI_API_KEY", "").strip():
         default = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        providers["gemini"] = _dedup([default, "gemini-2.0-flash", "gemini-2.5-pro", "gemini-1.5-pro"])
+        providers["gemini"] = _gemini_models(default)
 
     return providers

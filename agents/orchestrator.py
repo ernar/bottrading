@@ -5,6 +5,7 @@ les pide su análisis y ejecuta las señales válidas. Mantiene además un regis
 de rendimiento por agente que servirá de base para la fase de optimización
 (ajuste automático de parámetros / modelo de cada agente).
 """
+import threading
 import time
 
 from core.state import bot_state
@@ -86,11 +87,43 @@ def _diff_params(old: AgentParams, new: AgentParams) -> list:
     return changes
 
 
-def _show_loading(message: str):
-    for i in range(4):
-        time.sleep(0.5)
-        print(f"\r{message} {'.' * i}", end="", flush=True)
-    print()
+class _Spinner:
+    """Spinner animado en un hilo aparte mientras se genera el análisis.
+
+    A diferencia de un sleep fijo, gira de verdad durante toda la llamada al
+    LLM (que puede tardar varios segundos) y limpia su línea al terminar.
+    Se usa como context manager: ``with _Spinner("..."):``.
+    """
+
+    FRAMES = ["|", "/", "-", "\\"]  # ASCII: se ve bien en cualquier consola Windows
+
+    def __init__(self, message: str, interval: float = 0.12):
+        self.message = message
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def _spin(self):
+        i = 0
+        start = time.time()
+        while not self._stop.is_set():
+            frame = self.FRAMES[i % len(self.FRAMES)]
+            elapsed = time.time() - start
+            print(f"\r{self.message} {frame} ({elapsed:4.1f}s)", end="", flush=True)
+            i += 1
+            time.sleep(self.interval)
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        # Borra la línea del spinner para que no quede residuo.
+        print(f"\r{' ' * (len(self.message) + 16)}\r", end="", flush=True)
 
 
 class AgentOrchestrator:
@@ -143,8 +176,8 @@ class AgentOrchestrator:
         if tick:
             print(f"  Precio: Ask={tick.ask} | Bid={tick.bid}")
 
-        _show_loading("  Generando análisis")
-        signal = agent.analyze(self.client, platform=self.platform)
+        with _Spinner("  Generando análisis"):
+            signal = agent.analyze(self.client, platform=self.platform)
         if not signal:
             print("  No se generó señal.")
             return

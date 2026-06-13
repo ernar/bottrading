@@ -19,10 +19,20 @@ def _call_openai(model: str, system: str, user: str) -> Optional[str]:
 
 
 def _call_gemini(model: str, system: str, user: str) -> Optional[str]:
-    import google.generativeai as genai
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    gm = genai.GenerativeModel(model, system_instruction=system)
-    return gm.generate_content(user).text
+    # SDK nuevo `google-genai` (el antiguo `google.generativeai` está deprecado).
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    response = client.models.generate_content(
+        model=model,
+        contents=user,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.2,
+            response_mime_type="application/json",  # fuerza JSON, como openai/ollama
+        ),
+    )
+    return response.text
 
 
 SYSTEM_PROMPT = """Eres un analista técnico de trading de corto plazo. Recibes datos de mercado \
