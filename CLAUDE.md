@@ -11,7 +11,7 @@ Bot de trading que integra **MetaTrader 5/4** con un **LLM** (Ollama local por d
 
 ## Arquitectura
 
-- **Punto de entrada único:** `main.py` (loop del bot + API en hilo daemon). El estado compartido vive en `core/state.py` (`bot_state`, singleton). `main` y `api/server.py` DEBEN usar el mismo `bot_state` y el mismo cliente MT (`set_mt_client` / `_mt_client`); instancias separadas → el dashboard se queda sin datos.
+- **Punto de entrada único:** `main.py` — flujo: plataforma → **selección de agentes** → orquestador + API en hilo daemon. El loop del bot es el `AgentOrchestrator` (ver "Sistema agéntico"). El estado compartido vive en `core/state.py` (`bot_state`, singleton). `main` y `api/server.py` DEBEN usar el mismo `bot_state`, el mismo cliente MT (`set_mt_client` / `_mt_client`) y el mismo orquestador (`set_orchestrator`); instancias separadas → el dashboard se queda sin datos.
 - **`core/strategy.py`** — `StrategyEngine`: llama al LLM (ollama/openai/gemini), parsea JSON y valida señales (`validate_trade`). Acepta `system_suffix` y umbrales (`min_confidence`, `min_rr`) por instancia.
 - **`core/market_context.py`** — construye el contexto estructurado para el prompt (indicadores H1/H4 calculados en Python, últimas velas, posiciones, noticias, memoria). NO se vuelcan velas crudas.
 - **`core/memory.py`** — `SignalMemory`: registra señales y evalúa su resultado contra el precio en ciclos posteriores; el resumen se inyecta al prompt como feedback.
@@ -19,14 +19,13 @@ Bot de trading que integra **MetaTrader 5/4** con un **LLM** (Ollama local por d
 - **`clients/`** — `base_client.py` define la interfaz común; `mt5_client.py` (MetaTrader5 nativo) y `mt4_client.py` (bridge vía EA `PythonBridge.mq4`).
 - **`api/server.py`** — Flask REST + WebSocket. `async_mode="threading"` forzado, `ping_timeout=60`.
 
-## Sistema agéntico (en desarrollo, carpeta `.dev/`)
+## Sistema agéntico
 
-`.dev/` es la **rama de desarrollo** del sistema agéntico (copia de trabajo aislada; el repo no usa git). Un **agente especializado por símbolo**:
+El núcleo del bot es un **agente especializado por símbolo** (carpeta `agents/`):
 
-- `.dev/agents/base_agent.py` → `SymbolAgent` (símbolo + provider/modelo LLM + `AgentParams` + persona inyectada al prompt + `SignalMemory` aislada en `logs/agents/<name>_memory.json`).
-- `.dev/agents/registry.py` → blueprints declarativos; `build_agent(name)`. Primer agente: `btc-agent` (BTCUSD). Añadir un símbolo = añadir un blueprint.
-- `.dev/agents/orchestrator.py` → `AgentOrchestrator` corre el loop y ejecuta señales válidas; `optimize()` (rule-based) ajusta los `AgentParams` de cada agente según su rendimiento (memoria), con límites en `PARAM_BOUNDS`. Se llama cada 20 ciclos (`optimize_every_cycles`).
-- En `.dev/main.py` el flujo es: plataforma → **selección de agentes** (no de símbolos) → orquestador.
+- `agents/base_agent.py` → `SymbolAgent` (símbolo + provider/modelo LLM + `AgentParams` + persona inyectada al prompt + `SignalMemory` aislada en `logs/agents/<name>_memory.json`).
+- `agents/registry.py` → blueprints declarativos; `build_agent(name)`. Primer agente: `btc-agent` (BTCUSD). Añadir un símbolo = añadir un blueprint.
+- `agents/orchestrator.py` → `AgentOrchestrator` corre el loop y ejecuta señales válidas; `optimize()` (rule-based) ajusta los `AgentParams` de cada agente según su rendimiento (memoria), con límites en `PARAM_BOUNDS`. Se llama cada 20 ciclos (`optimize_every_cycles`).
 
 ## Convenciones y gotchas
 

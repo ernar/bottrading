@@ -1,7 +1,0 @@
-.env
-__pycache__/
-*.pyc
-*.pyo
-node_modules/
-frontend/dist/
-frontend/node_modules/
