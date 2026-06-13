@@ -1,6 +1,5 @@
 # Secretos / configuración local — NUNCA subir
 .env
-*.env
 !.env.example
 
 # Python
@@ -15,3 +14,4 @@ logs/
 node_modules/
 frontend/dist/
 frontend/node_modules/
+
