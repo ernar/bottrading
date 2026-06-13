@@ -155,3 +155,24 @@ def get_agent_param_overrides(symbol: str, model: str) -> dict:
                 pass
     
     return overrides
+
+
+def get_commission_per_lot(default: float = 7.0) -> float:
+    """Lee la comisión por lote desde .env.
+    
+    Variables soportadas:
+    - COMMISSION_PER_LOT (valor general)
+    - COMMISSION (alias para COMMISSION_PER_LOT)
+    
+    Ejemplo en .env:
+        COMMISSION_PER_LOT=0.13
+    
+    Devuelve el valor en float, o `default` si no está configurado.
+    """
+    val = os.getenv("COMMISSION_PER_LOT") or os.getenv("COMMISSION")
+    if val:
+        try:
+            return float(val.strip())
+        except (ValueError, TypeError):
+            pass
+    return default

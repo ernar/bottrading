@@ -13,6 +13,7 @@ El agente sabe analizar su símbolo (analyze) y validar una señal (validate);
 la ejecución de órdenes la coordina el orquestador.
 """
 from typing import Optional
+from dotenv import load_dotenv
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,9 @@ from core.memory import SignalMemory
 from core.market_context import build_market_context
 from core.news import news_provider
 from core.logger import log_signal
+from core.config import get_commission_per_lot
+
+load_dotenv()
 
 
 class AgentParams(BaseModel):
@@ -67,6 +71,7 @@ class SymbolAgent:
             max_open_positions=params.max_open_positions,
             max_pos_override_confidence=params.max_pos_override_confidence,
             debug_mode=debug_mode,
+            commission_per_lot=get_commission_per_lot(),
         )
         self.strategy = StrategyEngine(
             self.config,

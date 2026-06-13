@@ -66,3 +66,4 @@ class BotConfig(BaseModel):
     # abiertas (cuenta máxima y no-duplicar dirección). 1.0 = nunca saltar.
     max_pos_override_confidence: float = 0.90
     debug_mode: bool = False
+    commission_per_lot: float = 7.0  # Comisión en $ por lote

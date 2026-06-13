@@ -85,7 +85,8 @@ class StrategyEngine:
 
     def __init__(self, config: BotConfig, provider: str = "ollama",
                  system_suffix: str = "", min_confidence: float = None,
-                 min_rr: float = None, temperature: float = 0.2):
+                 min_rr: float = None, temperature: float = 0.2,
+                 commission_per_lot: float = None):
         self.config = config
         self.provider = provider.lower()
         # Persona/contexto adicional inyectado por un agente especializado.
@@ -95,6 +96,8 @@ class StrategyEngine:
         self.min_confidence = self.MIN_CONFIDENCE if min_confidence is None else min_confidence
         self.min_rr = self.MIN_RR if min_rr is None else min_rr
         self.temperature = temperature
+        # Comisión: puede venir del parámetro o del config (defaulteado a 7.0).
+        self.commission_per_lot = commission_per_lot if commission_per_lot is not None else config.commission_per_lot
         if self.provider == "ollama":
             self._ollama = ollama.Client()
 
@@ -207,18 +210,8 @@ Devuelve solo el JSON con el formato especificado."""
                 and spread_points > self.config.max_spread_filter):
             return reject(f"spread {spread_points:.0f} pts > máximo {self.config.max_spread_filter:.0f}")
 
-        # No duplicar posición en la misma dirección sobre el mismo símbolo
-        # (salvo override por confianza muy alta).
-        if not override:
-            for p in positions or []:
-                raw = getattr(p, "direction", None)
-                if raw is None and isinstance(p, dict):
-                    raw = p.get("direction", p.get("type"))
-                # MT5 da 'BUY'/'SELL'; MT4 da type entero (0=BUY, 1=SELL).
-                d = str(raw).upper()
-                direction = {"0": "BUY", "1": "SELL"}.get(d, d)
-                if direction == action:
-                    return reject(f"ya existe posición {action} en este símbolo")
+        # Nota: Permitimos múltiples posiciones en la misma dirección.
+        # El límite total está controlado por max_open_positions.
 
         entry = signal.get("entry") or 0
         sl = signal.get("stop_loss") or 0

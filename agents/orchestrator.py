@@ -381,6 +381,7 @@ class AgentOrchestrator:
                 self.client, symbol, signal["action"],
                 signal["entry"], signal["stop_loss"], signal["take_profit"],
                 volume,
+                commission_per_lot=agent.config.commission_per_lot,
             )
             if metrics:
                 print(f"  Profit potencial: +${metrics['net_profit']:.2f}  ({metrics['pips_tp']:.0f} pips)")
