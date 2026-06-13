@@ -7,6 +7,7 @@ Añadir un nuevo símbolo = añadir un blueprint aquí.
 from dataclasses import dataclass, field
 
 from agents.base_agent import AgentParams, SymbolAgent
+from core.config import get_agent_param_overrides
 
 
 @dataclass
@@ -69,14 +70,26 @@ def build_agent(name: str, debug_mode: bool = True,
     """Instancia un agente a partir de su blueprint.
 
     `provider`/`model` permiten sobreescribir el LLM por defecto del blueprint
-    (p. ej. elegir Gemini desde el menú) sin tocar el catálogo."""
+    (p. ej. elegir Gemini desde el menú) sin tocar el catálogo.
+    
+    También aplica overrides de configuración desde .env (MAX_OPEN_POSITIONS_*,
+    MIN_CONFIDENCE_*, etc.) según la precedencia: símbolo > modelo > default.
+    """
     bp = AGENT_BLUEPRINTS[name]
     params = bp.params
+    
+    # Sobreescribir provider/model si se proporcionan
     if provider or model:
         params = bp.params.model_copy(update={
             "provider": provider or bp.params.provider,
             "model": model or bp.params.model,
         })
+    
+    # Aplicar overrides desde .env (precedencia: símbolo > modelo > default)
+    overrides = get_agent_param_overrides(bp.symbol, params.model)
+    if overrides:
+        params = params.model_copy(update=overrides)
+    
     return SymbolAgent(
         name=bp.name,
         symbol=bp.symbol,

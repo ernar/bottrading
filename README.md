@@ -149,6 +149,32 @@ Cada agente trae un modelo por defecto en su blueprint, pero puedes cambiarlo:
 - **Al arrancar (`python main.py`)**: tras elegir los agentes, el menú pregunta el provider/modelo de cada uno. Solo lista proveedores con clave configurada (Ollama siempre disponible; OpenAI/Gemini solo si pusiste su API key). Pulsa Enter para mantener el del blueprint.
 - **En caliente desde el dashboard**: en la pestaña **Agentes**, el desplegable "Modelo LLM" de cada tarjeta cambia el modelo sin reiniciar el bot (efectivo en el siguiente ciclo de análisis).
 
+### Límites de operaciones por símbolo/modelo
+
+Configura cuántas operaciones máximas puede tener abiertas cada agente usando variables de entorno en `.env`:
+
+```env
+# Límites por símbolo (precedencia 1 — máxima prioridad)
+MAX_OPEN_POSITIONS_BTCUSD=2        # Bitcoin: máximo 2 operaciones
+MAX_OPEN_POSITIONS_EURUSD=3        # Euro: máximo 3 operaciones
+
+# Límites por modelo (precedencia 2)
+MAX_OPEN_POSITIONS_QWEN3_8B=3      # Qwen: máximo 3 operaciones
+MAX_OPEN_POSITIONS_GPT4=4          # GPT-4: máximo 4 operaciones
+
+# Fallback global (precedencia 3)
+MAX_OPEN_POSITIONS_DEFAULT=5       # Otros símbolos/modelos: máximo 5
+```
+
+**Precedencia**: símbolo > modelo > default > blueprint. La primera coincidencia gana.
+
+También puedes configurar otros parámetros del agente: `MIN_CONFIDENCE_*`, `MIN_RR_*`, `ATR_SL_MULT_*`, `TEMPERATURE_*`, etc. Ver [`.env.example.advanced`](.env.example.advanced) para una configuración completa.
+
+Para ver cómo se resuelven los límites en tiempo real:
+```bash
+python examples_config.py
+```
+
 ## Arranque
 
 ```bat
