@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+import functools
 import logging
 import csv
 import json
@@ -42,6 +43,28 @@ def set_orchestrator(orchestrator):
     _orchestrator = orchestrator
 
 
+def _api_token() -> str:
+    """Token compartido leído en tiempo de request (el .env se carga después de
+    importar este módulo, así que no se puede capturar en import)."""
+    return os.getenv("API_TOKEN", "").strip()
+
+
+def require_token(f):
+    """Protege rutas que mutan estado (operar, cerrar, cambiar modelo...).
+
+    Si API_TOKEN está vacío (uso puramente local) no exige nada; si está
+    definido, requiere la cabecera X-API-Token correcta. Así el dashboard en
+    127.0.0.1 funciona sin fricción, pero exponer el API a la red sin token
+    deja de dar control remoto anónimo del bot."""
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        token = _api_token()
+        if token and request.headers.get("X-API-Token", "") != token:
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
@@ -73,6 +96,7 @@ def get_full_state():
 
 
 @app.route("/api/bot/start", methods=["POST"])
+@require_token
 def start_bot():
     bot_state.set_bot_running(True)
     socketio.emit("bot_status", {"running": True})
@@ -80,6 +104,7 @@ def start_bot():
 
 
 @app.route("/api/bot/stop", methods=["POST"])
+@require_token
 def stop_bot():
     bot_state.set_bot_running(False)
     socketio.emit("bot_status", {"running": False})
@@ -194,6 +219,7 @@ def get_models():
 
 
 @app.route("/api/agents/<name>/model", methods=["POST"])
+@require_token
 def set_agent_model(name):
     """Cambia el provider/modelo LLM de un agente en caliente.
     Body: {"provider": "gemini", "model": "gemini-2.0-flash"}."""
@@ -216,6 +242,7 @@ def set_agent_model(name):
 
 
 @app.route("/api/agents/optimize", methods=["POST"])
+@require_token
 def optimize_agents():
     """Lanza una optimización. Por defecto dry-run (no modifica parámetros);
     pasa {"apply": true} para aplicarla en caliente."""
@@ -227,6 +254,7 @@ def optimize_agents():
 
 
 @app.route("/api/positions/<symbol>/close", methods=["POST"])
+@require_token
 def close_position(symbol):
     if _mt_client is None:
         return jsonify({"error": "MT client not connected"}), 503
@@ -279,4 +307,5 @@ def broadcast_trade_closed(trade_dict):
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)
+    host = os.getenv("API_HOST", "127.0.0.1")
+    socketio.run(app, host=host, port=5000, debug=False, allow_unsafe_werkzeug=True)

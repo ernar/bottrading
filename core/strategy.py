@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import logging
 from typing import Optional
 from core.models import BotConfig
@@ -11,19 +12,19 @@ import ollama
 logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
 
-def _call_openai(model: str, system: str, user: str) -> Optional[str]:
+def _call_openai(model: str, system: str, user: str, temperature: float = 0.2) -> Optional[str]:
     from openai import OpenAI
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.2,
+        temperature=temperature,
         response_format={"type": "json_object"},
     )
     return response.choices[0].message.content
 
 
-def _call_gemini(model: str, system: str, user: str) -> Optional[str]:
+def _call_gemini(model: str, system: str, user: str, temperature: float = 0.2) -> Optional[str]:
     # SDK nuevo `google-genai` (el antiguo `google.generativeai` está deprecado).
     from google import genai
     from google.genai import types
@@ -33,7 +34,7 @@ def _call_gemini(model: str, system: str, user: str) -> Optional[str]:
         contents=user,
         config=types.GenerateContentConfig(
             system_instruction=system,
-            temperature=0.2,
+            temperature=temperature,
             response_mime_type="application/json",  # fuerza JSON, como openai/ollama
         ),
     )
@@ -84,7 +85,7 @@ class StrategyEngine:
 
     def __init__(self, config: BotConfig, provider: str = "ollama",
                  system_suffix: str = "", min_confidence: float = None,
-                 min_rr: float = None):
+                 min_rr: float = None, temperature: float = 0.2):
         self.config = config
         self.provider = provider.lower()
         # Persona/contexto adicional inyectado por un agente especializado.
@@ -93,6 +94,7 @@ class StrategyEngine:
         # que el resto sin tocar la clase global.
         self.min_confidence = self.MIN_CONFIDENCE if min_confidence is None else min_confidence
         self.min_rr = self.MIN_RR if min_rr is None else min_rr
+        self.temperature = temperature
         if self.provider == "ollama":
             self._ollama = ollama.Client()
 
@@ -100,9 +102,9 @@ class StrategyEngine:
         model = self.config.model
         try:
             if self.provider == "openai":
-                return _call_openai(model, system, user)
+                return _call_openai(model, system, user, self.temperature)
             if self.provider == "gemini":
-                return _call_gemini(model, system, user)
+                return _call_gemini(model, system, user, self.temperature)
             response = self._ollama.chat(
                 model=model,
                 messages=[
@@ -110,7 +112,7 @@ class StrategyEngine:
                     {"role": "user", "content": user},
                 ],
                 format="json",
-                options={"temperature": 0.2, "top_p": 0.9},
+                options={"temperature": self.temperature, "top_p": 0.9},
             )
             return response["message"]["content"]
         except Exception as e:
@@ -136,7 +138,7 @@ Devuelve solo el JSON con el formato especificado."""
         except (TypeError, ValueError):
             return default
 
-    def generate_signal(self, symbol: str, positions: list = None, market_data: str = "") -> Optional[dict]:
+    def generate_signal(self, symbol: str, market_data: str = "") -> Optional[dict]:
         analysis = self.analyze_market(symbol, market_data=market_data)
         if not analysis:
             return None
@@ -167,8 +169,14 @@ Devuelve solo el JSON con el formato especificado."""
             "reason": signal.get("rationale", "") or signal.get("reason", ""),
         }
 
-    def validate_trade(self, signal: dict, positions: list = None, tick=None) -> bool:
-        """Valida señal antes de ejecutar. Devuelve False con el motivo impreso en debug."""
+    def validate_trade(self, signal: dict, positions: list = None, tick=None,
+                       spread_points: float = None, total_open_positions: int = None) -> bool:
+        """Valida señal antes de ejecutar. Devuelve False con el motivo impreso en debug.
+
+        `positions` son las del símbolo (para no duplicar dirección). `spread_points`
+        es el spread actual en puntos (filtro de coste). `total_open_positions` es el
+        nº de posiciones de TODA la cuenta (límite global); si no se pasa, se usa el
+        recuento del símbolo como aproximación."""
         def reject(reason: str) -> bool:
             if self.config.debug_mode:
                 print(f"  [Validación] Rechazada: {reason}")
@@ -183,14 +191,34 @@ Devuelve solo el JSON con el formato especificado."""
             return reject(f"confianza {signal['confidence']:.0%} < {self.min_confidence:.0%}")
         if signal.get("risk_level") == "high" and positions:
             return reject("riesgo alto con posiciones abiertas")
-        if self.config.max_open_positions and len(positions or []) >= self.config.max_open_positions:
-            return reject(f"máximo de posiciones abiertas ({self.config.max_open_positions})")
+
+        # Una señal de confianza muy alta se salta el límite de posiciones del
+        # símbolo (cuenta máxima y no-duplicar dirección) para poder reforzar.
+        override = signal["confidence"] >= self.config.max_pos_override_confidence
+        if override and self.config.debug_mode:
+            print(f"  [Validación] Confianza {signal['confidence']:.0%} >= "
+                  f"{self.config.max_pos_override_confidence:.0%}: se salta el límite de posiciones")
+
+        open_count = total_open_positions if total_open_positions is not None else len(positions or [])
+        if (not override and self.config.max_open_positions
+                and open_count >= self.config.max_open_positions):
+            return reject(f"máximo de posiciones abiertas ({open_count}/{self.config.max_open_positions})")
+        if (spread_points is not None and self.config.max_spread_filter
+                and spread_points > self.config.max_spread_filter):
+            return reject(f"spread {spread_points:.0f} pts > máximo {self.config.max_spread_filter:.0f}")
 
         # No duplicar posición en la misma dirección sobre el mismo símbolo
-        for p in positions or []:
-            direction = getattr(p, "direction", None) or (p.get("type") if isinstance(p, dict) else None)
-            if direction and str(direction).upper() == action:
-                return reject(f"ya existe posición {action} en este símbolo")
+        # (salvo override por confianza muy alta).
+        if not override:
+            for p in positions or []:
+                raw = getattr(p, "direction", None)
+                if raw is None and isinstance(p, dict):
+                    raw = p.get("direction", p.get("type"))
+                # MT5 da 'BUY'/'SELL'; MT4 da type entero (0=BUY, 1=SELL).
+                d = str(raw).upper()
+                direction = {"0": "BUY", "1": "SELL"}.get(d, d)
+                if direction == action:
+                    return reject(f"ya existe posición {action} en este símbolo")
 
         entry = signal.get("entry") or 0
         sl = signal.get("stop_loss") or 0
@@ -215,11 +243,32 @@ Devuelve solo el JSON con el formato especificado."""
 
         return True
 
-    def calculate_lot_size(self, account_balance: float, symbol: str,
-                           stop_loss_price: float, entry_price: float) -> float:
+    def calculate_lot_size(self, account_balance: float, entry_price: float,
+                           stop_loss_price: float, point: float, tick_value: float,
+                           volume_min: float = 0.01, volume_max: float = 100.0,
+                           volume_step: float = 0.01) -> float:
+        """Lote que arriesga `risk_per_trade` del balance hasta el stop_loss.
+
+        Función pura (recibe los datos del símbolo, no consulta al cliente) para
+        poder testearla. Usa el valor real del tick del símbolo, así funciona
+        igual para forex (contrato 100k) que para cripto (contrato 1):
+
+            pérdida_por_lote = (distancia_al_SL / point) * tick_value
+            lote = (balance * risk_per_trade) / pérdida_por_lote
+
+        El resultado se redondea hacia abajo al `volume_step` (para no exceder el
+        riesgo) y se acota a [volume_min, volume_max]. Si el mínimo del bróker ya
+        arriesga más que el objetivo, devuelve ese mínimo."""
         risk_amount = account_balance * self.config.risk_per_trade
         price_diff = abs(entry_price - stop_loss_price)
-        if price_diff == 0:
-            return self.config.default_lot_size
-        lot_size = risk_amount / (price_diff * 100000)
-        return max(self.config.default_lot_size, round(lot_size, 2))
+        if price_diff <= 0 or point <= 0 or tick_value <= 0 or risk_amount <= 0:
+            return volume_min
+        loss_per_lot = (price_diff / point) * tick_value
+        if loss_per_lot <= 0:
+            return volume_min
+
+        raw = risk_amount / loss_per_lot
+        step = volume_step if volume_step > 0 else 0.01
+        steps = math.floor(raw / step + 1e-9)
+        lot = round(steps * step, 10)
+        return max(volume_min, min(lot, volume_max))

@@ -5,13 +5,52 @@ les pide su análisis y ejecuta las señales válidas. Mantiene además un regis
 de rendimiento por agente que servirá de base para la fase de optimización
 (ajuste automático de parámetros / modelo de cada agente).
 """
+import os
 import threading
 import time
+from datetime import date, datetime
 
 from core.state import bot_state
+from core.bot_state import Trade
 from core.logger import log_trade
 from core.trade_metrics import calc_trade_metrics
 from agents.base_agent import AgentParams
+
+
+def _pos_get(pos, *fields, default=None):
+    """Lee el primer campo presente de una posición, sea Position (pydantic/MT5)
+    o dict (MT4)."""
+    for f in fields:
+        if isinstance(pos, dict):
+            if pos.get(f) is not None:
+                return pos[f]
+        else:
+            v = getattr(pos, f, None)
+            if v is not None:
+                return v
+    return default
+
+
+def _pos_to_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _pos_direction(pos) -> str:
+    """Normaliza la dirección. MT5 da 'BUY'/'SELL'; MT4 da type entero (0=BUY,1=SELL)."""
+    d = _pos_get(pos, "direction", "type")
+    if d is None:
+        return "?"
+    s = str(d).upper()
+    if s in ("BUY", "SELL"):
+        return s
+    if s in ("0", "0.0"):
+        return "BUY"
+    if s in ("1", "1.0"):
+        return "SELL"
+    return s
 
 
 # Límites de seguridad para que la optimización no deje a un agente en una
@@ -23,6 +62,11 @@ PARAM_BOUNDS = {
     "atr_tp_mult": (1.5, 5.0),
 }
 MIN_SAMPLES_TO_TUNE = 5   # nº mínimo de señales evaluadas para ajustar
+
+# Con el símbolo en su máximo de posiciones, el análisis se espacia a este
+# intervalo (en vez de cada ciclo) para no gastar llamadas al LLM sin poder
+# operar. Una señal de confianza >= 90% se salta igualmente el límite.
+AT_MAX_ANALYSIS_INTERVAL = 15 * 60
 
 
 def _clamp(value: float, key: str) -> float:
@@ -140,6 +184,17 @@ class AgentOrchestrator:
         # Reporte de la última optimización (para exponer al dashboard).
         self.last_optimization = None
         self.last_optimization_at = None
+        # Circuit breaker de pérdida diaria (0 = desactivado).
+        self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
+        self._risk_day = None          # día (ISO) cuyo equity inicial guardamos
+        self._day_start_equity = None  # equity al primer ciclo del día
+        self._risk_halted_day = None   # día en que ya saltó el breaker
+        # Última instantánea de posiciones por símbolo {symbol: {ticket: snap}}:
+        # base para detectar cierres y registrarlos en el historial.
+        self._prev_positions: dict = {}
+        # Momento del último análisis por símbolo, para espaciarlo al estar en
+        # el máximo de posiciones abiertas.
+        self._last_analysis_at: dict = {}
 
     # ----- Ejecución -----
 
@@ -151,6 +206,7 @@ class AgentOrchestrator:
                 account_info = self.client.get_account_info()
                 if account_info:
                     bot_state.update_account(account_info)
+                    self._check_daily_loss_guard(account_info)
 
                 if not bot_state.bot_running:
                     time.sleep(5)
@@ -167,6 +223,115 @@ class AgentOrchestrator:
         except KeyboardInterrupt:
             print("\n\nOrquestador detenido por el usuario.")
 
+    def _check_daily_loss_guard(self, account_info: dict):
+        """Kill-switch por pérdida diaria.
+
+        Fija el equity al primer ciclo de cada día y, si en ciclos posteriores
+        cae por debajo del límite configurado, pausa el bot (deja de abrir
+        operaciones). Salta una sola vez por día; se rearma al cambiar de día.
+        Un resume manual desde el dashboard lo anula para el resto del día (el
+        usuario asume el control)."""
+        if not self.max_daily_loss_pct:
+            return
+        equity = account_info.get("equity") or 0
+        if equity <= 0:
+            return
+
+        today = date.today().isoformat()
+        if self._risk_day != today:
+            # Nuevo día: rearmar con el equity actual como referencia.
+            self._risk_day = today
+            self._day_start_equity = equity
+            return
+
+        baseline = self._day_start_equity or equity
+        drawdown = (baseline - equity) / baseline
+        if (drawdown >= self.max_daily_loss_pct
+                and bot_state.bot_running
+                and self._risk_halted_day != today):
+            self._risk_halted_day = today
+            bot_state.set_bot_running(False)
+            print(f"\n{'!' * 50}")
+            print(f"  CIRCUIT BREAKER: pérdida del día {drawdown:.1%} "
+                  f">= límite {self.max_daily_loss_pct:.1%}")
+            print(f"  Equity inicio del día: {baseline:.2f} -> actual: {equity:.2f}")
+            print("  BOT PAUSADO. Revisa la cuenta antes de reanudar desde el dashboard.")
+            print(f"{'!' * 50}")
+
+    def _should_analyze_at_max(self, symbol: str) -> bool:
+        """True si toca volver a analizar pese a estar en el máximo de posiciones
+        (ha pasado AT_MAX_ANALYSIS_INTERVAL desde el último análisis del símbolo)."""
+        last = self._last_analysis_at.get(symbol, 0)
+        return (time.time() - last) >= AT_MAX_ANALYSIS_INTERVAL
+
+    def _spread_points(self, symbol: str, tick) -> float:
+        """Spread actual en puntos, o None si no se puede calcular."""
+        if not tick:
+            return None
+        sym = self.client.get_symbol_info(symbol)
+        point = getattr(sym, "point", 0) or 0
+        if point <= 0:
+            return None
+        return (tick.ask - tick.bid) / point
+
+    # ----- Historial de cierres -----
+
+    def _detect_closed_trades(self, symbol: str, positions: list):
+        """Compara las posiciones actuales con la instantánea previa del símbolo
+        y registra como cerrada cualquiera que haya desaparecido."""
+        current = {}
+        for p in positions or []:
+            ticket = _pos_get(p, "ticket")
+            if ticket is not None:
+                current[str(ticket)] = p
+
+        prev = self._prev_positions.get(symbol, {})
+        for ticket, snap in prev.items():
+            if ticket not in current:
+                self._record_closed_trade(symbol, snap)
+
+        self._prev_positions[symbol] = {t: self._snapshot(p) for t, p in current.items()}
+
+    @staticmethod
+    def _snapshot(pos) -> dict:
+        return {
+            "direction": _pos_direction(pos),
+            "volume": _pos_to_float(_pos_get(pos, "volume")),
+            "open_price": _pos_to_float(_pos_get(pos, "open_price", "price_open")),
+            "current_price": _pos_to_float(_pos_get(pos, "current_price")),
+            "profit": _pos_to_float(_pos_get(pos, "profit")),
+            "open_time": _pos_get(pos, "open_time"),
+        }
+
+    def _record_closed_trade(self, symbol: str, snap: dict):
+        """Registra en el estado una posición que ya no aparece.
+
+        El P/L es el último flotante observado antes de desaparecer (aprox. del
+        realizado; el broker podría diferir por el último tick/slippage)."""
+        open_iso, duration = "", None
+        open_time = snap.get("open_time")
+        if open_time:
+            try:
+                ot = datetime.fromtimestamp(int(open_time))
+                open_iso = ot.isoformat()
+                duration = int((datetime.now() - ot).total_seconds())
+            except (ValueError, OSError, TypeError):
+                pass
+        exit_price = snap.get("current_price") or snap.get("open_price") or 0
+        trade = Trade(
+            symbol=symbol,
+            action=snap.get("direction", "?"),
+            entry_price=snap.get("open_price", 0.0),
+            exit_price=exit_price or None,
+            volume=snap.get("volume", 0.0),
+            pnl=snap.get("profit", 0.0),
+            open_time=open_iso,
+            close_time=datetime.now().isoformat(),
+            duration_seconds=duration,
+        )
+        bot_state.add_closed_trade(trade)
+        print(f"  Cierre registrado: {trade.action} {symbol} | P/L≈{trade.pnl:.2f}")
+
     def _run_agent(self, agent):
         symbol = agent.symbol
         print(f"\n{'=' * 50}")
@@ -176,8 +341,26 @@ class AgentOrchestrator:
         if tick:
             print(f"  Precio: Ask={tick.ask} | Bid={tick.bid}")
 
+        # Posiciones del símbolo: detectar cierres respecto al ciclo previo,
+        # sincronizar estado y decidir si conviene analizar.
+        positions = self.client.get_positions(symbol)
+        self._detect_closed_trades(symbol, positions)
+        bot_state.sync_positions(symbol, positions)
+
+        # Si el símbolo está en su máximo de posiciones, espaciar el análisis a
+        # AT_MAX_ANALYSIS_INTERVAL: solo lo justifica una señal de confianza muy
+        # alta (>=90%) que se salte el límite, así que no merece la pena consultar
+        # al LLM cada ciclo.
+        max_pos = agent.params.max_open_positions
+        at_max = bool(max_pos) and len(positions) >= max_pos
+        if at_max and not self._should_analyze_at_max(symbol):
+            print(f"  {len(positions)} posiciones abiertas (máx {max_pos}); "
+                  f"análisis aplazado (cada {AT_MAX_ANALYSIS_INTERVAL // 60} min salvo conf>=90%).")
+            return
+
         with _Spinner("  Generando análisis"):
             signal = agent.analyze(self.client, platform=self.platform)
+        self._last_analysis_at[symbol] = time.time()
         if not signal:
             print("  No se generó señal.")
             return
@@ -185,14 +368,19 @@ class AgentOrchestrator:
         self.stats[agent.name]["signals"] += 1
         bot_state.update_signal(signal)
 
+        # Volumen real (fijo o por riesgo) para que las métricas mostradas y la
+        # orden enviada usen el mismo lote.
+        volume = agent.resolve_volume(self.client, signal)
+
         print(f"\n  Señal: {signal['action']} | Confianza: {signal['confidence']:.0%}")
         print(f"  Tendencia: {signal.get('trend', 'N/A')} | Riesgo: {signal.get('risk_level', 'N/A')}")
         if signal.get("entry"):
-            print(f"  Entry: {signal['entry']} | SL: {signal['stop_loss']} | TP: {signal['take_profit']}")
+            print(f"  Entry: {signal['entry']} | SL: {signal['stop_loss']} | "
+                  f"TP: {signal['take_profit']} | Lote: {volume}")
             metrics = calc_trade_metrics(
                 self.client, symbol, signal["action"],
                 signal["entry"], signal["stop_loss"], signal["take_profit"],
-                agent.params.lot_size,
+                volume,
             )
             if metrics:
                 print(f"  Profit potencial: +${metrics['net_profit']:.2f}  ({metrics['pips_tp']:.0f} pips)")
@@ -200,20 +388,22 @@ class AgentOrchestrator:
                 print(f"  Comisión estimada: ${metrics['commission']:.2f} | R:R = 1:{metrics['rr']}")
         print(f"  Razón: {signal['reason']}")
 
-        positions = self.client.get_positions(symbol)
-        bot_state.sync_positions(symbol, positions)
-
         if signal["action"] == "HOLD":
             self.stats[agent.name]["holds"] += 1
             return
 
-        if not agent.validate(signal, positions, tick=self.client.get_tick(symbol)):
+        # Contexto extra para la validación: spread actual (filtro de coste) y
+        # nº de posiciones de TODA la cuenta (límite global, no por símbolo).
+        spread_points = self._spread_points(symbol, tick)
+        total_open = len(self.client.get_positions() or [])
+        if not agent.validate(signal, positions, tick=self.client.get_tick(symbol),
+                              spread_points=spread_points, total_open_positions=total_open):
             print("  Señal no validada para ejecución.")
             return
 
         result = self.client.place_order(
             symbol=symbol,
-            volume=agent.params.lot_size,
+            volume=volume,
             order_type=signal["action"],
             stop_loss=signal.get("stop_loss") or None,
             take_profit=signal.get("take_profit") or None,
@@ -225,7 +415,7 @@ class AgentOrchestrator:
             log_trade(
                 symbol=symbol,
                 action=signal["action"],
-                volume=agent.params.lot_size,
+                volume=volume,
                 price=result.get("price") or signal.get("entry", 0),
                 stop_loss=signal.get("stop_loss", 0),
                 take_profit=signal.get("take_profit", 0),

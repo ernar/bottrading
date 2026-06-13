@@ -62,4 +62,7 @@ class BotConfig(BaseModel):
     max_spread_filter: float = 2.0
     risk_per_trade: float = 0.02
     max_open_positions: int = 5
+    # Por encima de esta confianza, una señal se salta el límite de posiciones
+    # abiertas (cuenta máxima y no-duplicar dirección). 1.0 = nunca saltar.
+    max_pos_override_confidence: float = 0.90
     debug_mode: bool = False

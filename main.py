@@ -197,12 +197,19 @@ def main():
         input("\nPresiona Enter para salir...")
         return
 
+    # 127.0.0.1 por defecto: el API controla operaciones reales (abrir/cerrar),
+    # así que no debe quedar expuesto a la red sin querer. Para acceso remoto,
+    # pon API_HOST=0.0.0.0 en el .env Y configura API_TOKEN.
+    api_host = os.getenv("API_HOST", "127.0.0.1")
+    if api_host != "127.0.0.1" and not os.getenv("API_TOKEN", "").strip():
+        print(f"  [SEGURIDAD] API_HOST={api_host} sin API_TOKEN: el bot quedaría "
+              "controlable por cualquiera en la red. Define API_TOKEN en el .env.")
     api_thread = threading.Thread(
-        target=lambda: socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True),
+        target=lambda: socketio.run(app, host=api_host, port=5000, debug=False, allow_unsafe_werkzeug=True),
         daemon=True,
     )
     api_thread.start()
-    print("API server iniciado en http://localhost:5000")
+    print(f"API server iniciado en http://{api_host}:5000")
 
     print("\n" + "=" * 50)
     print(f"  Agentes activos: {', '.join(f'{a.name}[{a.symbol}]' for a in agents)}")

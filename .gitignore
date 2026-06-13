@@ -1,6 +1,17 @@
+# Secretos / configuración local — NUNCA subir
+.env
+*.env
+!.env.example
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+
+# Logs y datos de ejecución
+logs/
+
+# Frontend
 node_modules/
 frontend/dist/
 frontend/node_modules/

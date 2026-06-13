@@ -7,7 +7,8 @@ Bot de trading que integra **MetaTrader 5/4** con un **LLM** (Ollama local por d
 - `python main.py` — arranca el bot **y** el API server (puerto 5000) en un hilo interno del mismo proceso. NO arranques el API por separado: el estado se comparte por proceso.
 - `start.bat` — lanza `main.py` + el dashboard React (`http://localhost:5173`).
 - Frontend: `cd frontend && npm install`, luego `npm run dev`.
-- Credenciales y config en `.env` (MT5_LOGIN/PASSWORD/SERVER, MODEL, SYMBOLS, NEWS_ENABLED). `.env` está en `.gitignore` y contiene credenciales reales — nunca lo subas ni lo imprimas.
+- Credenciales y config en `.env` (MT5_LOGIN/PASSWORD/SERVER, MODEL, SYMBOLS, NEWS_ENABLED). `.env` está en `.gitignore` y contiene credenciales reales — nunca lo subas ni lo imprimas. Plantilla sin secretos en `.env.example`.
+- Variables de seguridad/riesgo en `.env`: `API_HOST` (default `127.0.0.1`; usar `0.0.0.0` solo con `API_TOKEN`), `API_TOKEN` (protege las rutas POST que mutan estado), `MAX_DAILY_LOSS_PCT` (circuit breaker; 0 = desactivado).
 
 ## Arquitectura
 
@@ -25,7 +26,8 @@ El núcleo del bot es un **agente especializado por símbolo** (carpeta `agents/
 
 - `agents/base_agent.py` → `SymbolAgent` (símbolo + provider/modelo LLM + `AgentParams` + persona inyectada al prompt + `SignalMemory` aislada en `logs/agents/<name>_memory.json`).
 - `agents/registry.py` → blueprints declarativos; `build_agent(name)`. Primer agente: `btc-agent` (BTCUSD). Añadir un símbolo = añadir un blueprint.
-- `agents/orchestrator.py` → `AgentOrchestrator` corre el loop y ejecuta señales válidas; `optimize()` (rule-based) ajusta los `AgentParams` de cada agente según su rendimiento (memoria), con límites en `PARAM_BOUNDS`. Se llama cada 20 ciclos (`optimize_every_cycles`).
+- `agents/orchestrator.py` → `AgentOrchestrator` corre el loop y ejecuta señales válidas; `optimize()` (rule-based) ajusta los `AgentParams` de cada agente según su rendimiento (memoria), con límites en `PARAM_BOUNDS`. Se llama cada 20 ciclos (`optimize_every_cycles`). También: circuit breaker de pérdida diaria (`_check_daily_loss_guard`), registro de cierres para el historial (`_detect_closed_trades`) y, con el símbolo en su máximo de posiciones, espacia el análisis a `AT_MAX_ANALYSIS_INTERVAL` (15 min).
+- **Gestión de riesgo en señales** (`validate_trade` / `AgentParams`): filtro de spread (`max_spread_filter`), límite global de posiciones (`max_open_positions`), volumen por riesgo opcional (`use_risk_sizing` + `calculate_lot_size`), y override por confianza alta (`max_pos_override_confidence`, default 0.90) que se salta el límite de posiciones del símbolo.
 
 ## Convenciones y gotchas
 
@@ -40,5 +42,6 @@ El núcleo del bot es un **agente especializado por símbolo** (carpeta `agents/
 ## Comandos útiles
 
 - Sintaxis Python: `python -m py_compile <archivo>`
+- Tests (funciones puras): `python -m pytest -q` (deps de test en `requirements-dev.txt`)
 - Modelos Ollama disponibles: `ollama list`
 - Frontend type-check: `cd frontend && npx tsc --noEmit`

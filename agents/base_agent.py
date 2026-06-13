@@ -37,7 +37,14 @@ class AgentParams(BaseModel):
     risk_per_trade: float = 0.02
     max_open_positions: int = 5
     max_spread_filter: float = 2.0
-    temperature: float = 0.2  # reservado para futuras tuning del orquestador
+    temperature: float = 0.2
+    # Si True, el volumen se calcula por riesgo (risk_per_trade hasta el SL) en
+    # lugar de usar lot_size fijo. Desactivado por defecto: activarlo cambia el
+    # tamaño real de las operaciones.
+    use_risk_sizing: bool = False
+    # Por encima de esta confianza, la señal se salta el límite de posiciones
+    # abiertas del símbolo (cuenta y no-duplicar dirección).
+    max_pos_override_confidence: float = 0.90
 
 
 class SymbolAgent:
@@ -58,6 +65,7 @@ class SymbolAgent:
             max_spread_filter=params.max_spread_filter,
             risk_per_trade=params.risk_per_trade,
             max_open_positions=params.max_open_positions,
+            max_pos_override_confidence=params.max_pos_override_confidence,
             debug_mode=debug_mode,
         )
         self.strategy = StrategyEngine(
@@ -66,6 +74,7 @@ class SymbolAgent:
             system_suffix=persona,
             min_confidence=params.min_confidence,
             min_rr=params.min_rr,
+            temperature=params.temperature,
         )
         # Memoria aislada por agente: cada uno aprende de sus propias señales.
         self.memory = SignalMemory(path=f"logs/agents/{name}_memory.json")
@@ -89,7 +98,7 @@ class SymbolAgent:
             news_context=news_provider.get_news_context(symbol),
         )
 
-        signal = self.strategy.generate_signal(symbol, positions, market_data=market_data)
+        signal = self.strategy.generate_signal(symbol, market_data=market_data)
         if not signal:
             return None
 
@@ -104,30 +113,60 @@ class SymbolAgent:
         return signal
 
     def _fill_sl_tp(self, client, signal: dict, tick):
-        """Rellena SL/TP con múltiplos de ATR propios del agente si el modelo
-        no los proporcionó."""
-        if signal["action"] == "HOLD":
+        """Rellena SL y/o TP con múltiplos de ATR del agente si el modelo no los
+        dio. Cada uno se calcula por separado: una señal con SL pero sin TP queda
+        igualmente completa (antes se saltaba la validación de R:R por TP=0)."""
+        if signal["action"] == "HOLD" or not tick:
             return
-        if signal.get("stop_loss") and signal["stop_loss"] != 0:
+        has_sl = bool(signal.get("stop_loss"))
+        has_tp = bool(signal.get("take_profit"))
+        if has_sl and has_tp:
             return
         atr = client.get_atr(self.symbol)
+        if atr <= 0:
+            return
         sym_info = client.get_symbol_info(self.symbol)
         digits = sym_info.digits if sym_info else 5
-        if atr <= 0 or not tick:
-            return
         entry = tick.ask if signal["action"] == "BUY" else tick.bid
         sl_mult, tp_mult = self.params.atr_sl_mult, self.params.atr_tp_mult
-        if signal["action"] == "BUY":
-            signal["stop_loss"] = round(entry - sl_mult * atr, digits)
-            if not signal.get("take_profit"):
-                signal["take_profit"] = round(entry + tp_mult * atr, digits)
-        else:
-            signal["stop_loss"] = round(entry + sl_mult * atr, digits)
-            if not signal.get("take_profit"):
-                signal["take_profit"] = round(entry - tp_mult * atr, digits)
+        sign = 1 if signal["action"] == "BUY" else -1
+        if not has_sl:
+            signal["stop_loss"] = round(entry - sign * sl_mult * atr, digits)
+        if not has_tp:
+            signal["take_profit"] = round(entry + sign * tp_mult * atr, digits)
 
-    def validate(self, signal: dict, positions: list = None, tick=None) -> bool:
-        return self.strategy.validate_trade(signal, positions, tick=tick)
+    def validate(self, signal: dict, positions: list = None, tick=None,
+                 spread_points: float = None, total_open_positions: int = None) -> bool:
+        return self.strategy.validate_trade(
+            signal, positions, tick=tick, spread_points=spread_points,
+            total_open_positions=total_open_positions)
+
+    def resolve_volume(self, client, signal: dict) -> float:
+        """Volumen a operar. Lote fijo (params.lot_size) salvo que el agente
+        tenga use_risk_sizing activado, en cuyo caso se dimensiona por riesgo
+        contra el SL usando el valor real del tick del símbolo. Si falta cualquier
+        dato necesario, cae al lote fijo para no bloquear la operación."""
+        if not self.params.use_risk_sizing:
+            return self.params.lot_size
+        sym = client.get_symbol_info(self.symbol)
+        account = client.get_account_info() or {}
+        balance = account.get("balance") or 0
+        entry = signal.get("entry") or 0
+        sl = signal.get("stop_loss") or 0
+        point = getattr(sym, "point", 0) or 0
+        tick_value = getattr(sym, "trade_tick_value", 0) or 0
+        if not sym or balance <= 0 or entry <= 0 or sl <= 0 or point <= 0 or tick_value <= 0:
+            return self.params.lot_size
+        return self.strategy.calculate_lot_size(
+            account_balance=balance,
+            entry_price=entry,
+            stop_loss_price=sl,
+            point=point,
+            tick_value=tick_value,
+            volume_min=getattr(sym, "volume_min", 0.01) or 0.01,
+            volume_max=getattr(sym, "volume_max", 100.0) or 100.0,
+            volume_step=getattr(sym, "volume_step", 0.01) or 0.01,
+        )
 
     # ----- Ajuste de parámetros (usado por el orquestador) -----
 
@@ -146,15 +185,18 @@ class SymbolAgent:
                 system_suffix=self.persona,
                 min_confidence=new_params.min_confidence,
                 min_rr=new_params.min_rr,
+                temperature=new_params.temperature,
             )
         self.params = new_params
         self.config.default_lot_size = new_params.lot_size
         self.config.risk_per_trade = new_params.risk_per_trade
         self.config.max_open_positions = new_params.max_open_positions
         self.config.max_spread_filter = new_params.max_spread_filter
+        self.config.max_pos_override_confidence = new_params.max_pos_override_confidence
         self.config.model = new_params.model
         self.strategy.min_confidence = new_params.min_confidence
         self.strategy.min_rr = new_params.min_rr
+        self.strategy.temperature = new_params.temperature
 
     # ----- Introspección (para CLI y dashboard/orquestador) -----
 

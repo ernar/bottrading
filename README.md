@@ -28,10 +28,14 @@ mt5_ollama_bot/
 │   └── mt4_client.py        # Bridge con MT4 vía EA (PythonBridge.mq4)
 ├── api/server.py            # Flask REST API + WebSocket para el dashboard
 ├── mt4_ea/PythonBridge.mq4  # EA puente para MT4
+├── tests/                   # Tests con pytest (funciones puras)
 ├── requirements.txt
+├── requirements-dev.txt     # Dependencias de test (pytest)
+├── conftest.py              # Hace que pytest encuentre los paquetes del proyecto
 ├── start.bat                # Arranque en Windows (main.py + frontend)
-├── .env                     # Credenciales MT5/MT4 (no subir a git)
-├── logs/                    # Generado automáticamente
+├── .env                     # Credenciales + config (NO subir a git; gitignored)
+├── .env.example             # Plantilla sin secretos
+├── logs/                    # Generado automáticamente (gitignored)
 │   ├── memory.json          # Memoria de señales y resultados evaluados
 │   ├── agents/              # Memoria aislada por agente (<name>_memory.json)
 │   └── {mt5|mt4}/
