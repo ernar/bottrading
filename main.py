@@ -11,6 +11,7 @@ from clients.base_client import BaseMTClient
 from api.server import socketio, app, set_mt_client, set_orchestrator
 from agents.registry import list_agents, build_agent
 from agents.orchestrator import AgentOrchestrator
+from core.llm_config import available_providers
 
 load_dotenv()
 
@@ -31,9 +32,37 @@ def select_platform() -> str:
         print("  Opción inválida. Escribe 1 o 2.")
 
 
+def select_llm(default_provider: str, default_model: str) -> tuple[str, str]:
+    """Pregunta el provider/modelo LLM para un agente.
+
+    Solo lista proveedores con clave configurada (ollama siempre). Enter
+    mantiene el modelo por defecto del blueprint."""
+    providers = available_providers()
+    options: list[tuple[str, str]] = []
+    print("  Modelo LLM (proveedores con clave configurada):")
+    for prov, models in providers.items():
+        for m in models:
+            options.append((prov, m))
+            tag = "  <- por defecto" if (prov == default_provider and m == default_model) else ""
+            print(f"    {len(options):2d}. {prov.upper():7} / {m}{tag}")
+    print(f"    Enter = mantener {default_provider.upper()}/{default_model}")
+
+    while True:
+        choice = input("  Elige modelo: ").strip()
+        if not choice:
+            return default_provider, default_model
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(options):
+                return options[idx - 1]
+        except ValueError:
+            pass
+        print("    Opción inválida.")
+
+
 def select_agents() -> list:
-    """Lista los agentes especializados disponibles (cada uno ya trae su
-    símbolo, modelo y configuración) y devuelve los seleccionados, instanciados."""
+    """Lista los agentes especializados disponibles y, para cada uno elegido,
+    pregunta el provider/modelo LLM. Devuelve los agentes instanciados."""
     blueprints = list_agents()
 
     print("\n" + "=" * 50)
@@ -47,24 +76,35 @@ def select_agents() -> list:
     print("=" * 50)
     print("  Ejemplo: 1  |  1,2  |  'all' para todos")
 
+    # 1) Elegir qué agentes
+    chosen: list = []
     while True:
         choice = input("\nTu elección: ").strip().lower()
         if choice == "all":
-            return [build_agent(bp.name) for bp in blueprints]
+            chosen = list(blueprints)
+            break
         try:
             indices = [int(x.strip()) for x in choice.split(",")]
         except ValueError:
             print("  Entrada inválida. Escribe números separados por coma o 'all'.")
             continue
-        selected = []
         for idx in indices:
             if 1 <= idx <= len(blueprints):
-                selected.append(build_agent(blueprints[idx - 1].name))
+                chosen.append(blueprints[idx - 1])
             else:
                 print(f"  Índice {idx} fuera de rango, omitido")
-        if selected:
-            return selected
+        if chosen:
+            break
         print("  No seleccionaste ningún agente válido.")
+
+    # 2) Elegir provider/modelo para cada agente seleccionado
+    agents = []
+    for bp in chosen:
+        print(f"\n--- LLM para {bp.name} [{bp.symbol}] ---")
+        provider, model = select_llm(bp.params.provider, bp.params.model)
+        agents.append(build_agent(bp.name, provider=provider, model=model))
+        print(f"  {bp.name} usará {provider.upper()}/{model}")
+    return agents
 
 
 def _is_port_in_use(port: int) -> bool:

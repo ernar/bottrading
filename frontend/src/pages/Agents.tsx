@@ -5,6 +5,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 export function AgentsPage() {
   const [overview, setOverview] = useState<AgentsOverview | null>(null)
+  const [models, setModels] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
@@ -16,9 +17,26 @@ export function AgentsPage() {
 
   useEffect(() => {
     load()
+    fetch(`${API_URL}/api/models`)
+      .then(r => r.json())
+      .then(setModels)
+      .catch(() => {})
     const id = setInterval(load, 10000)
     return () => clearInterval(id)
   }, [load])
+
+  const changeModel = (name: string, provider: string, model: string) => {
+    setBusy(true)
+    fetch(`${API_URL}/api/agents/${name}/model`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model }),
+    })
+      .then(r => r.json())
+      .then(() => load())
+      .catch(() => {})
+      .finally(() => setBusy(false))
+  }
 
   const runOptimization = (apply: boolean) => {
     setBusy(true)
@@ -78,9 +96,13 @@ export function AgentsPage() {
                 <span className="text-sm font-mono text-gray-400">{a.symbol}</span>
               </div>
               <p className="text-xs text-gray-400 mt-1">{a.description}</p>
-              <p className="text-xs text-gray-500 mt-1">
-                {a.provider.toUpperCase()} / {a.model}
-              </p>
+              <ModelSelector
+                provider={a.provider}
+                model={a.model}
+                models={models}
+                disabled={busy}
+                onChange={(p, m) => changeModel(a.name, p, m)}
+              />
 
               <div className="grid grid-cols-3 gap-2 mt-4 text-center">
                 <Stat label="Señales" value={a.stats.signals} />
@@ -147,6 +169,43 @@ export function AgentsPage() {
           </div>
         )}
       </section>
+    </div>
+  )
+}
+
+function ModelSelector({
+  provider, model, models, disabled, onChange,
+}: {
+  provider: string
+  model: string
+  models: Record<string, string[]>
+  disabled: boolean
+  onChange: (provider: string, model: string) => void
+}) {
+  // Lista plana "provider/model" para el <select>; el valor activo es el actual.
+  const current = `${provider}/${model}`
+  const options = Object.entries(models).flatMap(([prov, list]) =>
+    list.map(m => `${prov}/${m}`)
+  )
+  // El modelo activo puede no estar en la lista (p.ej. clave retirada): lo añadimos.
+  if (!options.includes(current)) options.unshift(current)
+
+  return (
+    <div className="mt-2">
+      <label className="text-xs text-gray-500">Modelo LLM</label>
+      <select
+        value={current}
+        disabled={disabled}
+        onChange={e => {
+          const [p, ...rest] = e.target.value.split('/')
+          onChange(p, rest.join('/'))
+        }}
+        className="w-full mt-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 disabled:opacity-50"
+      >
+        {options.map(opt => (
+          <option key={opt} value={opt}>{opt.toUpperCase()}</option>
+        ))}
+      </select>
     </div>
   )
 }

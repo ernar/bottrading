@@ -259,6 +259,26 @@ class AgentOrchestrator:
             self.last_optimization_at = time.strftime("%Y-%m-%d %H:%M:%S")
         return report
 
+    # ----- Cambio de modelo en caliente (desde el dashboard) -----
+
+    def set_agent_model(self, name: str, provider: str, model: str) -> dict:
+        """Cambia el provider/modelo LLM de un agente en caliente.
+
+        `apply_params` reconstruye la estrategia cuando provider/modelo difieren,
+        así que el cambio surte efecto en el siguiente análisis del agente.
+        Devuelve el nuevo estado o lanza KeyError/ValueError si es inválido."""
+        agent = next((a for a in self.agents if a.name == name), None)
+        if agent is None:
+            raise KeyError(name)
+        provider = (provider or "").lower().strip()
+        model = (model or "").strip()
+        if not provider or not model:
+            raise ValueError("provider y model son obligatorios")
+        new_params = agent.params.model_copy(update={"provider": provider, "model": model})
+        agent.apply_params(new_params)
+        print(f"  [{name}] modelo cambiado a {provider.upper()}/{model}")
+        return {"name": name, "provider": provider, "model": model}
+
     # ----- Exposición para el dashboard -----
 
     def agents_overview(self) -> dict:

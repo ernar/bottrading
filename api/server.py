@@ -7,6 +7,7 @@ import json
 import os
 from datetime import date
 from core.state import bot_state
+from core.llm_config import available_providers
 
 app = Flask(__name__)
 CORS(app)
@@ -183,6 +184,35 @@ def get_agents():
         return jsonify({"agents": [], "last_optimization": None,
                         "last_optimization_at": None, "optimize_every_cycles": 0}), 200
     return jsonify(_orchestrator.agents_overview()), 200
+
+
+@app.route("/api/models", methods=["GET"])
+def get_models():
+    """Proveedores/modelos LLM disponibles según las claves del .env.
+    Lo usa el dashboard para poblar el selector de modelo de cada agente."""
+    return jsonify(available_providers()), 200
+
+
+@app.route("/api/agents/<name>/model", methods=["POST"])
+def set_agent_model(name):
+    """Cambia el provider/modelo LLM de un agente en caliente.
+    Body: {"provider": "gemini", "model": "gemini-2.0-flash"}."""
+    if _orchestrator is None:
+        return jsonify({"error": "orchestrator not running"}), 503
+    body = request.get_json(silent=True) or {}
+    provider, model = body.get("provider"), body.get("model")
+    # Validar contra lo realmente disponible (clave configurada + modelo listado).
+    providers = available_providers()
+    if provider not in providers or model not in providers[provider]:
+        return jsonify({"error": f"provider/modelo no disponible: {provider}/{model}"}), 400
+    try:
+        result = _orchestrator.set_agent_model(name, provider, model)
+    except KeyError:
+        return jsonify({"error": f"agente '{name}' no encontrado"}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    socketio.emit("agent_model_changed", result)
+    return jsonify({"status": "ok", **result}), 200
 
 
 @app.route("/api/agents/optimize", methods=["POST"])

@@ -64,12 +64,23 @@ def list_agents() -> list[AgentBlueprint]:
     return list(AGENT_BLUEPRINTS.values())
 
 
-def build_agent(name: str, debug_mode: bool = True) -> SymbolAgent:
+def build_agent(name: str, debug_mode: bool = True,
+                provider: str | None = None, model: str | None = None) -> SymbolAgent:
+    """Instancia un agente a partir de su blueprint.
+
+    `provider`/`model` permiten sobreescribir el LLM por defecto del blueprint
+    (p. ej. elegir Gemini desde el menú) sin tocar el catálogo."""
     bp = AGENT_BLUEPRINTS[name]
+    params = bp.params
+    if provider or model:
+        params = bp.params.model_copy(update={
+            "provider": provider or bp.params.provider,
+            "model": model or bp.params.model,
+        })
     return SymbolAgent(
         name=bp.name,
         symbol=bp.symbol,
-        params=bp.params,
+        params=params,
         description=bp.description,
         persona=bp.persona,
         debug_mode=debug_mode,
