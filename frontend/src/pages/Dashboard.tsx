@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { BotState, Signal } from '../types/bot'
 import { StatusBadge } from '../components/StatusBadge'
-import { PortfolioChart, EquityPoint } from '../components/PortfolioChart'
+import { PortfolioChart } from '../components/PortfolioChart'
+import type { EquityPoint } from '../components/PortfolioChart'
 import { getApiUrl, getApiHeaders } from '../config'
 
 const API_URL = getApiUrl()
@@ -115,10 +116,12 @@ export function DashboardPage({ state }: DashboardPageProps) {
 
   // Punto en vivo: añade el equity actual (WebSocket) como último punto para que
   // el gráfico se mueva sin esperar al próximo refresco/registro del backend.
+  // `safeEquity` protege ante respuestas que no sean un array.
+  const safeEquity = Array.isArray(equity) ? equity : []
   const equitySeries: EquityPoint[] =
-    liveEquity != null && equity.length > 0 && equity[equity.length - 1].equity !== liveEquity
-      ? [...equity, { t: 'now', equity: liveEquity }]
-      : equity
+    liveEquity != null && safeEquity.length > 0 && safeEquity[safeEquity.length - 1].equity !== liveEquity
+      ? [...safeEquity, { t: 'now', equity: liveEquity }]
+      : safeEquity
 
   const floatingPnl = positions.reduce((sum, p) => sum + (p.profit || 0), 0)
   const winRate = stats?.memory.win_rate

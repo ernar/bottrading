@@ -81,6 +81,26 @@ EURUSD_PERSONA = (
 )
 
 
+# Persona del agente de Ethereum: cripto 24/7 como BTC, pero más volátil y con
+# catalizadores propios (actualizaciones de red, gas/L2, staking, ETFs). Suele
+# moverse correlacionado con BTC, con beta más alta (amplifica los movimientos).
+ETHUSD_PERSONA = (
+    "Operas ETHUSD (Ethereum contra dólar), un activo cripto que cotiza 24/7 sin "
+    "cierres de sesión. Características a tener en cuenta:\n"
+    "- Volatilidad aún mayor que BTC (beta alta): suele seguir la dirección de "
+    "Bitcoin pero amplificando el movimiento; usa stops amplios en múltiplos de "
+    "ATR y no te dejes barrer por el ruido.\n"
+    "- Vigila la correlación con BTC: si Bitcoin lidera un movimiento fuerte, ETH "
+    "tiende a acompañarlo; una divergencia clara ETH/BTC es información relevante.\n"
+    "- Tiene catalizadores propios: actualizaciones de red (hard forks), comisiones "
+    "de gas y actividad en L2, staking/unlocks y aprobación o flujos de ETFs.\n"
+    "- Igual que el resto de cripto, lo mueven los datos macro de USD (CPI, FOMC, "
+    "tasas) y el apetito de riesgo global; el sentimiento de los titulares pesa.\n"
+    "- Cuidado con mechas largas y barridos de liquidez en números redondos; "
+    "confirma rupturas con volumen y confluencia. Sin tendencia clara, prefiere hold."
+)
+
+
 AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
     "btc-agent": AgentBlueprint(
         name="btc-agent",
@@ -134,6 +154,24 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=2.0,  # forex mayor: spread muy ajustado
+        ),
+    ),
+    "eth-agent": AgentBlueprint(
+        name="eth-agent",
+        symbol="ETHUSD",
+        description="Especialista en Ethereum (ETHUSD) — cripto 24/7, beta alta vs BTC",
+        persona=ETHUSD_PERSONA,
+        params=AgentParams(
+            provider="gemini",
+            model="gemini-3.5-flash",
+            min_confidence=0.6,
+            min_rr=1.5,         # cripto: exige mejor R:R por la volatilidad
+            atr_sl_mult=2.0,    # ETH más volátil que BTC: stop algo más amplio
+            atr_tp_mult=3.0,
+            lot_size=0.01,
+            risk_per_trade=0.02,
+            max_open_positions=3,
+            max_spread_filter=50.0,  # el spread de cripto en puntos es alto
         ),
     ),
 }

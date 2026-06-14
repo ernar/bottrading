@@ -32,7 +32,10 @@ export function PortfolioChart({ points, height = 220 }: Props) {
     return () => ro.disconnect()
   }, [])
 
-  const values = points.map(p => p.equity)
+  // Defensa: si la API devolviera algo que no es un array (backend viejo, error
+  // parseado como JSON…), no reventamos el render.
+  const data = Array.isArray(points) ? points : []
+  const values = data.map(p => p.equity)
   const first = values[0] ?? 0
   const last = values[values.length - 1] ?? 0
   const change = last - first
