@@ -211,6 +211,27 @@ def get_agents():
     return jsonify(_orchestrator.agents_overview()), 200
 
 
+@app.route("/api/coordinator", methods=["GET"])
+def get_coordinator():
+    """Estado del coordinador (mesa de dirección): snapshot de cartera, última
+    coordinación, config y modelo LLM. {"enabled": false} si no está activo."""
+    if _orchestrator is None or not hasattr(_orchestrator, "coordinator_overview"):
+        return jsonify({"enabled": False}), 200
+    return jsonify(_orchestrator.coordinator_overview()), 200
+
+
+@app.route("/api/coordinator/decide", methods=["POST"])
+@require_token
+def coordinator_decide():
+    """Fuerza una decisión de coordinación AHORA en modo dry-run (no ejecuta
+    órdenes; usa las últimas señales conocidas). La ejecución real solo ocurre
+    en el bucle del orquestador."""
+    if _orchestrator is None or getattr(_orchestrator, "coordinator", None) is None:
+        return jsonify({"error": "coordinator not running"}), 503
+    result = _orchestrator.coordinate_now()
+    return jsonify(result), 200
+
+
 @app.route("/api/models", methods=["GET"])
 def get_models():
     """Proveedores/modelos LLM disponibles según las claves del .env.
@@ -304,6 +325,11 @@ def broadcast_account_update(account_dict):
 
 def broadcast_trade_closed(trade_dict):
     socketio.emit("trade_closed", trade_dict)
+
+
+def broadcast_coordinator_decision(payload):
+    """Emite la última decisión de la mesa de dirección (snapshot + decisiones)."""
+    socketio.emit("coordinator_decision", payload)
 
 
 if __name__ == "__main__":

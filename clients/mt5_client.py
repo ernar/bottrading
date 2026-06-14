@@ -32,6 +32,9 @@ class MT5Client(BaseMTClient):
         account = mt5.account_info()
         if account is None:
             return None
+        # margin_mode == RETAIL_HEDGING permite mantener largo y corto a la vez
+        # (cobertura real); en netting una orden opuesta netea la posición.
+        hedging = account.margin_mode == mt5.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING
         return {
             "login": account.login,
             "balance": account.balance,
@@ -42,6 +45,7 @@ class MT5Client(BaseMTClient):
             "profit": account.profit,
             "leverage": account.leverage,
             "currency": account.currency,
+            "hedging": hedging,
             "platform": "MT5",
         }
 

@@ -11,7 +11,9 @@ from clients.base_client import BaseMTClient
 from api.server import socketio, app, set_mt_client, set_orchestrator
 from agents.registry import list_agents, build_agent
 from agents.orchestrator import AgentOrchestrator
+from agents.coordinator import RiskBook, CoordinatorAgent
 from core.llm_config import available_providers
+from core.config import get_coordinator_config
 
 load_dotenv()
 
@@ -118,6 +120,25 @@ def select_agents() -> list:
     return agents
 
 
+def select_coordinator_llm(agents: list, cfg: dict) -> tuple:
+    """Elige el LLM del coordinador (mesa de dirección) reutilizando select_llm.
+
+    Default: COORDINATOR_PROVIDER/COORDINATOR_MODEL del .env y, si están vacíos,
+    el LLM del primer agente. Devuelve (provider, model) o (None, None) si el
+    coordinador está desactivado."""
+    if not cfg["enabled"]:
+        print("\n  Coordinador desactivado (COORDINATOR_ENABLED=false): modo clásico por agente.")
+        return None, None
+    print("\n" + "=" * 50)
+    print("       LLM DEL COORDINADOR (MESA DE DIRECCIÓN)")
+    print("=" * 50)
+    default_provider = cfg["provider"] or agents[0].params.provider
+    default_model = cfg["model"] or agents[0].params.model
+    provider, model = select_llm(default_provider, default_model)
+    print(f"  Coordinador usará {provider.upper()}/{model}")
+    return provider, model
+
+
 def _is_port_in_use(port: int) -> bool:
     with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
         return s.connect_ex(("127.0.0.1", port)) == 0
@@ -163,6 +184,10 @@ def connect_platform(client: BaseMTClient, version: str) -> bool:
 def main():
     version = select_platform()
     agents = select_agents()
+
+    # LLM del coordinador (prompt de consola, va con el resto de la selección).
+    coordinator_cfg = get_coordinator_config()
+    coord_provider, coord_model = select_coordinator_llm(agents, coordinator_cfg)
 
     client = build_client(version)
     print(f"\nPlataforma: {version.upper()}")
@@ -216,10 +241,22 @@ def main():
     print("  Presiona Ctrl+C para detener")
     print("=" * 50)
 
+    # Mesa de dirección: el RiskBook (topes duros) es la tesorería; el
+    # CoordinatorAgent (LLM) reparte capital y decide go/no-go por símbolo. Si
+    # el coordinador está desactivado, el orquestador usa la ruta clásica.
+    risk_book = RiskBook(coordinator_cfg)
+    coordinator = None
+    if coordinator_cfg["enabled"] and coord_provider and coord_model:
+        coordinator = CoordinatorAgent(
+            provider=coord_provider, model=coord_model,
+            risk_book=risk_book, temperature=coordinator_cfg["temperature"])
+        print(f"  Mesa de dirección activa con {coord_provider.upper()}/{coord_model}.")
+
     # optimize_every_cycles=20 -> ~cada 20 ciclos el orquestador revisa el
     # rendimiento de cada agente y ajusta sus parámetros (0 para desactivar).
     orchestrator = AgentOrchestrator(agents, client, platform=version,
-                                     optimize_every_cycles=20)
+                                     optimize_every_cycles=20,
+                                     coordinator=coordinator, risk_book=risk_book)
     set_orchestrator(orchestrator)
     try:
         orchestrator.run_forever(poll_seconds=60)

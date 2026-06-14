@@ -29,6 +29,15 @@ El núcleo del bot es un **agente especializado por símbolo** (carpeta `agents/
 - `agents/orchestrator.py` → `AgentOrchestrator` corre el loop y ejecuta señales válidas; `optimize()` (rule-based) ajusta los `AgentParams` de cada agente según su rendimiento (memoria), con límites en `PARAM_BOUNDS`. Se llama cada 20 ciclos (`optimize_every_cycles`). También: cooldown de pérdida diaria (`_check_daily_loss_guard`): al superar `MAX_DAILY_LOSS_PCT` deja de abrir operaciones y espacia el análisis a `RISK_COOLDOWN_ANALYSIS_INTERVAL` esperando que se cierren las posiciones, **sin detener el bot** (`_risk_cooldown_active`); registro de cierres para el historial (`_detect_closed_trades`); y, con el símbolo en su máximo de posiciones, espacia el análisis a `AT_MAX_ANALYSIS_INTERVAL` (15 min).
 - **Gestión de riesgo en señales** (`validate_trade` / `AgentParams`): filtro de spread (`max_spread_filter`), límite global de posiciones (`max_open_positions`), volumen por riesgo opcional (`use_risk_sizing` + `calculate_lot_size`), y override por confianza alta (`max_pos_override_confidence`, default 0.90) que se salta el límite de posiciones del símbolo.
 
+### Coordinador (mesa de dirección)
+
+`agents/coordinator.py` añade una capa por encima de los especialistas (toggle `COORDINATOR_ENABLED`, default on; ver `get_coordinator_config()`). Dos partes:
+
+- **`RiskBook`** (determinista, la "tesorería"): `snapshot()` calcula equity/exposición por símbolo (nocional `volume×precio×contract_size`) y total (`used_margin/equity`); `clamp()` impone **topes duros** (`MAX_TOTAL_EXPOSURE_PCT`, `MAX_SYMBOL_ALLOCATION_PCT`, cooldown) sobre lo que proponga el LLM. No depende del LLM.
+- **`CoordinatorAgent`** (LLM, el "director"): `decide()` recibe el snapshot + las señales de los especialistas + rendimiento + noticias y devuelve por símbolo `approve`/`priority`/`allocation_pct`/`position_action` (hold/reduce/close). Reutiliza `StrategyEngine.chat_json()`. **Fail-safe**: si el LLM falla, cae a una decisión determinista.
+
+Con coordinador activo el orquestador parte el ciclo en **recolectar** (`_gather_signal`) → **coordinar** (`RiskBook.snapshot` → `decide` → `clamp`) → **ejecutar** por prioridad (`_execute_decision`: abre entradas aprobadas con lote escalado por asignación, y cierra/reduce vía `client.close_position`). Sin coordinador usa la ruta clásica `_run_agent` (sin regresión). Estado expuesto en `coordinator_overview()` → `GET /api/coordinator`; `POST /api/coordinator/decide` fuerza una decisión **dry-run** (no ejecuta); evento WS `coordinator_decision`. Frontend: pestaña **"Mesa"** (`frontend/src/pages/Coordinator.tsx`). Los helpers `_pos_*` viven en `agents/positions.py` (compartidos orquestador/coordinador).
+
 ## Convenciones y gotchas
 
 - **Nunca añadir `eventlet`** a requirements: rompe el WebSocket (el API corre en hilo plano sin monkey_patch). Usar `simple-websocket`.

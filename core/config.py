@@ -174,6 +174,18 @@ def get_coordinator_config() -> dict:
       (margen usado / equity) por encima de la cual no se aprueban entradas.
     - MAX_SYMBOL_ALLOCATION_PCT (float, default 0.4): asignación máxima de
       capital por símbolo (fracción del equity).
+
+    Control de concentración direccional / reversión de tendencia:
+    - MAX_NET_DIRECTION_PCT (float, default 0.6): tope de exposición NETA
+      direccional por símbolo (fracción del equity). Frena seguir apilando
+      posiciones en la dirección ya saturada.
+    - REVERSAL_DRAWDOWN_PCT (float, default 0.015): pérdida flotante (sobre el
+      equity) que, JUNTO a un conflicto entre el sesgo abierto y la tendencia
+      nueva del especialista, dispara una reducción/cierre forzado del lado
+      perdedor. 0 = desactiva la guardia de reversión.
+    - MAX_SYMBOL_LOSS_PCT (float, default 0 = off): hard-stop por símbolo
+      independiente de la tendencia; si la pérdida flotante del símbolo supera
+      este % del equity, se fuerza el cierre.
     """
     return {
         "enabled": _env_bool("COORDINATOR_ENABLED", True),
@@ -183,6 +195,9 @@ def get_coordinator_config() -> dict:
         "temperature": _env_float("COORDINATOR_TEMPERATURE", 0.2),
         "max_total_exposure_pct": _env_float("MAX_TOTAL_EXPOSURE_PCT", 0.5),
         "max_symbol_allocation_pct": _env_float("MAX_SYMBOL_ALLOCATION_PCT", 0.4),
+        "max_net_direction_pct": _env_float("MAX_NET_DIRECTION_PCT", 0.6),
+        "reversal_drawdown_pct": _env_float("REVERSAL_DRAWDOWN_PCT", 0.015),
+        "max_symbol_loss_pct": _env_float("MAX_SYMBOL_LOSS_PCT", 0.0),
     }
 
 

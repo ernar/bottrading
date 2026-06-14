@@ -124,6 +124,8 @@ class MT4Client(BaseMTClient):
             "leverage": int(data.get("leverage", 0)),
             "currency": data.get("currency", ""),
             "broker": data.get("broker", ""),
+            # MT4 siempre permite posiciones opuestas a la vez (cobertura real).
+            "hedging": True,
             "platform": "MT4",
         }
 

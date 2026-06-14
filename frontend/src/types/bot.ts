@@ -91,6 +91,71 @@ export interface AgentsOverview {
   last_optimization_at: string | null
 }
 
+export interface CoordinatorSymbolState {
+  exposure_notional: number
+  exposure_pct: number
+  gross_exposure_pct: number
+  net_exposure_pct: number
+  net_volume: number
+  net_direction: 'LONG' | 'SHORT' | 'FLAT'
+  long_positions: number
+  short_positions: number
+  floating_pnl: number
+  open_positions: number
+  max_allocation_pct: number
+  remaining_pct: number
+}
+
+export interface CoordinatorSnapshot {
+  equity: number
+  balance: number
+  free_margin: number
+  used_margin: number
+  total_exposure_pct: number
+  max_total_exposure_pct: number
+  max_symbol_allocation_pct: number
+  max_net_direction_pct: number
+  reversal_drawdown_pct: number
+  max_symbol_loss_pct: number
+  hedging: boolean
+  daily_pnl_pct: number | null
+  in_cooldown: boolean
+  open_positions_total: number
+  can_close: boolean
+  symbols: Record<string, CoordinatorSymbolState>
+}
+
+export interface CoordinatorDecision {
+  symbol: string
+  approve: boolean
+  priority: number
+  allocation_pct: number
+  position_action: 'hold' | 'reduce' | 'close' | 'hedge'
+  manage_direction?: 'BUY' | 'SELL'
+  reason: string
+  clamp?: string
+}
+
+export interface Coordination {
+  snapshot: CoordinatorSnapshot
+  rationale: string
+  decisions: CoordinatorDecision[]
+}
+
+export interface CoordinatorOverview {
+  enabled: boolean
+  provider?: string
+  model?: string
+  can_close?: boolean
+  max_total_exposure_pct?: number
+  max_symbol_allocation_pct?: number
+  max_net_direction_pct?: number
+  reversal_drawdown_pct?: number
+  max_symbol_loss_pct?: number
+  last_coordination?: Coordination | null
+  last_coordination_at?: string | null
+}
+
 export interface BotState {
   signals: Record<string, Signal>
   positions: Record<string, Position>

@@ -18,7 +18,8 @@
       "Bash(python -c ' *)",
       "Bash(pip uninstall *)",
       "Read(//tmp/**)",
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "Bash(python -m py_compile agents/coordinator.py agents/orchestrator.py clients/mt5_client.py clients/mt4_client.py core/config.py)"
     ],
     "additionalDirectories": [
       "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"

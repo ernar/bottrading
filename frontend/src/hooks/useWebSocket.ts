@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
-import { BotState, Signal, Position, AccountInfo, Trade } from '../types/bot'
+import { BotState, Signal, Position, AccountInfo, Trade, Coordination } from '../types/bot'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -8,6 +8,7 @@ export function useWebSocket() {
   const [state, setState] = useState<BotState | null>(null)
   const [connected, setConnected] = useState(false)
   const [duplicateInstance, setDuplicateInstance] = useState(false)
+  const [coordination, setCoordination] = useState<Coordination | null>(null)
   const socketRef = useRef<Socket | null>(null)
 
   useEffect(() => {
@@ -69,6 +70,8 @@ export function useWebSocket() {
 
     socket.on('duplicate_instance', () => setDuplicateInstance(true))
 
+    socket.on('coordinator_decision', (data: Coordination) => setCoordination(data))
+
     return () => { socket.disconnect() }
   }, [])
 
@@ -76,5 +79,8 @@ export function useWebSocket() {
     socketRef.current?.emit(event, data)
   }, [])
 
-  return { state, connected, emit, duplicateInstance, clearDuplicate: () => setDuplicateInstance(false) }
+  return {
+    state, connected, emit, coordination, duplicateInstance,
+    clearDuplicate: () => setDuplicateInstance(false),
+  }
 }

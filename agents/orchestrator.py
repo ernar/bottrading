@@ -144,17 +144,24 @@ class _Spinner:
 class AgentOrchestrator:
 
     def __init__(self, agents: list, client, platform: str = "mt5",
-                 optimize_every_cycles: int = 0):
+                 optimize_every_cycles: int = 0, coordinator=None, risk_book=None):
         self.agents = agents
         self.client = client
         self.platform = platform
         # Cada cuántos ciclos auto-optimizar (0 = desactivado).
         self.optimize_every_cycles = optimize_every_cycles
+        # Coordinador (mesa de dirección). Si es None, el orquestador usa la
+        # ruta clásica por agente (comportamiento original, sin cartera global).
+        self.coordinator = coordinator
+        self.risk_book = risk_book
         # Contadores por agente: base para optimizar.
         self.stats = {a.name: {"signals": 0, "trades": 0, "holds": 0} for a in agents}
         # Reporte de la última optimización (para exponer al dashboard).
         self.last_optimization = None
         self.last_optimization_at = None
+        # Última coordinación de cartera (para exponer al dashboard).
+        self.last_coordination = None
+        self.last_coordination_at = None
         # Control de pérdida diaria (0 = desactivado). Al tocarlo se entra en
         # cooldown (no se abren operaciones), no se detiene el bot.
         self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
@@ -184,27 +191,31 @@ class AgentOrchestrator:
                     time.sleep(5)
                     continue
 
-                # Check global de posiciones abiertas antes de analizar:
-                # si ya estamos en el máximo global, saltar directamente al
-                # siguiente ciclo y ahorrar llamadas al LLM.
-                all_positions = self.client.get_positions() or []
-                max_global = max((a.params.max_open_positions for a in self.agents), default=0)
-                if bool(max_global) and len(all_positions) >= max_global:
-                    symbols_profit = {}
-                    for p in all_positions:
-                        sym = _pos_get(p, "symbol", default="?")
-                        profit = _pos_to_float(_pos_get(p, "profit"))
-                        symbols_profit[sym] = symbols_profit.get(sym, 0.0) + profit
-                    total_profit = sum(symbols_profit.values())
-                    print(f"\n  ⏭️ Máximo global de posiciones ({max_global}) alcanzado.")
-                    print(f"  💰 Profit no realizado total: ${total_profit:+.2f}")
-                    for sym, prof in sorted(symbols_profit.items()):
-                        print(f"     {sym}: ${prof:+.2f}")
-                    time.sleep(poll_seconds)
-                    continue
+                if self.coordinator is not None:
+                    # Ruta coordinada: recolectar -> coordinar -> ejecutar.
+                    self._run_coordinated_cycle()
+                else:
+                    # Check global de posiciones abiertas antes de analizar:
+                    # si ya estamos en el máximo global, saltar directamente al
+                    # siguiente ciclo y ahorrar llamadas al LLM.
+                    all_positions = self.client.get_positions() or []
+                    max_global = max((a.params.max_open_positions for a in self.agents), default=0)
+                    if bool(max_global) and len(all_positions) >= max_global:
+                        symbols_profit = {}
+                        for p in all_positions:
+                            sym = _pos_get(p, "symbol", default="?")
+                            profit = _pos_to_float(_pos_get(p, "profit"))
+                            symbols_profit[sym] = symbols_profit.get(sym, 0.0) + profit
+                        total_profit = sum(symbols_profit.values())
+                        print(f"\n  ⏭️ Máximo global de posiciones ({max_global}) alcanzado.")
+                        print(f"  💰 Profit no realizado total: ${total_profit:+.2f}")
+                        for sym, prof in sorted(symbols_profit.items()):
+                            print(f"     {sym}: ${prof:+.2f}")
+                        time.sleep(poll_seconds)
+                        continue
 
-                for agent in self.agents:
-                    self._run_agent(agent)
+                    for agent in self.agents:
+                        self._run_agent(agent)
 
                 cycle += 1
                 if self.optimize_every_cycles and cycle % self.optimize_every_cycles == 0:
@@ -325,22 +336,8 @@ class AgentOrchestrator:
         bot_state.add_closed_trade(trade)
         print(f"  Cierre registrado: {trade.action} {symbol} | P/L≈{trade.pnl:.2f}")
 
-    def _run_agent(self, agent):
-        symbol = agent.symbol
-        print(f"\n{'=' * 50}")
-        print(f"  [{agent.name}] Analizando {symbol}...")
-
-        tick = self.client.get_tick(symbol)
-        if tick:
-            print(f"  Precio: Ask={tick.ask} | Bid={tick.bid}")
-
-        # Posiciones del símbolo: detectar cierres respecto al ciclo previo,
-        # sincronizar estado y decidir si conviene analizar.
-        positions = self.client.get_positions(symbol)
-        self._detect_closed_trades(symbol, positions)
-        bot_state.sync_positions(symbol, positions)
-
-        # ----- Resumen de posiciones abiertas con profit no realizado -----
+    def _print_positions_summary(self, symbol: str, positions: list):
+        """Resumen de posiciones abiertas con su profit no realizado."""
         if positions:
             total_profit = 0.0
             print(f"\n  📊 Posiciones abiertas en {symbol}:")
@@ -358,6 +355,28 @@ class AgentOrchestrator:
             print(f"\n  💰 Profit no realizado total ({symbol}): ${total_profit:+.2f}")
         else:
             print(f"\n  ✅ No hay posiciones abiertas en {symbol}.")
+
+    def _gather_signal(self, agent):
+        """Prepara el símbolo (detecta cierres, sincroniza estado, respeta
+        throttle/cooldown) y genera la señal del especialista. Devuelve el dict
+        de señal (incluido HOLD) o None si no se analizó / no hubo señal.
+
+        NO ejecuta órdenes ni imprime el detalle de la señal: eso es de la fase
+        de ejecución (clásica o coordinada). Sirve a ambas rutas."""
+        symbol = agent.symbol
+        print(f"\n{'=' * 50}")
+        print(f"  [{agent.name}] Analizando {symbol}...")
+
+        tick = self.client.get_tick(symbol)
+        if tick:
+            print(f"  Precio: Ask={tick.ask} | Bid={tick.bid}")
+
+        # Posiciones del símbolo: detectar cierres respecto al ciclo previo,
+        # sincronizar estado y decidir si conviene analizar.
+        positions = self.client.get_positions(symbol)
+        self._detect_closed_trades(symbol, positions)
+        bot_state.sync_positions(symbol, positions)
+        self._print_positions_summary(symbol, positions)
 
         # Estados que espacian el análisis y bloquean abrir nuevas operaciones:
         #  - cooldown por pérdida diaria: esperamos a que las posiciones abiertas
@@ -377,22 +396,25 @@ class AgentOrchestrator:
                 else:
                     print(f"  {len(positions)} posiciones abiertas (máx {max_pos}); "
                           f"análisis aplazado (cada {interval // 60} min salvo conf>=90%).")
-                return
+                return None
 
         with _Spinner("  Generando análisis"):
             signal = agent.analyze(self.client, platform=self.platform)
         self._last_analysis_at[symbol] = time.time()
         if not signal:
             print("  No se generó señal.")
-            return
+            return None
 
         self.stats[agent.name]["signals"] += 1
         bot_state.update_signal(signal)
+        if signal["action"] == "HOLD":
+            self.stats[agent.name]["holds"] += 1
+        return signal
 
-        # Volumen real (fijo o por riesgo) para que las métricas mostradas y la
-        # orden enviada usen el mismo lote.
+    def _print_signal_details(self, agent, signal):
+        """Imprime la señal y, si tiene niveles, sus métricas de profit/pérdida."""
+        symbol = agent.symbol
         volume = agent.resolve_volume(self.client, signal)
-
         print(f"\n  Señal: {signal['action']} | Confianza: {signal['confidence']:.0%}")
         print(f"  Tendencia: {signal.get('trend', 'N/A')} | Riesgo: {signal.get('risk_level', 'N/A')}")
         if signal.get("entry"):
@@ -410,24 +432,36 @@ class AgentOrchestrator:
                 print(f"  Comisión estimada: ${metrics['commission']:.2f} | R:R = 1:{metrics['rr']}")
         print(f"  Razón: {signal['reason']}")
 
-        if signal["action"] == "HOLD":
-            self.stats[agent.name]["holds"] += 1
-            return
+    def _scale_volume(self, symbol: str, base_volume: float, scale: float) -> float:
+        """Escala el lote base por `scale` (0..1) y lo redondea al step del
+        símbolo, con suelo en el volumen mínimo. Permite que la asignación de
+        capital del coordinador module el tamaño sin romper el step del bróker."""
+        scale = max(0.1, min(1.0, scale))
+        sym = self.client.get_symbol_info(symbol)
+        vmin = getattr(sym, "volume_min", 0.01) or 0.01
+        vstep = getattr(sym, "volume_step", 0.01) or 0.01
+        steps = math.floor((base_volume * scale) / vstep + 1e-9)
+        lot = round(steps * vstep, 10)
+        return max(vmin, lot)
 
-        # En cooldown por pérdida diaria la señal queda registrada (memoria y
-        # contexto) pero NO se abre operación: esperamos al cierre de las abiertas.
-        if in_cooldown:
-            print("  Cooldown por pérdida diaria: señal registrada, no se abre operación.")
-            return
+    def _open_from_signal(self, agent, signal, scale: float = 1.0) -> bool:
+        """Valida y ejecuta una entrada a partir de la señal. `scale` (0..1)
+        reduce el lote base según la asignación del coordinador. Devuelve True
+        si la orden se ejecutó."""
+        symbol = agent.symbol
+        base_volume = agent.resolve_volume(self.client, signal)
+        volume = base_volume if scale >= 1.0 else self._scale_volume(symbol, base_volume, scale)
 
         # Contexto extra para la validación: spread actual (filtro de coste) y
         # nº de posiciones de TODA la cuenta (límite global, no por símbolo).
+        tick = self.client.get_tick(symbol)
+        positions = self.client.get_positions(symbol)
         spread_points = self._spread_points(symbol, tick)
         total_open = len(self.client.get_positions() or [])
-        if not agent.validate(signal, positions, tick=self.client.get_tick(symbol),
+        if not agent.validate(signal, positions, tick=tick,
                               spread_points=spread_points, total_open_positions=total_open):
             print("  Señal no validada para ejecución.")
-            return
+            return False
 
         result = self.client.place_order(
             symbol=symbol,
@@ -450,6 +484,7 @@ class AgentOrchestrator:
                 result=result,
                 platform=self.platform,
             )
+            return True
         elif result and result.get("timeout"):
             print("  [!] TIMEOUT esperando al EA: la orden NO se confirmó.")
             print("      La orden PUEDE haberse ejecutado igualmente. Revisa MT4")
@@ -457,6 +492,228 @@ class AgentOrchestrator:
         else:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
             print(f"  Error al ejecutar orden: {err}")
+        return False
+
+    def _run_agent(self, agent):
+        """Ruta clásica (sin coordinador): un agente analiza y ejecuta su propia
+        señal de forma aislada."""
+        signal = self._gather_signal(agent)
+        if not signal:
+            return
+        self._print_signal_details(agent, signal)
+
+        if signal["action"] == "HOLD":
+            return
+        # En cooldown por pérdida diaria la señal queda registrada (memoria y
+        # contexto) pero NO se abre operación: esperamos al cierre de las abiertas.
+        if self._risk_cooldown_active():
+            print("  Cooldown por pérdida diaria: señal registrada, no se abre operación.")
+            return
+        self._open_from_signal(agent, signal)
+
+    # ----- Ciclo coordinado (mesa de dirección) -----
+
+    def _run_coordinated_cycle(self):
+        """Ciclo con coordinador: recolectar señales -> coordinar cartera ->
+        ejecutar por prioridad (entradas aprobadas + cierres/reducciones)."""
+        # Fase 1: recolectar las señales de todos los especialistas.
+        signals = {}
+        for agent in self.agents:
+            sig = self._gather_signal(agent)
+            if sig:
+                signals[agent.symbol] = sig
+
+        # Fase 2: coordinar. Snapshot determinista + decisión LLM + clamp duro.
+        in_cooldown = self._risk_cooldown_active()
+        snapshot = self.risk_book.snapshot(
+            self.client, self.agents,
+            day_start_equity=self._day_start_equity, in_cooldown=in_cooldown)
+
+        has_positions = snapshot.get("open_positions_total", 0) > 0
+        if not signals and not (has_positions and self.risk_book.can_close):
+            print("\n  [Mesa] Sin señales nuevas ni posiciones que gestionar; se omite coordinación.")
+            self._store_coordination(snapshot, {"rationale": "sin actividad este ciclo", "decisions": []})
+            return
+
+        print(f"\n{'#' * 50}")
+        print("  [MESA DE DIRECCIÓN] Coordinando cartera...")
+        with _Spinner("  Decidiendo asignación"):
+            result = self.coordinator.decide(
+                snapshot, signals, self.agents_overview(),
+                news_context=self._coordinator_news())
+        self._print_coordination(result, snapshot)
+        self._store_coordination(snapshot, result)
+
+        # Fase 3: ejecutar por prioridad (1 = primero).
+        agent_by_symbol = {a.symbol: a for a in self.agents}
+        decisions = sorted(result.get("decisions", []), key=lambda d: d.get("priority", 99))
+        for d in decisions:
+            agent = agent_by_symbol.get(d.get("symbol"))
+            if agent is None:
+                continue
+            self._execute_decision(agent, signals.get(agent.symbol), d)
+
+    def _execute_decision(self, agent, signal, decision):
+        """Aplica una decisión del coordinador: gestiona las posiciones abiertas
+        (close/reduce/hedge) y abre la entrada si está aprobada."""
+        symbol = agent.symbol
+        action = decision.get("position_action", "hold")
+        direction = decision.get("manage_direction")  # lado del libro a tratar
+        if action in ("close", "reduce") and self.risk_book.can_close:
+            self._manage_open_positions(symbol, action, decision.get("reason", ""),
+                                        direction=direction)
+        elif action == "hedge" and self.risk_book.can_close:
+            self._hedge_position(symbol, direction, decision.get("reason", ""))
+
+        actionable = signal and signal.get("action") in ("BUY", "SELL")
+        if not actionable:
+            return
+        if decision.get("approve"):
+            alloc = decision.get("allocation_pct", 0.0)
+            print(f"\n  [Mesa -> {agent.name}] Entrada APROBADA {signal['action']} {symbol} "
+                  f"(prioridad {decision.get('priority')}, asignación {alloc:.0%}). "
+                  f"{decision.get('reason', '')}")
+            self._print_signal_details(agent, signal)
+            self._open_from_signal(agent, signal, scale=self._alloc_to_scale(alloc))
+        else:
+            motivo = decision.get("clamp") or decision.get("reason", "decisión del coordinador")
+            print(f"  [Mesa] Entrada VETADA en {symbol}: {motivo}")
+
+    def _alloc_to_scale(self, alloc: float) -> float:
+        """Traduce la asignación (% del equity) a un multiplicador del lote base
+        en [0.25, 1.0]. Heurística v1: fracción del presupuesto del símbolo que
+        el coordinador decide usar. Sin asignación -> lote base (1.0)."""
+        if not alloc or alloc <= 0:
+            return 1.0
+        cap = self.risk_book.max_symbol_allocation_pct or alloc
+        return max(0.25, min(1.0, alloc / cap))
+
+    def _manage_open_positions(self, symbol: str, action: str, reason: str,
+                               direction: str = None):
+        """Cierra (close) o reduce (cierra 1 posición; el cliente no soporta
+        cierre parcial) la exposición abierta del símbolo. Si `direction`
+        (BUY/SELL) se indica, actúa solo sobre ese lado del libro (MT5 lo filtra;
+        MT4 lo ignora y cierra lo que el EA decida — best-effort). Los cierres se
+        registran en el historial en el siguiente ciclo (_detect_closed_trades)."""
+        positions = self.client.get_positions(symbol) or []
+        if direction:
+            positions = [p for p in positions if _pos_direction(p) == direction]
+        if not positions:
+            return
+        tag = f" {direction}" if direction else ""
+        if action == "close":
+            print(f"  [Mesa] Cerrando {len(positions)} posición(es){tag} de {symbol}: {reason}")
+            for _ in range(len(positions)):
+                res = self.client.close_position(symbol, direction=direction)
+                if not res or not res.get("success"):
+                    print(f"    Cierre detenido: {(res or {}).get('error') or 'sin más posiciones'}")
+                    break
+        else:  # reduce: cierra una sola posición del símbolo (del lado indicado)
+            print(f"  [Mesa] Reduciendo {symbol}{tag} (cierra 1 posición): {reason}")
+            res = self.client.close_position(symbol, direction=direction)
+            if not res or not res.get("success"):
+                print(f"    No se pudo reducir: {(res or {}).get('error') or 'sin posición'}")
+
+    def _hedge_position(self, symbol: str, net_side: str, reason: str):
+        """Cubre el sesgo neto del símbolo abriendo una orden OPUESTA por el
+        volumen neto (sin SL/TP). `net_side` (BUY/SELL) es el lado del libro a
+        neutralizar; se abre el contrario. Solo tiene efecto real en cuentas
+        hedging; en netting el RiskBook ya degrada la cobertura a 'reduce'."""
+        if net_side not in ("BUY", "SELL"):
+            print(f"  [Mesa] Cobertura {symbol}: sin sesgo neto definido, se omite.")
+            return
+        positions = self.client.get_positions(symbol) or []
+        long_vol = sum(_pos_to_float(_pos_get(p, "volume"))
+                       for p in positions if _pos_direction(p) == "BUY")
+        short_vol = sum(_pos_to_float(_pos_get(p, "volume"))
+                        for p in positions if _pos_direction(p) == "SELL")
+        net_vol = abs(long_vol - short_vol)
+        if net_vol <= 0:
+            print(f"  [Mesa] Cobertura {symbol}: sin volumen neto que cubrir.")
+            return
+        sym = self.client.get_symbol_info(symbol)
+        vmin = getattr(sym, "volume_min", 0.01) or 0.01
+        vstep = getattr(sym, "volume_step", 0.01) or 0.01
+        steps = math.floor(net_vol / vstep + 1e-9)
+        volume = max(vmin, round(steps * vstep, 10))
+        opposite = "SELL" if net_side == "BUY" else "BUY"
+        print(f"  [Mesa] Cobertura {symbol}: abre {opposite} {volume} para neutralizar "
+              f"el neto {net_side}. {reason}")
+        result = self.client.place_order(
+            symbol=symbol, volume=volume, order_type=opposite,
+            stop_loss=None, take_profit=None, comment=f"hedge {symbol}",
+        )
+        if result and result.get("success"):
+            print(f"    Cobertura abierta: ticket {result.get('order')} @ {result.get('price')}")
+        else:
+            err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
+            print(f"    No se pudo cubrir: {err}")
+
+    def _coordinator_news(self) -> str:
+        """Resumen de noticias por símbolo para el coordinador (news_provider
+        cachea, así que reutilizar es barato). Fail-safe: '' ante errores."""
+        try:
+            from core.news import news_provider
+        except Exception:
+            return ""
+        parts, seen = [], set()
+        for agent in self.agents:
+            if agent.symbol in seen:
+                continue
+            seen.add(agent.symbol)
+            ctx = news_provider.get_news_context(agent.symbol)
+            if ctx:
+                parts.append(f"[{agent.symbol}]\n{ctx}")
+        return "\n\n".join(parts)
+
+    def _print_coordination(self, result: dict, snapshot: dict):
+        print(f"  Exposición total: {snapshot['total_exposure_pct']:.1%} / "
+              f"tope {snapshot['max_total_exposure_pct']:.0%}")
+        if result.get("rationale"):
+            print(f"  Razón de la mesa: {result['rationale']}")
+        sym_info = snapshot.get("symbols", {})
+        for d in result.get("decisions", []):
+            tag = "APROBADA" if d.get("approve") else "vetada  "
+            nd = sym_info.get(d.get("symbol"), {}).get("net_direction", "FLAT")
+            md = f" -> {d['manage_direction']}" if d.get("manage_direction") else ""
+            extra = f" | clamp: {d['clamp']}" if d.get("clamp") else ""
+            print(f"    {d.get('symbol')} [neto {nd}]: {tag} | prio {d.get('priority')} | "
+                  f"asignación {d.get('allocation_pct', 0):.0%} | "
+                  f"pos: {d.get('position_action')}{md}{extra}")
+
+    def _store_coordination(self, snapshot: dict, result: dict):
+        """Guarda la última coordinación para el dashboard y la emite por WS."""
+        self.last_coordination = {
+            "snapshot": snapshot,
+            "rationale": result.get("rationale", ""),
+            "decisions": result.get("decisions", []),
+        }
+        self.last_coordination_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            from api.server import broadcast_coordinator_decision
+            broadcast_coordinator_decision(self.last_coordination)
+        except Exception:
+            pass
+
+    def coordinate_now(self) -> dict:
+        """Decisión de coordinación bajo demanda (dry-run: NO ejecuta órdenes).
+
+        Usa las últimas señales conocidas de cada símbolo (bot_state), sin
+        relanzar el análisis LLM de los especialistas, para que sea seguro
+        llamarla desde el hilo del API. Almacena y emite el resultado."""
+        if self.coordinator is None or self.risk_book is None:
+            return {"enabled": False}
+        state = bot_state.get_state()
+        signals = dict(state.get("signals", {}) or {})
+        in_cooldown = self._risk_cooldown_active()
+        snapshot = self.risk_book.snapshot(
+            self.client, self.agents,
+            day_start_equity=self._day_start_equity, in_cooldown=in_cooldown)
+        result = self.coordinator.decide(
+            snapshot, signals, self.agents_overview(),
+            news_context=self._coordinator_news())
+        self._store_coordination(snapshot, result)
+        return self.last_coordination
 
     # ----- Optimización -----
 
@@ -559,4 +816,23 @@ class AgentOrchestrator:
             "optimize_every_cycles": self.optimize_every_cycles,
             "last_optimization": self.last_optimization,
             "last_optimization_at": self.last_optimization_at,
+        }
+
+    def coordinator_overview(self) -> dict:
+        """Estado del coordinador para el dashboard (/api/coordinator). Si no hay
+        coordinador activo, {"enabled": False}."""
+        if self.coordinator is None or self.risk_book is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "provider": self.coordinator.provider,
+            "model": self.coordinator.model,
+            "can_close": self.risk_book.can_close,
+            "max_total_exposure_pct": self.risk_book.max_total_exposure_pct,
+            "max_symbol_allocation_pct": self.risk_book.max_symbol_allocation_pct,
+            "max_net_direction_pct": self.risk_book.max_net_direction_pct,
+            "reversal_drawdown_pct": self.risk_book.reversal_drawdown_pct,
+            "max_symbol_loss_pct": self.risk_book.max_symbol_loss_pct,
+            "last_coordination": self.last_coordination,
+            "last_coordination_at": self.last_coordination_at,
         }
