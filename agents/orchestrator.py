@@ -6,9 +6,12 @@ de rendimiento por agente que servirá de base para la fase de optimización
 (ajuste automático de parámetros / modelo de cada agente).
 """
 import os
+import io
+import sys
 import math
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 
 from core import console
@@ -103,6 +106,45 @@ def _diff_params(old: AgentParams, new: AgentParams) -> list:
     return changes
 
 
+# Estado por hilo: marca si el código corre dentro de un worker del análisis
+# paralelo (para silenciar el spinner animado, cuyos '\r' ensucian el buffer).
+_worker_local = threading.local()
+
+
+class _ThreadRoutedStdout:
+    """stdout que enruta la salida de cada hilo a su propio buffer.
+
+    Durante el análisis paralelo, los `print()` de cada agente se desvían a un
+    StringIO aislado (registrado por id de hilo); el resto sigue yendo a la
+    consola real. Así los reportes no se entremezclan y luego se vuelcan en
+    orden. Delega cualquier otro atributo en el stream real."""
+
+    def __init__(self, real):
+        self._real = real
+        self._buffers = {}
+
+    def register(self, tid, buf):
+        self._buffers[tid] = buf
+
+    def unregister(self, tid):
+        self._buffers.pop(tid, None)
+
+    def _target(self):
+        return self._buffers.get(threading.get_ident(), self._real)
+
+    def write(self, s):
+        return self._target().write(s)
+
+    def flush(self):
+        try:
+            self._target().flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 class _Spinner:
     """Spinner animado en un hilo aparte mientras se genera el análisis.
 
@@ -125,6 +167,11 @@ class _Spinner:
 
     def __enter__(self):
         self._start = time.time()
+        # En un worker del análisis paralelo no animamos: los '\r' ensuciarían el
+        # buffer del hilo. Se conserva el rastro de duración al salir.
+        if getattr(_worker_local, "active", False):
+            self._thread = None
+            return self
         self._thread = threading.Thread(target=self._spin, daemon=True)
         self._thread.start()
         return self
@@ -141,9 +188,13 @@ class _Spinner:
 
     def __exit__(self, *exc):
         self._stop.set()
-        if self._thread:
-            self._thread.join()
         self.elapsed = time.time() - self._start
+        if self._thread is None:
+            # Modo worker (sin animación): solo el rastro de duración.
+            if self.leave:
+                print(f"{self.message} {console.dim(f'✓ ({self.elapsed:4.1f}s)')}")
+            return
+        self._thread.join()
         # Limpia la línea del spinner y, si procede, deja el rastro de duración.
         print(f"\r{' ' * (len(self.message) + 24)}\r", end="", flush=True)
         if self.leave:
@@ -197,6 +248,12 @@ class AgentOrchestrator:
         # dashboard. Se loguea como mucho cada equity_log_seconds (default 60s).
         self.equity_log_seconds = self.schedule_cfg.get("equity_log_seconds", 60)
         self._last_equity_log = 0.0  # 0 = registrar en la primera rotación
+        # Análisis en paralelo: lanza el análisis (LLM) de los agentes a la vez en
+        # la fase de recolección. Solo aporta si el backend LLM atiende peticiones
+        # concurrentes (nube, u Ollama con NUM_PARALLEL). Los accesos al EA se
+        # serializan vía MT4Client._send_lock; la salida se vuelca por agente.
+        self.parallel_analysis = (
+            os.getenv("PARALLEL_ANALYSIS", "true").lower() in ("1", "true", "yes", "on"))
         # Control de pérdida diaria (0 = desactivado). Al tocarlo se entra en
         # cooldown (no se abren operaciones), no se detiene el bot.
         self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
@@ -550,6 +607,54 @@ class AgentOrchestrator:
         else:
             print(f"  {console.ok('✅ Sin posiciones abiertas')} en {symbol}.")
 
+    def _gather_signals_parallel(self, force_symbols: set) -> dict:
+        """Recolecta las señales de todos los agentes EN PARALELO.
+
+        Lanza `_gather_signal` de cada agente en su propio hilo (la parte lenta,
+        la llamada al LLM, se solapa). Los accesos al EA se serializan en
+        `MT4Client._send` (canal único). La salida de cada agente se captura en un
+        buffer aislado y se vuelca en orden al terminar, para no entremezclar los
+        reportes. Devuelve ``{symbol: signal}`` igual que la ruta secuencial."""
+        real_out = sys.stdout
+        router = (real_out if isinstance(real_out, _ThreadRoutedStdout)
+                  else _ThreadRoutedStdout(real_out))
+        buffers = {a.name: io.StringIO() for a in self.agents}
+        results: dict = {}
+
+        def work(agent):
+            tid = threading.get_ident()
+            router.register(tid, buffers[agent.name])
+            _worker_local.active = True
+            try:
+                return agent.symbol, self._gather_signal(
+                    agent, force=agent.symbol in force_symbols)
+            except Exception as e:  # un agente que falle no tumba al resto
+                print("  " + console.err(f"✗ Error analizando {agent.symbol}: {e}"))
+                return agent.symbol, None
+            finally:
+                _worker_local.active = False
+                router.unregister(tid)
+
+        sys.stdout = router
+        try:
+            with ThreadPoolExecutor(max_workers=len(self.agents),
+                                    thread_name_prefix="analyze") as ex:
+                collected = list(ex.map(work, self.agents))
+        finally:
+            sys.stdout = real_out
+
+        # Vuelca los reportes en el orden de los agentes (lectura estable).
+        for agent in self.agents:
+            out = buffers[agent.name].getvalue()
+            if out:
+                real_out.write(out)
+        real_out.flush()
+
+        for symbol, sig in collected:
+            if sig:
+                results[symbol] = sig
+        return results
+
     def _gather_signal(self, agent, force: bool = False):
         """Prepara el símbolo (detecta cierres, sincroniza estado, respeta
         throttle/cooldown) y genera la señal del especialista. Devuelve el dict
@@ -783,12 +888,17 @@ class AgentOrchestrator:
         `force_symbols` (noticia RED) fuerza el análisis de esos símbolos aunque
         estén throttled; la coordinación y el clamp se aplican igual a todos."""
         # Fase 1/3: recolectar las señales de todos los especialistas.
-        print(console.dim("  [1/3] Recolección de señales"))
-        signals = {}
-        for agent in self.agents:
-            sig = self._gather_signal(agent, force=agent.symbol in force_symbols)
-            if sig:
-                signals[agent.symbol] = sig
+        parallel = self.parallel_analysis and len(self.agents) > 1
+        modo = console.dim(" (en paralelo)") if parallel else ""
+        print(console.dim("  [1/3] Recolección de señales") + modo)
+        if parallel:
+            signals = self._gather_signals_parallel(force_symbols)
+        else:
+            signals = {}
+            for agent in self.agents:
+                sig = self._gather_signal(agent, force=agent.symbol in force_symbols)
+                if sig:
+                    signals[agent.symbol] = sig
 
         # Fase 2/3: coordinar. Snapshot determinista + decisión LLM + clamp duro.
         in_cooldown = self._risk_cooldown_active()

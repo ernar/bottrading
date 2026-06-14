@@ -101,6 +101,46 @@ ETHUSD_PERSONA = (
 )
 
 
+# Persona del agente de oro: metal refugio, muy líquido, sensible a tipos reales,
+# al dólar y al apetito de riesgo (geopolítica). Se mueve de forma distinta a
+# forex/cripto, por eso aporta diversificación real a la cartera.
+XAUUSD_PERSONA = (
+    "Operas XAUUSD (oro contra dólar), el metal precioso refugio por excelencia. "
+    "Características a tener en cuenta:\n"
+    "- Activo refugio: tiende a subir con la aversión al riesgo (tensión "
+    "geopolítica, miedo en bolsa) y a sufrir cuando hay apetito de riesgo.\n"
+    "- Lo gobiernan los tipos reales y el dólar: USD fuerte y tipos al alza suelen "
+    "pesar sobre el oro (no paga cupón); vigila CPI, FOMC y los discursos de la Fed.\n"
+    "- Muy líquido pero con movimientos amplios alrededor de los datos macro de "
+    "EE.UU. (NFP, CPI): evita entrar justo antes de la publicación.\n"
+    "- Opera bien en sesión de Londres/NY; respeta niveles técnicos y números "
+    "redondos, donde suele haber barridos de liquidez.\n"
+    "- Usa stops en múltiplos de ATR y, si no hay catalizador ni tendencia clara, "
+    "prefiere hold antes que pelear el rango."
+)
+
+
+# Persona del agente del S&P 500 (.US500Cash): índice bursátil USA, tendencial y
+# alcista a largo plazo, gobernado por resultados empresariales, tipos de la Fed y
+# el apetito de riesgo. Es un CFD sobre índice, no un par de divisas.
+US500_PERSONA = (
+    "Operas el índice S&P 500 (.US500Cash), CFD sobre las 500 mayores empresas de "
+    "EE.UU. Características a tener en cuenta:\n"
+    "- Tiene sesgo alcista estructural a largo plazo: cuidado al ponerte corto "
+    "contra la tendencia principal; las caídas suelen ser más rápidas que las "
+    "subidas (asimetría).\n"
+    "- Lo mueven los tipos de la Fed, la inflación (CPI/PCE), los resultados "
+    "empresariales (earnings) y el apetito de riesgo global; sensible a sorpresas "
+    "macro.\n"
+    "- Mayor volumen y dirección en la sesión USA (apertura de Wall Street); la "
+    "apertura puede dejar gaps respecto al cierre anterior.\n"
+    "- Correlaciona de forma positiva con el riesgo (y a menudo inversa con el oro/"
+    "VIX); tenlo en cuenta para no apilar exposición al mismo factor.\n"
+    "- Respeta medias y niveles clave; usa stops en múltiplos de ATR. Sin tendencia "
+    "clara ni catalizador, prefiere hold."
+)
+
+
 AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
     "btc-agent": AgentBlueprint(
         name="btc-agent",
@@ -172,6 +212,42 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=50.0,  # el spread de cripto en puntos es alto
+        ),
+    ),
+    "gold-agent": AgentBlueprint(
+        name="gold-agent",
+        symbol="XAUUSD",
+        description="Especialista en oro (XAUUSD) — refugio, tipos reales y dólar",
+        persona=XAUUSD_PERSONA,
+        params=AgentParams(
+            provider="gemini",
+            model="gemini-3.5-flash",
+            min_confidence=0.6,
+            min_rr=1.5,
+            atr_sl_mult=1.6,
+            atr_tp_mult=2.4,
+            lot_size=0.01,
+            risk_per_trade=0.02,
+            max_open_positions=3,
+            max_spread_filter=8.0,  # el oro tiene spread moderado en puntos
+        ),
+    ),
+    "sp500-agent": AgentBlueprint(
+        name="sp500-agent",
+        symbol=".US500Cash",
+        description="Especialista en S&P 500 (.US500Cash) — índice USA, sesgo alcista, sesión NY",
+        persona=US500_PERSONA,
+        params=AgentParams(
+            provider="gemini",
+            model="gemini-3.5-flash",
+            min_confidence=0.6,
+            min_rr=1.5,
+            atr_sl_mult=1.6,
+            atr_tp_mult=2.4,
+            lot_size=0.01,
+            risk_per_trade=0.02,
+            max_open_positions=3,
+            max_spread_filter=15.0,  # el spread del índice en puntos es amplio
         ),
     ),
 }

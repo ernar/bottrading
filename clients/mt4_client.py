@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 from typing import Optional, List
 from datetime import datetime
 from clients.base_client import BaseMTClient
@@ -54,6 +55,12 @@ class MT4Client(BaseMTClient):
         # Se actualiza como efecto colateral de get_positions().
         self._commission_cache: dict = {}
 
+        # El bridge usa UN ÚNICO canal de archivos (pb_cmd/pb_resp): si dos hilos
+        # envían comandos a la vez se pisan la respuesta. Este lock serializa cada
+        # roundtrip, lo que permite analizar agentes en paralelo (las llamadas al
+        # LLM se solapan; los accesos al EA hacen una cola breve). Ver orchestrator.
+        self._send_lock = threading.Lock()
+
     def _find_files_dir(self, mq_base: str) -> str:
         """Busca automáticamente la carpeta MQL4/Files del primer terminal MT4."""
         if not os.path.isdir(mq_base):
@@ -70,29 +77,31 @@ class MT4Client(BaseMTClient):
 
         wait = timeout if timeout is not None else self._timeout
 
-        # Borrar respuesta previa
-        if os.path.exists(self._resp_file):
-            os.remove(self._resp_file)
+        # Serializa el roundtrip completo: canal único compartido con el EA.
+        with self._send_lock:
+            # Borrar respuesta previa
+            if os.path.exists(self._resp_file):
+                os.remove(self._resp_file)
 
-        # Escribir comando
-        with open(self._cmd_file, "w", encoding="ascii") as f:
-            f.write(command)
+            # Escribir comando
+            with open(self._cmd_file, "w", encoding="ascii") as f:
+                f.write(command)
 
-        # Esperar respuesta
-        deadline = time.time() + wait
-        while time.time() < deadline:
-            if os.path.exists(self._resp_file) and not os.path.exists(self._lock_file):
-                try:
-                    with open(self._resp_file, "r", encoding="ascii") as f:
-                        return f.read().strip()
-                except Exception:
-                    pass
-            time.sleep(0.05)
+            # Esperar respuesta
+            deadline = time.time() + wait
+            while time.time() < deadline:
+                if os.path.exists(self._resp_file) and not os.path.exists(self._lock_file):
+                    try:
+                        with open(self._resp_file, "r", encoding="ascii") as f:
+                            return f.read().strip()
+                    except Exception:
+                        pass
+                time.sleep(0.05)
 
-        # Timeout — limpiar
-        if os.path.exists(self._cmd_file):
-            os.remove(self._cmd_file)
-        return "ERROR|timeout waiting for EA response"
+            # Timeout — limpiar
+            if os.path.exists(self._cmd_file):
+                os.remove(self._cmd_file)
+            return "ERROR|timeout waiting for EA response"
 
     def _parse_kv(self, payload: str) -> dict:
         result = {}
@@ -101,6 +110,47 @@ class MT4Client(BaseMTClient):
                 k, v = part.split("=", 1)
                 result[k.strip()] = v.strip()
         return result
+
+    # Orden de columnas de POSITIONS/ORDERS en el EA (PythonBridge.mq4). Se usa
+    # como fallback posicional cuando el EA cargado en MT4 está desactualizado y
+    # devuelve CSV plano sin `clave=` (entonces _parse_kv daría {} y se perderían
+    # todos los campos). El layout actual lleva commission/swap; el legacy no.
+    _POSITION_FIELDS_12 = ["ticket", "symbol", "type", "volume", "open_price",
+                           "sl", "tp", "profit", "commission", "swap",
+                           "open_time", "comment"]
+    _POSITION_FIELDS_10 = ["ticket", "symbol", "type", "volume", "open_price",
+                           "sl", "tp", "profit", "open_time", "comment"]
+    _ORDER_FIELDS_9 = ["ticket", "symbol", "type", "volume", "price",
+                       "sl", "tp", "open_time", "comment"]
+
+    def _parse_record(self, entry: str, positional_fields: list) -> dict:
+        """Parsea una posición/orden tolerando dos formatos del EA:
+
+        1) `clave=valor` separado por comas (EA actual) — vía _parse_kv.
+        2) CSV plano sin claves (EA antiguo/desincronizado) — mapeo posicional
+           contra `positional_fields`. El último campo (`comment`) puede contener
+           comas, así que se absorbe el resto.
+        """
+        kv = self._parse_kv(entry.replace(",", "|"))
+        if kv:
+            return kv
+        parts = entry.split(",")
+        if not parts or not parts[0]:
+            return {}
+        result = {}
+        last = len(positional_fields) - 1
+        for idx, field in enumerate(positional_fields):
+            if idx < last and idx < len(parts):
+                result[field] = parts[idx].strip()
+            elif idx == last and len(parts) > last:
+                # `comment` final: reabsorbe cualquier coma interna.
+                result[field] = ",".join(parts[last:]).strip()
+        return result
+
+    def _position_fields(self, entry: str) -> list:
+        """Elige el layout posicional según el número de columnas del CSV."""
+        n = len(entry.split(","))
+        return self._POSITION_FIELDS_12 if n >= 12 else self._POSITION_FIELDS_10
 
     # ------------------------------------------------------------------
     def connect(self, login: int = None, password: str = None, server: str = "") -> bool:
@@ -183,7 +233,7 @@ class MT4Client(BaseMTClient):
         for entry in payload.split(";"):
             if not entry:
                 continue
-            data = self._parse_kv(entry.replace(",", "|"))
+            data = self._parse_record(entry, self._position_fields(entry))
             positions.append(data)
         self._learn_commission(positions)
         return positions
@@ -226,7 +276,7 @@ class MT4Client(BaseMTClient):
         for entry in payload.split(";"):
             if not entry:
                 continue
-            data = self._parse_kv(entry.replace(",", "|"))
+            data = self._parse_record(entry, self._ORDER_FIELDS_9)
             orders.append(data)
         return orders
 
