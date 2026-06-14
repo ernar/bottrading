@@ -49,13 +49,40 @@ export function PortfolioChart({ points, height = 220, rangeLabel }: Props) {
   // Geometría del trazo en píxeles.
   const padTop = 12
   const padBottom = 12
-  const min = values.length ? Math.min(...values) : 0
-  const max = values.length ? Math.max(...values) : 1
-  const range = max - min || 1
   const innerH = height - padTop - padBottom
 
+  // Dominio vertical con SPAN MÍNIMO: si se escala al mín/máx exactos, una
+  // micro-oscilación del P/L flotante (±$1 en una cuenta pequeña) llenaría todo
+  // el alto y parecería un pico irreal. Forzamos un span mínimo (~6% del valor
+  // medio) y añadimos margen, para que los cambios pequeños se vean pequeños.
+  const dataMin = values.length ? Math.min(...values) : 0
+  const dataMax = values.length ? Math.max(...values) : 1
+  const mid = (dataMin + dataMax) / 2
+  const minSpan = Math.max(Math.abs(mid) * 0.06, 0.01)
+  const span = Math.max(dataMax - dataMin, minSpan)
+  const pad = span * 0.15
+  const min = mid - span / 2 - pad
+  const max = mid + span / 2 + pad
+  const range = max - min || 1
+
+  // Eje X proporcional al TIEMPO real (no al índice): si el bot se detuvo y
+  // reanudó, los huecos temporales deben verse como huecos, no como tramos
+  // equiespaciados que deforman la curva. Fallback a índice si no hay timestamps.
+  const times = data.map(p => {
+    if (p.t === 'now') return Date.now()
+    const ms = new Date(p.t.replace(' ', 'T')).getTime()
+    return Number.isFinite(ms) ? ms : NaN
+  })
+  const tValid = times.every(t => Number.isFinite(t))
+  const t0 = tValid ? times[0] : 0
+  const tSpan = tValid ? (times[times.length - 1] - t0) || 1 : 1
+
   const xy = (i: number) => {
-    const x = values.length > 1 ? (i / (values.length - 1)) * width : 0
+    let frac: number
+    if (values.length <= 1) frac = 0
+    else if (tValid) frac = (times[i] - t0) / tSpan
+    else frac = i / (values.length - 1)
+    const x = frac * width
     const y = padTop + (1 - (values[i] - min) / range) * innerH
     return [x, y] as const
   }

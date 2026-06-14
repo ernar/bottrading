@@ -7,18 +7,25 @@ Bot de trading automático que integra **MetaTrader 4** con un **LLM** (Ollama l
 ```
 mt4_ollama_bot/
 ├── main.py                  # Punto de entrada: selección de agentes + orquestador + API en hilo interno
-├── agents/
+├── agents/                  # Sistema agéntico (agente por símbolo + coordinador)
 │   ├── base_agent.py        # SymbolAgent: símbolo + modelo + AgentParams + persona + memoria aislada
 │   ├── registry.py          # Blueprints declarativos de agentes (btc-agent…) + build_agent()
-│   └── orchestrator.py      # AgentOrchestrator: corre el loop, ejecuta señales y optimize()
+│   ├── orchestrator.py      # AgentOrchestrator: loop por cadencias, ejecuta señales y optimize()
+│   ├── coordinator.py       # Mesa de dirección: RiskBook (determinista) + CoordinatorAgent (LLM)
+│   └── positions.py         # Helpers de posiciones compartidos (orquestador/coordinador)
 ├── core/
 │   ├── strategy.py          # Motor de estrategia (LLM + validación de señales)
 │   ├── indicators.py        # Indicadores técnicos (RSI, EMA, MACD, Bollinger, ATR, S/R)
 │   ├── market_context.py    # Contexto estructurado para el LLM (indicadores + velas + memoria)
 │   ├── memory.py            # SignalMemory: registro de señales con evaluación de resultados
 │   ├── news.py              # Noticias (RSS Yahoo) + calendario económico (ForexFactory)
-│   ├── bot_state.py         # Contenedor de estado thread-safe
-│   ├── state.py             # Singleton compartido entre main y api server
+│   ├── reporting.py         # build_report(): informe periódico de cuenta/sesgo/decisiones
+│   ├── mailer.py            # Envío del informe por SMTP (gated por SMTP_ENABLED)
+│   ├── config.py            # Lectura de config de cadencias/coordinador desde .env
+│   ├── llm_config.py        # Catálogo de proveedores/modelos LLM disponibles
+│   ├── console.py           # Salida de terminal centralizada (color, tablas, helpers)
+│   ├── state.py             # bot_state: singleton compartido entre main y api server
+│   ├── bot_state.py         # Definición del contenedor de estado thread-safe
 │   ├── trade_metrics.py     # Cálculo de SL/TP, tamaño de lote y métricas de trade
 │   ├── logger.py            # Logging de señales y trades a CSV
 │   └── models.py            # Modelos Pydantic (BotConfig, Position, etc.)
@@ -31,17 +38,19 @@ mt4_ollama_bot/
 ├── requirements.txt
 ├── requirements-dev.txt     # Dependencias de test (pytest)
 ├── conftest.py              # Hace que pytest encuentre los paquetes del proyecto
+├── examples_config.py       # Demo de resolución de límites por símbolo/modelo
 ├── start.bat                # Arranque en Windows (main.py + frontend)
 ├── .env                     # Credenciales + config (NO subir a git; gitignored)
 ├── .env.example             # Plantilla sin secretos
+├── .env.example.advanced    # Plantilla con todos los parámetros por agente
 ├── logs/                    # Generado automáticamente (gitignored)
 │   ├── memory.json          # Memoria de señales y resultados evaluados
+│   ├── coordinator_decisions.csv  # Historial de decisiones de la mesa
 │   ├── agents/              # Memoria aislada por agente (<name>_memory.json)
 │   └── mt4/
 │       ├── signals.csv      # Historial de señales generadas
-│       ├── trades.csv       # Historial de órdenes ejecutadas
-│       └── equity.csv       # Evolución de balance/equity (gráfico del dashboard)
-└── frontend/                # Dashboard React + TypeScript + Tailwind
+│       └── trades.csv       # Historial de órdenes ejecutadas
+└── frontend/                # Dashboard React + TypeScript + Tailwind (ver frontend/README.md)
 ```
 
 ## Requisitos
@@ -193,7 +202,7 @@ python examples_config.py
 start.bat
 ```
 
-Esto lanza `main.py` (orquestador + API en el mismo proceso) y el dashboard React en `http://localhost:5173`.
+Esto lanza `main.py` (orquestador + API en el mismo proceso) y el dashboard React en `http://localhost:3000`.
 
 Puedes también arrancar solo el bot:
 ```bash

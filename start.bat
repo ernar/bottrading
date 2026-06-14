@@ -50,6 +50,6 @@ echo.
 echo ========================================
 echo   Bot:       consola "MT4 Bot"
 echo   API:       http://localhost:5000
-echo   Dashboard: http://localhost:5173
+echo   Dashboard: http://localhost:3000
 echo ========================================
 echo.

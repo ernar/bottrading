@@ -28,7 +28,7 @@ defecto, `qwen3:8b`) para generar y ejecutar señales basadas en análisis técn
 |---|---|
 | Bot + API (mismo proceso, puerto 5000) | `python main.py` |
 | Bot + dashboard (Windows) | `start.bat` |
-| Frontend dev | `cd frontend && npm install && npm run dev` (→ `http://localhost:5173`) |
+| Frontend dev | `cd frontend && npm install && npm run dev` (→ `http://localhost:3000`) |
 | Tests (funciones puras) | `python -m pytest -q` |
 | Comprobar sintaxis de un archivo | `python -m py_compile <archivo>` |
 | Type-check del frontend | `cd frontend && npx tsc --noEmit` |
