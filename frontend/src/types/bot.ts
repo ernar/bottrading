@@ -154,6 +154,12 @@ export interface CoordinatorOverview {
   max_symbol_loss_pct?: number
   last_coordination?: Coordination | null
   last_coordination_at?: string | null
+  last_junta_at?: string | null
+  last_report_at?: string | null
+  rotation_seconds?: number
+  news_poll_seconds?: number
+  junta_interval_seconds?: number
+  report_interval_seconds?: number
 }
 
 export interface BotState {

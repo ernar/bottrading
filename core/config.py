@@ -201,6 +201,49 @@ def get_coordinator_config() -> dict:
     }
 
 
+def get_schedule_config() -> dict:
+    """Configuración del planificador de cadencias del orquestador desde .env.
+
+    El bot corre en un único bucle (sin hilos extra para la lógica de trading).
+    El tick base es la rotación; las demás tareas se "abren" por tiempo:
+
+    - ROTATION_SECONDS (int, default 60): cada cuánto el orquestador analiza a
+      los especialistas y, si procede, convoca la mesa para coordinar/ejecutar.
+      Es además el tick base del bucle.
+    - NEWS_POLL_SECONDS (int, default 1800 = 30 min): cada cuánto se sondean las
+      noticias de los símbolos con agente buscando eventos RED (alto impacto).
+    - JUNTA_INTERVAL_SECONDS (int, default 3600 = 1 h): cada cuánto se convoca
+      una junta de la mesa para una revisión global del libro, aunque la rotación
+      no haya tenido actividad.
+    - REPORT_INTERVAL_SECONDS (int, default 7200 = 2 h): cada cuánto se genera el
+      reporte y se intenta enviar por correo.
+
+    Reporte / email (ver core/mailer.py). El envío real está APAGADO por defecto
+    (SMTP_ENABLED=false): el reporte se genera y se muestra, pero no se manda
+    hasta configurar credenciales SMTP.
+
+    - SMTP_ENABLED (bool, default False): activa el envío real por SMTP.
+    - SMTP_HOST / SMTP_PORT (default 587) / SMTP_USER / SMTP_PASSWORD: servidor.
+    - SMTP_FROM: remitente (si vacío, se usa SMTP_USER).
+    - SMTP_USE_TLS (bool, default True): STARTTLS tras conectar.
+    - REPORT_EMAIL_TO: destinatario del reporte.
+    """
+    return {
+        "rotation_seconds": _env_int("ROTATION_SECONDS", 60),
+        "news_poll_seconds": _env_int("NEWS_POLL_SECONDS", 30 * 60),
+        "junta_interval_seconds": _env_int("JUNTA_INTERVAL_SECONDS", 60 * 60),
+        "report_interval_seconds": _env_int("REPORT_INTERVAL_SECONDS", 2 * 60 * 60),
+        "smtp_enabled": _env_bool("SMTP_ENABLED", False),
+        "smtp_host": os.getenv("SMTP_HOST", "").strip(),
+        "smtp_port": _env_int("SMTP_PORT", 587),
+        "smtp_user": os.getenv("SMTP_USER", "").strip(),
+        "smtp_password": os.getenv("SMTP_PASSWORD", ""),
+        "smtp_from": os.getenv("SMTP_FROM", "").strip(),
+        "smtp_use_tls": _env_bool("SMTP_USE_TLS", True),
+        "report_email_to": os.getenv("REPORT_EMAIL_TO", "luismiguel.cano@blankpage.es").strip(),
+    }
+
+
 def get_commission_per_lot(default: float = 7.0) -> float:
     """Lee la comisión por lote desde .env.
     

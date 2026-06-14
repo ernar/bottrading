@@ -69,7 +69,7 @@ class BotState:
                 risk_level=signal_dict["risk_level"],
                 reason=signal_dict["reason"],
                 timestamp=datetime.now().isoformat(),
-                platform=signal_dict.get("platform", "MT5"),
+                platform=signal_dict.get("platform", "MT4"),
                 agent=signal_dict.get("agent", ""),
             )
             self.signals[signal.symbol] = signal
@@ -134,7 +134,7 @@ class BotState:
                 used_margin=account_dict.get("used_margin", 0),
                 margin_level=account_dict.get("margin_level", 0),
                 leverage=account_dict.get("leverage", 1),
-                platform=account_dict.get("platform", "MT5"),
+                platform=account_dict.get("platform", "MT4"),
             )
             self.last_update = datetime.now().isoformat()
 

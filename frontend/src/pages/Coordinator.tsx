@@ -72,6 +72,10 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
           {' · '}cobertura (hedge): {snap?.hedging ? <span className="text-gray-300">disponible</span> : <span className="text-gray-400">no disponible</span>}
           {overview?.last_coordination_at ? ` · última: ${overview.last_coordination_at}` : ' · aún sin coordinar'}
         </p>
+        <p className="text-xs text-gray-500">
+          Junta horaria: <span className="text-gray-300">{overview?.last_junta_at || 'pendiente'}</span>
+          {' · '}último reporte: <span className="text-gray-300">{overview?.last_report_at || 'pendiente'}</span>
+        </p>
       </section>
 
       {/* Resumen de cartera */}

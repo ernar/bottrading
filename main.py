@@ -12,7 +12,7 @@ from agents.registry import list_agents, build_agent
 from agents.orchestrator import AgentOrchestrator
 from agents.coordinator import RiskBook, CoordinatorAgent
 from core.llm_config import available_providers
-from core.config import get_coordinator_config
+from core.config import get_coordinator_config, get_schedule_config
 
 load_dotenv()
 
@@ -222,14 +222,24 @@ def main():
             risk_book=risk_book, temperature=coordinator_cfg["temperature"])
         print(f"  Mesa de dirección activa con {coord_provider.upper()}/{coord_model}.")
 
+    # Planificador de cadencias: rotación (tick base), sonda de noticias RED,
+    # junta horaria y reporte periódico. Ver get_schedule_config().
+    schedule_cfg = get_schedule_config()
+    print(f"  Cadencias: rotación {schedule_cfg['rotation_seconds']}s · "
+          f"noticias {schedule_cfg['news_poll_seconds'] // 60}min · "
+          f"junta {schedule_cfg['junta_interval_seconds'] // 60}min · "
+          f"reporte {schedule_cfg['report_interval_seconds'] // 60}min "
+          f"(email {'ON' if schedule_cfg['smtp_enabled'] else 'OFF'}).")
+
     # optimize_every_cycles=20 -> ~cada 20 ciclos el orquestador revisa el
     # rendimiento de cada agente y ajusta sus parámetros (0 para desactivar).
     orchestrator = AgentOrchestrator(agents, client, platform="mt4",
                                      optimize_every_cycles=20,
-                                     coordinator=coordinator, risk_book=risk_book)
+                                     coordinator=coordinator, risk_book=risk_book,
+                                     schedule_cfg=schedule_cfg)
     set_orchestrator(orchestrator)
     try:
-        orchestrator.run_forever(poll_seconds=60)
+        orchestrator.run_forever(poll_seconds=schedule_cfg["rotation_seconds"])
     finally:
         bot_state.set_bot_running(False)
         bot_state.set_connected(False)

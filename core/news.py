@@ -137,6 +137,56 @@ class NewsProvider:
 
     # ----- API pública -----
 
+    def get_high_impact_events(self, symbol: str) -> list:
+        """Eventos RED (impacto ALTO) próximos para las divisas del símbolo.
+
+        "RED" = la etiqueta roja del calendario de ForexFactory, es decir
+        `impact == "High"` (los Medium quedan fuera; esos van al contexto del
+        prompt vía `get_news_context`, no disparan reacción inmediata).
+
+        Devuelve una lista de dicts con una **clave estable** (`key`) para que el
+        orquestador pueda deduplicar y reaccionar a cada evento una sola vez.
+        Fail-safe: lista vacía si las noticias están desactivadas, el símbolo no
+        está mapeado o el calendario falla."""
+        if not self.enabled:
+            return []
+        mapping = SYMBOL_NEWS_MAP.get(symbol.upper())
+        if not mapping:
+            return []
+        _, currencies = mapping
+
+        now = datetime.now(timezone.utc)
+        horizon = now + timedelta(hours=CALENDAR_WINDOW_HOURS)
+        events = []
+        for ev in self._get_calendar():
+            if ev.get("country") not in currencies and ev.get("country") != "All":
+                continue
+            if ev.get("impact") != "High":
+                continue
+            raw_date = ev.get("date", "")
+            try:
+                dt = datetime.fromisoformat(raw_date)
+            except (KeyError, ValueError):
+                continue
+            if not (now - timedelta(hours=1) <= dt <= horizon):
+                continue
+            country = ev.get("country", "?")
+            title = ev.get("title", "?")
+            delta_h = (dt - now).total_seconds() / 3600
+            when = f"en {delta_h:.1f}h" if delta_h >= 0 else f"hace {-delta_h:.1f}h"
+            events.append({
+                # Clave estable para deduplicar reacciones (no incluye el tiempo
+                # relativo, que cambia en cada sondeo).
+                "key": f"{country}|{title}|{raw_date}",
+                "country": country,
+                "title": title,
+                "when": when,
+                "impact": "High",
+                "forecast": ev.get("forecast"),
+                "previous": ev.get("previous"),
+            })
+        return events
+
     def get_news_context(self, symbol: str) -> str:
         """Sección de noticias/eventos para inyectar en el prompt. '' si no hay nada."""
         if not self.enabled:

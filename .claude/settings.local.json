@@ -21,7 +21,9 @@
       "Bash(netstat -ano)",
       "Bash(python -m py_compile agents/coordinator.py agents/orchestrator.py clients/mt5_client.py clients/mt4_client.py core/config.py)",
       "Bash(python -m py_compile agents/coordinator.py agents/orchestrator.py clients/mt5_client.py clients/mt4_client.py core/config.py api/server.py main.py tests/test_riskbook.py)",
-      "Bash(python -m pytest -q)"
+      "Bash(python -m pytest -q)",
+      "Bash(python -m py_compile main.py agents/orchestrator.py core/config.py core/news.py core/reporting.py core/mailer.py api/server.py)",
+      "Bash(python -m py_compile main.py agents/orchestrator.py core/config.py core/news.py core/reporting.py core/mailer.py api/server.py tests/test_news.py tests/test_reporting.py tests/test_schedule.py)"
     ],
     "additionalDirectories": [
       "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"

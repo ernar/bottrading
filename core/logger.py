@@ -36,7 +36,7 @@ def _ensure_file(path: str, headers: list):
         csv.writer(f).writerow(headers)
 
 
-def log_signal(signal: dict, platform: str = "mt5"):
+def log_signal(signal: dict, platform: str = "mt4"):
     path = _signals_path(platform)
     _ensure_file(path, SIGNALS_HEADERS)
     row = [

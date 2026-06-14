@@ -144,7 +144,8 @@ class _Spinner:
 class AgentOrchestrator:
 
     def __init__(self, agents: list, client, platform: str = "mt5",
-                 optimize_every_cycles: int = 0, coordinator=None, risk_book=None):
+                 optimize_every_cycles: int = 0, coordinator=None, risk_book=None,
+                 schedule_cfg: dict = None):
         self.agents = agents
         self.client = client
         self.platform = platform
@@ -162,6 +163,27 @@ class AgentOrchestrator:
         # Última coordinación de cartera (para exponer al dashboard).
         self.last_coordination = None
         self.last_coordination_at = None
+
+        # --- Planificador de cadencias (un único bucle, sin hilos extra) ---
+        # El tick base es la rotación; noticias/junta/reporte se "abren" por
+        # tiempo (time.monotonic) comparando contra su último disparo.
+        self.schedule_cfg = schedule_cfg or {}
+        self.rotation_seconds = self.schedule_cfg.get("rotation_seconds", 60)
+        self.news_poll_seconds = self.schedule_cfg.get("news_poll_seconds", 30 * 60)
+        self.junta_interval_seconds = self.schedule_cfg.get("junta_interval_seconds", 60 * 60)
+        self.report_interval_seconds = self.schedule_cfg.get("report_interval_seconds", 2 * 60 * 60)
+        # Claves de eventos RED ya atendidos (para reaccionar una sola vez).
+        self._reacted_news_keys: set = set()
+        # Junta global / reporte: marcas para el dashboard.
+        self.last_junta_at = None
+        self.last_report = None
+        self.last_report_at = None
+        # Relojes del planificador (monotónicos): se inicializan a "ahora" para
+        # que el primer disparo ocurra tras un intervalo completo.
+        clock = time.monotonic()
+        self._last_news_poll = clock
+        self._last_junta = clock
+        self._last_report = clock
         # Control de pérdida diaria (0 = desactivado). Al tocarlo se entra en
         # cooldown (no se abren operaciones), no se detiene el bot.
         self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
@@ -177,8 +199,17 @@ class AgentOrchestrator:
 
     # ----- Ejecución -----
 
+    @staticmethod
+    def _due(last: float, interval: float, now: float) -> bool:
+        """True si ya transcurrió `interval` segundos desde `last` (0 = nunca)."""
+        return interval > 0 and (now - last) >= interval
+
     def run_forever(self, poll_seconds: int = 60):
         bot_state.set_bot_running(True)
+        self.rotation_seconds = poll_seconds
+        # Arranque: la mesa revisa la cuenta y la disponibilidad de agentes
+        # antes de la primera rotación.
+        self._startup_review()
         cycle = 0
         try:
             while True:
@@ -191,31 +222,31 @@ class AgentOrchestrator:
                     time.sleep(5)
                     continue
 
-                if self.coordinator is not None:
-                    # Ruta coordinada: recolectar -> coordinar -> ejecutar.
-                    self._run_coordinated_cycle()
-                else:
-                    # Check global de posiciones abiertas antes de analizar:
-                    # si ya estamos en el máximo global, saltar directamente al
-                    # siguiente ciclo y ahorrar llamadas al LLM.
-                    all_positions = self.client.get_positions() or []
-                    max_global = max((a.params.max_open_positions for a in self.agents), default=0)
-                    if bool(max_global) and len(all_positions) >= max_global:
-                        symbols_profit = {}
-                        for p in all_positions:
-                            sym = _pos_get(p, "symbol", default="?")
-                            profit = _pos_to_float(_pos_get(p, "profit"))
-                            symbols_profit[sym] = symbols_profit.get(sym, 0.0) + profit
-                        total_profit = sum(symbols_profit.values())
-                        print(f"\n  ⏭️ Máximo global de posiciones ({max_global}) alcanzado.")
-                        print(f"  💰 Profit no realizado total: ${total_profit:+.2f}")
-                        for sym, prof in sorted(symbols_profit.items()):
-                            print(f"     {sym}: ${prof:+.2f}")
-                        time.sleep(poll_seconds)
-                        continue
+                # Sonda de noticias RED (cada NEWS_POLL_SECONDS): los símbolos con
+                # un evento de alto impacto nuevo se fuerzan en esta rotación
+                # (se saltan el throttle de análisis).
+                now = time.monotonic()
+                forced_symbols: set = set()
+                if self._due(self._last_news_poll, self.news_poll_seconds, now):
+                    self._last_news_poll = now
+                    forced_symbols = self._poll_red_news()
 
-                    for agent in self.agents:
-                        self._run_agent(agent)
+                # Rotación (cada tick): analizar y, si procede, coordinar/ejecutar.
+                self._run_rotation(forced_symbols)
+
+                # Junta de la mesa (cada JUNTA_INTERVAL_SECONDS): revisión global
+                # del libro aunque la rotación no haya tenido actividad.
+                now = time.monotonic()
+                if self._due(self._last_junta, self.junta_interval_seconds, now):
+                    self._last_junta = now
+                    self._run_junta()
+
+                # Reporte (cada REPORT_INTERVAL_SECONDS): genera y (si SMTP está
+                # activo) envía el informe de estado.
+                now = time.monotonic()
+                if self._due(self._last_report, self.report_interval_seconds, now):
+                    self._last_report = now
+                    self._run_report()
 
                 cycle += 1
                 if self.optimize_every_cycles and cycle % self.optimize_every_cycles == 0:
@@ -224,6 +255,101 @@ class AgentOrchestrator:
                 time.sleep(poll_seconds)
         except KeyboardInterrupt:
             print("\n\nOrquestador detenido por el usuario.")
+
+    def _startup_review(self):
+        """Secuencia de arranque: la mesa revisa el estado de la cuenta y la
+        disponibilidad de cada agente (símbolo presente en el broker) antes de
+        la primera rotación."""
+        print(f"\n{'#' * 50}")
+        print("  ARRANQUE — REVISIÓN DE LA MESA")
+        print(f"{'#' * 50}")
+        if self.risk_book is not None:
+            try:
+                snap = self.risk_book.snapshot(
+                    self.client, self.agents,
+                    day_start_equity=self._day_start_equity, in_cooldown=False)
+                print(f"  Equity: {snap.get('equity', 0):.2f} | "
+                      f"Exposición total: {snap.get('total_exposure_pct', 0):.1%} "
+                      f"/ tope {snap.get('max_total_exposure_pct', 0):.0%}")
+                print(f"  Posiciones abiertas: {snap.get('open_positions_total', 0)} | "
+                      f"Cobertura (hedge): {'sí' if snap.get('hedging') else 'no'}")
+            except Exception as exc:  # noqa: BLE001 — el arranque nunca debe fallar
+                print(f"  No se pudo obtener el snapshot inicial: {exc}")
+
+        available = set(self.client.get_symbols() or [])
+        print("  Disponibilidad de agentes:")
+        for agent in self.agents:
+            ok = (not available) or (agent.symbol in available)
+            print(f"    - {agent.name} [{agent.symbol}]: "
+                  f"{'disponible' if ok else 'NO DISPONIBLE en el broker'}")
+
+        mode = "mesa de dirección" if self.coordinator is not None else "clásico por agente"
+        print(f"  Modo: {mode}. Rotación {self.rotation_seconds}s · "
+              f"noticias {self.news_poll_seconds // 60}min · "
+              f"junta {self.junta_interval_seconds // 60}min · "
+              f"reporte {self.report_interval_seconds // 60}min.")
+
+    def _run_rotation(self, forced_symbols: set):
+        """Una rotación: con coordinador, ciclo coordinado; sin él, ruta clásica.
+        Los símbolos en `forced_symbols` (noticia RED) se analizan saltándose el
+        throttle, incluso si la cuenta está en su máximo global de posiciones."""
+        if self.coordinator is not None:
+            self._run_coordinated_cycle(force_symbols=forced_symbols)
+            return
+
+        # Ruta clásica: si estamos en el máximo global y no hay símbolos forzados
+        # por noticias, saltamos el análisis (ahorro de LLM) pero seguimos con
+        # junta/reporte/optimización del bucle.
+        all_positions = self.client.get_positions() or []
+        max_global = max((a.params.max_open_positions for a in self.agents), default=0)
+        at_global_max = bool(max_global) and len(all_positions) >= max_global
+        if at_global_max and not forced_symbols:
+            symbols_profit = {}
+            for p in all_positions:
+                sym = _pos_get(p, "symbol", default="?")
+                profit = _pos_to_float(_pos_get(p, "profit"))
+                symbols_profit[sym] = symbols_profit.get(sym, 0.0) + profit
+            total_profit = sum(symbols_profit.values())
+            print(f"\n  ⏭️ Máximo global de posiciones ({max_global}) alcanzado.")
+            print(f"  💰 Profit no realizado total: ${total_profit:+.2f}")
+            for sym, prof in sorted(symbols_profit.items()):
+                print(f"     {sym}: ${prof:+.2f}")
+            return
+
+        for agent in self.agents:
+            forced = agent.symbol in forced_symbols
+            if at_global_max and not forced:
+                continue
+            self._run_agent(agent, force=forced)
+
+    def _poll_red_news(self) -> set:
+        """Sondea noticias de alto impacto (RED) de los símbolos con agente.
+
+        Devuelve el conjunto de símbolos con un evento RED *nuevo* (no atendido
+        antes). Imprime cada disparo. Fail-safe: set() ante cualquier error."""
+        try:
+            from core.news import news_provider
+        except Exception:
+            return set()
+        forced, seen = set(), set()
+        for agent in self.agents:
+            if agent.symbol in seen:
+                continue
+            seen.add(agent.symbol)
+            try:
+                events = news_provider.get_high_impact_events(agent.symbol)
+            except Exception:
+                events = []
+            for ev in events:
+                key = ev.get("key")
+                if not key or key in self._reacted_news_keys:
+                    continue
+                self._reacted_news_keys.add(key)
+                forced.add(agent.symbol)
+                print(f"\n  [NOTICIA RED] {agent.symbol}: {ev.get('title', '?')} "
+                      f"({ev.get('country', '?')}, {ev.get('when', '')}). "
+                      f"Forzando análisis del especialista vía mesa.")
+        return forced
 
     def _check_daily_loss_guard(self, account_info: dict):
         """Control de pérdida diaria por *cooldown* (no detiene el bot).
@@ -356,10 +482,14 @@ class AgentOrchestrator:
         else:
             print(f"\n  ✅ No hay posiciones abiertas en {symbol}.")
 
-    def _gather_signal(self, agent):
+    def _gather_signal(self, agent, force: bool = False):
         """Prepara el símbolo (detecta cierres, sincroniza estado, respeta
         throttle/cooldown) y genera la señal del especialista. Devuelve el dict
         de señal (incluido HOLD) o None si no se analizó / no hubo señal.
+
+        `force=True` (noticia RED) salta el throttle de análisis (al-máximo /
+        espaciado de cooldown) para mirar el símbolo igualmente; la EJECUCIÓN
+        sigue gobernada por la validación y la mesa (no se salta el riesgo).
 
         NO ejecuta órdenes ni imprime el detalle de la señal: eso es de la fase
         de ejecución (clásica o coordinada). Sirve a ambas rutas."""
@@ -386,7 +516,7 @@ class AgentOrchestrator:
         in_cooldown = self._risk_cooldown_active()
         max_pos = agent.params.max_open_positions
         at_max = bool(max_pos) and len(positions) >= max_pos
-        if in_cooldown or at_max:
+        if (in_cooldown or at_max) and not force:
             interval = (RISK_COOLDOWN_ANALYSIS_INTERVAL if in_cooldown
                         else AT_MAX_ANALYSIS_INTERVAL)
             if self._throttled(symbol, interval):
@@ -397,8 +527,11 @@ class AgentOrchestrator:
                     print(f"  {len(positions)} posiciones abiertas (máx {max_pos}); "
                           f"análisis aplazado (cada {interval // 60} min salvo conf>=90%).")
                 return None
+        elif force and (in_cooldown or at_max):
+            print("  [NOTICIA RED] análisis forzado pese al throttle "
+                  "(la ejecución sigue sujeta a validación/mesa).")
 
-        with _Spinner("  Generando análisis"):
+        with _Spinner("  Generando análisis" + (" (forzado por noticia)" if force else "")):
             signal = agent.analyze(self.client, platform=self.platform)
         self._last_analysis_at[symbol] = time.time()
         if not signal:
@@ -494,10 +627,11 @@ class AgentOrchestrator:
             print(f"  Error al ejecutar orden: {err}")
         return False
 
-    def _run_agent(self, agent):
+    def _run_agent(self, agent, force: bool = False):
         """Ruta clásica (sin coordinador): un agente analiza y ejecuta su propia
-        señal de forma aislada."""
-        signal = self._gather_signal(agent)
+        señal de forma aislada. `force` (noticia RED) salta el throttle de
+        análisis."""
+        signal = self._gather_signal(agent, force=force)
         if not signal:
             return
         self._print_signal_details(agent, signal)
@@ -513,13 +647,16 @@ class AgentOrchestrator:
 
     # ----- Ciclo coordinado (mesa de dirección) -----
 
-    def _run_coordinated_cycle(self):
+    def _run_coordinated_cycle(self, force_symbols: set = frozenset()):
         """Ciclo con coordinador: recolectar señales -> coordinar cartera ->
-        ejecutar por prioridad (entradas aprobadas + cierres/reducciones)."""
+        ejecutar por prioridad (entradas aprobadas + cierres/reducciones).
+
+        `force_symbols` (noticia RED) fuerza el análisis de esos símbolos aunque
+        estén throttled; la coordinación y el clamp se aplican igual a todos."""
         # Fase 1: recolectar las señales de todos los especialistas.
         signals = {}
         for agent in self.agents:
-            sig = self._gather_signal(agent)
+            sig = self._gather_signal(agent, force=agent.symbol in force_symbols)
             if sig:
                 signals[agent.symbol] = sig
 
@@ -545,17 +682,26 @@ class AgentOrchestrator:
         self._store_coordination(snapshot, result)
 
         # Fase 3: ejecutar por prioridad (1 = primero).
+        self._execute_decisions(result, signals)
+
+    def _execute_decisions(self, result: dict, signals: dict, manage_only: bool = False):
+        """Ejecuta las decisiones de la mesa por prioridad (1 = primero).
+        `manage_only` (junta) limita la ejecución a gestionar posiciones abiertas
+        (close/reduce/hedge), sin abrir entradas nuevas a partir de señales que
+        podrían estar desactualizadas."""
         agent_by_symbol = {a.symbol: a for a in self.agents}
         decisions = sorted(result.get("decisions", []), key=lambda d: d.get("priority", 99))
         for d in decisions:
             agent = agent_by_symbol.get(d.get("symbol"))
             if agent is None:
                 continue
-            self._execute_decision(agent, signals.get(agent.symbol), d)
+            self._execute_decision(agent, signals.get(agent.symbol), d,
+                                   manage_only=manage_only)
 
-    def _execute_decision(self, agent, signal, decision):
+    def _execute_decision(self, agent, signal, decision, manage_only: bool = False):
         """Aplica una decisión del coordinador: gestiona las posiciones abiertas
-        (close/reduce/hedge) y abre la entrada si está aprobada."""
+        (close/reduce/hedge) y abre la entrada si está aprobada. Con
+        `manage_only` solo gestiona posiciones (no abre entradas)."""
         symbol = agent.symbol
         action = decision.get("position_action", "hold")
         direction = decision.get("manage_direction")  # lado del libro a tratar
@@ -565,6 +711,8 @@ class AgentOrchestrator:
         elif action == "hedge" and self.risk_book.can_close:
             self._hedge_position(symbol, direction, decision.get("reason", ""))
 
+        if manage_only:
+            return
         actionable = signal and signal.get("action") in ("BUY", "SELL")
         if not actionable:
             return
@@ -715,6 +863,82 @@ class AgentOrchestrator:
         self._store_coordination(snapshot, result)
         return self.last_coordination
 
+    # ----- Junta periódica (revisión global) -----
+
+    def _run_junta(self):
+        """Junta horaria de la mesa: revisión GLOBAL del libro aunque la rotación
+        no haya tenido actividad. Convoca siempre (sin la condición de "omitir si
+        no hay señales"), aplica las guardias deterministas (reversión/hard-stop)
+        sobre las posiciones abiertas y gestiona (close/reduce/hedge) respetando
+        `can_close`. No abre entradas nuevas (usaría señales potencialmente
+        viejas): para eso está la rotación."""
+        if self.risk_book is None:
+            return
+        in_cooldown = self._risk_cooldown_active()
+        snapshot = self.risk_book.snapshot(
+            self.client, self.agents,
+            day_start_equity=self._day_start_equity, in_cooldown=in_cooldown)
+
+        print(f"\n{'#' * 50}")
+        print("  JUNTA DE LA MESA (revisión global del libro)")
+        print(f"{'#' * 50}")
+        self.last_junta_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Sin coordinador: resumen determinista (sin LLM).
+        if self.coordinator is None:
+            self._print_coordination({"rationale": "junta sin coordinador (resumen determinista)",
+                                      "decisions": []}, snapshot)
+            self._store_coordination(
+                snapshot, {"rationale": "junta sin coordinador (resumen determinista)",
+                           "decisions": []})
+            return
+
+        state = bot_state.get_state()
+        signals = dict(state.get("signals", {}) or {})
+        with _Spinner("  Junta: revisando el libro"):
+            result = self.coordinator.decide(
+                snapshot, signals, self.agents_overview(),
+                news_context=self._coordinator_news())
+        self._print_coordination(result, snapshot)
+        self._store_coordination(snapshot, result)
+        # Gestiona posiciones abiertas (no abre entradas en la junta).
+        self._execute_decisions(result, signals, manage_only=True)
+
+    # ----- Reporte periódico -----
+
+    def _run_report(self):
+        """Genera el reporte de estado y lo envía (si SMTP está activo). Siempre
+        lo imprime y lo guarda para el dashboard; el envío puede estar apagado."""
+        account = self.client.get_account_info() or {}
+        snapshot = None
+        if self.risk_book is not None:
+            try:
+                snapshot = self.risk_book.snapshot(
+                    self.client, self.agents,
+                    day_start_equity=self._day_start_equity,
+                    in_cooldown=self._risk_cooldown_active())
+            except Exception:  # noqa: BLE001 — el reporte nunca debe tumbar el bot
+                snapshot = None
+        state = bot_state.get_state()
+
+        from core.reporting import build_report
+        report = build_report(
+            account=account, snapshot=snapshot,
+            coordination=self.last_coordination,
+            agents_overview=self.agents_overview(),
+            closed_trades=state.get("closed_trades", []))
+        self.last_report = report
+        self.last_report_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        print(f"\n{'=' * 50}")
+        print("  REPORTE PERIÓDICO")
+        print("=" * 50)
+        print(report["text"])
+
+        from core.mailer import send_report
+        send_report(report["subject"], report["text"], report.get("html"),
+                    cfg=self.schedule_cfg)
+
     # ----- Optimización -----
 
     def optimize(self, apply: bool = True) -> list:
@@ -835,4 +1059,10 @@ class AgentOrchestrator:
             "max_symbol_loss_pct": self.risk_book.max_symbol_loss_pct,
             "last_coordination": self.last_coordination,
             "last_coordination_at": self.last_coordination_at,
+            "last_junta_at": self.last_junta_at,
+            "last_report_at": self.last_report_at,
+            "rotation_seconds": self.rotation_seconds,
+            "news_poll_seconds": self.news_poll_seconds,
+            "junta_interval_seconds": self.junta_interval_seconds,
+            "report_interval_seconds": self.report_interval_seconds,
         }

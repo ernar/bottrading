@@ -134,21 +134,21 @@ def _read_csv_rows(path: str, limit: int) -> list:
 @app.route("/api/csv/signals", methods=["GET"])
 def get_csv_signals():
     limit = int(request.args.get("limit", 15))
-    platform = request.args.get("platform", "mt5").lower()
+    platform = request.args.get("platform", "mt4").lower()
     return jsonify(_read_csv_rows(f"logs/{platform}/signals.csv", limit)), 200
 
 
 @app.route("/api/csv/trades", methods=["GET"])
 def get_csv_trades():
     limit = int(request.args.get("limit", 50))
-    platform = request.args.get("platform", "mt5").lower()
+    platform = request.args.get("platform", "mt4").lower()
     return jsonify(_read_csv_rows(f"logs/{platform}/trades.csv", limit)), 200
 
 
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """Estadísticas agregadas de señales (CSV) y memoria de resultados."""
-    platform = request.args.get("platform", "mt5").lower()
+    platform = request.args.get("platform", "mt4").lower()
     today = date.today().isoformat()
 
     stats = {
