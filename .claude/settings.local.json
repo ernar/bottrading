@@ -32,7 +32,8 @@
       "Bash(python -m pytest tests/test_riskbook.py -q)",
       "Bash(python -m py_compile clients/mt4_client.py clients/base_client.py agents/orchestrator.py)",
       "Bash(python -m py_compile core/memory.py)",
-      "Bash(python -c \"from core.memory import SignalMemory; m=SignalMemory\\(path='logs/_tmp_test.json'\\); print\\('OK', m._closed_trades\\)\")"
+      "Bash(python -c \"from core.memory import SignalMemory; m=SignalMemory\\(path='logs/_tmp_test.json'\\); print\\('OK', m._closed_trades\\)\")",
+      "Bash(python -m py_compile core/strategy.py)"
     ],
     "additionalDirectories": [
       "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"

@@ -10,6 +10,10 @@ import ollama
 # El SDK de Gemini loguea "AFC is enabled..." (Automatic Function Calling) en
 # cada llamada. No usamos function calling, así que silenciamos ese ruido.
 logging.getLogger("google_genai.models").setLevel(logging.WARNING)
+# httpx/httpcore loguean cada "HTTP Request: POST ... 200 OK" en INFO, lo que
+# pisa el spinner de "Generando análisis". Los silenciamos a WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _call_openai(model: str, system: str, user: str, temperature: float = 0.2) -> Optional[str]:
