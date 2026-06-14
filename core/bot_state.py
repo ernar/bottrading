@@ -17,7 +17,7 @@ class Signal:
     risk_level: str
     reason: str
     timestamp: str
-    platform: str = "MT5"
+    platform: str = "MT4"
     agent: str = ""
 
 
@@ -42,7 +42,7 @@ class AccountInfo:
     used_margin: float
     margin_level: float
     leverage: int
-    platform: str = "MT5"
+    platform: str = "MT4"
 
 
 class BotState:

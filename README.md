@@ -1,6 +1,6 @@
-# MT5 Ollama Bot
+# MT4 Ollama Bot
 
-Bot de trading automático que integra **MetaTrader 5/4** con un **LLM** (Ollama local por defecto, `qwen3:8b`) para generar y ejecutar señales basadas en análisis técnico. El núcleo es un sistema **agéntico**: un agente especializado por símbolo, cada uno con su propio modelo, parámetros, persona y memoria, coordinados por un orquestador que además auto-optimiza sus parámetros según el rendimiento.
+Bot de trading automático que integra **MetaTrader 4** con un **LLM** (Ollama local por defecto, `qwen3:8b`) para generar y ejecutar señales basadas en análisis técnico. El núcleo es un sistema **agéntico**: un agente especializado por símbolo, cada uno con su propio modelo, parámetros, persona y memoria, coordinados por un orquestador que además auto-optimiza sus parámetros según el rendimiento.
 
 ## Estructura del proyecto
 
@@ -23,8 +23,7 @@ mt5_ollama_bot/
 │   ├── logger.py            # Logging de señales y trades a CSV
 │   └── models.py            # Modelos Pydantic (BotConfig, Position, etc.)
 ├── clients/
-│   ├── base_client.py       # Interfaz común MT4/MT5
-│   ├── mt5_client.py        # Wrapper de MetaTrader 5 (datos, órdenes, cuenta)
+│   ├── base_client.py       # Interfaz común
 │   └── mt4_client.py        # Bridge con MT4 vía EA (PythonBridge.mq4)
 ├── api/server.py            # Flask REST API + WebSocket para el dashboard
 ├── mt4_ea/PythonBridge.mq4  # EA puente para MT4
@@ -47,7 +46,7 @@ mt5_ollama_bot/
 ## Requisitos
 
 - Python 3.8+
-- MetaTrader 5 instalado y abierto (o MT4 con el EA `PythonBridge.mq4` adjunto)
+- MetaTrader 4 instalado y abierto con el EA `PythonBridge.mq4` adjunto
 - [Ollama](https://ollama.ai) corriendo localmente con `qwen3:8b`:
   ```
   ollama pull qwen3:8b
@@ -70,21 +69,17 @@ winget install Ollama.Ollama
 
 > Si `winget` no está disponible, descarga e instala manualmente: [Python 3.8+](https://www.python.org/downloads/) (marca **"Add python.exe to PATH"**), [Node.js 18+](https://nodejs.org/) y [Ollama](https://ollama.ai). Cierra y reabre la terminal tras instalar para refrescar el PATH.
 
-### 2. Plataforma de trading (MT5 y/o MT4)
+### 2. Plataforma de trading (MT4)
 
-El VPS debe tener instalado y abierto el terminal del broker.
+El VPS debe tener instalado y abierto el terminal MT4 del broker.
 
-**MT5:**
-```bat
-winget install MetaQuotes.MetaTrader5
-```
-O descarga el instalador de tu broker. Abre MT5, inicia sesión con tu cuenta y deja el terminal **abierto** mientras el bot corre.
-
-**MT4** (solo si vas a operar en MT4):
+**MT4:**
 ```bat
 winget install MetaQuotes.MetaTrader4
 ```
-O descarga el MT4 de tu broker. Además del terminal hay que instalar el **EA puente**:
+O descarga el MT4 de tu broker. Abre MT4, inicia sesión con tu cuenta y deja el terminal **abierto** mientras el bot corre.
+
+Además del terminal hay que instalar el **EA puente**:
 
 1. En MT4: *Archivo → Abrir carpeta de datos*.
 2. Copia [`mt4_ea/PythonBridge.mq4`](mt4_ea/PythonBridge.mq4) a `MQL4\Experts\`.
@@ -126,9 +121,10 @@ Crea `.env` en la raíz:
 Parte de una plantilla completa sin secretos: copia [`.env.example`](.env.example) a `.env` y rellena tus valores.
 
 ```env
-MT5_LOGIN=tu_numero_cuenta
-MT5_PASSWORD=tu_contraseña
-MT5_SERVER=nombre_servidor
+MT4_LOGIN=tu_numero_cuenta
+MT4_PASSWORD=tu_contraseña
+MT4_HOST=127.0.0.1
+MT4_PORT=8765
 NEWS_ENABLED=true   # noticias/calendario económico en el contexto del LLM (por defecto: true)
 
 # Catálogo de modelos Ollama disponibles (los que muestra `ollama list`)
@@ -203,8 +199,8 @@ python main.py
 
 ## Flujo de ejecución
 
-1. Selección interactiva de **plataforma** (MT5 / MT4) y de **agentes** (cada agente ya trae su símbolo, modelo y configuración — ya no se eligen modelo ni símbolos por separado).
-2. Conecta a MT5/MT4 con las credenciales del `.env`.
+1. Selección interactiva de **agentes** (cada agente ya trae su símbolo, modelo y configuración — ya no se eligen modelo ni símbolos por separado).
+2. Conecta a MT4 con las credenciales del `.env` vía EA bridge `PythonBridge.mq4`.
 3. Inicia el API server en hilo de fondo (puerto 5000).
 4. El `AgentOrchestrator` corre un loop cada 60 segundos. En cada ciclo, por cada agente activo:
    - Evalúa señales anteriores contra el precio actual (memoria de resultados, aislada por agente).
@@ -306,13 +302,11 @@ python -m pytest -q
 ## Notas
 
 - Usar siempre cuenta **Demo** antes de real.
-- MT5 debe estar abierto durante la ejecución (o MT4 con el EA `PythonBridge.mq4` adjunto a un gráfico y el trading automático activado).
+- MT4 debe estar abierto durante la ejecución con el EA `PythonBridge.mq4` adjunto a un gráfico y el trading automático activado.
 - `qwen3:8b` requiere ~5 GB de RAM.
 - Los CSV en `logs/` y la memoria de cada agente persisten entre sesiones.
 
 ## Troubleshooting
-
-**"No se pudo conectar a MT5"** → MT5 debe estar abierto y las credenciales en `.env` deben ser correctas.
 
 **"No se pudo conectar al EA de MT4"** → MT4 abierto, EA `PythonBridge` adjunto a un gráfico y "Permitir trading automático" activado.
 

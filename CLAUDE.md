@@ -1,13 +1,13 @@
 # CLAUDE.md
 
-Bot de trading que integra **MetaTrader 5/4** con un **LLM** (Ollama local por defecto, `qwen3:8b`) para generar y ejecutar señales basadas en análisis técnico. Backend Python (Flask + SocketIO + MetaTrader5 + ollama); dashboard React + TypeScript + Tailwind + Vite.
+Bot de trading que integra **MetaTrader 4** con un **LLM** (Ollama local por defecto, `qwen3:8b`) para generar y ejecutar señales basadas en análisis técnico. Backend Python (Flask + SocketIO + MT4 bridge + ollama); dashboard React + TypeScript + Tailwind + Vite.
 
 ## Arranque
 
 - `python main.py` — arranca el bot **y** el API server (puerto 5000) en un hilo interno del mismo proceso. NO arranques el API por separado: el estado se comparte por proceso.
 - `start.bat` — lanza `main.py` + el dashboard React (`http://localhost:5173`).
 - Frontend: `cd frontend && npm install`, luego `npm run dev`.
-- Credenciales y config en `.env` (MT5_LOGIN/PASSWORD/SERVER, MODEL, SYMBOLS, NEWS_ENABLED). `.env` está en `.gitignore` y contiene credenciales reales — nunca lo subas ni lo imprimas. Plantilla sin secretos en `.env.example`.
+- Credenciales y config en `.env` (MT4_LOGIN/PASSWORD/HOST/PORT, MODEL, SYMBOLS, NEWS_ENABLED). `.env` está en `.gitignore` y contiene credenciales reales — nunca lo subas ni lo imprimas. Plantilla sin secretos en `.env.example`.
 - Variables de seguridad/riesgo en `.env`: `API_HOST` (default `127.0.0.1`; usar `0.0.0.0` solo con `API_TOKEN`), `API_TOKEN` (protege las rutas POST que mutan estado), `MAX_DAILY_LOSS_PCT` (cooldown de pérdida diaria: deja de abrir operaciones y espacia el análisis sin detener el bot; 0 = desactivado).
 
 ## Arquitectura
@@ -17,7 +17,7 @@ Bot de trading que integra **MetaTrader 5/4** con un **LLM** (Ollama local por d
 - **`core/market_context.py`** — construye el contexto estructurado para el prompt (indicadores H1/H4 calculados en Python, últimas velas, posiciones, noticias, memoria). NO se vuelcan velas crudas.
 - **`core/memory.py`** — `SignalMemory`: registra señales y evalúa su resultado contra el precio en ciclos posteriores; el resumen se inyecta al prompt como feedback.
 - **`core/news.py`** — `news_provider` (singleton, caché): calendario económico ForexFactory + titulares RSS Yahoo, fail-safe (devuelve "" ante errores de red).
-- **`clients/`** — `base_client.py` define la interfaz común; `mt5_client.py` (MetaTrader5 nativo) y `mt4_client.py` (bridge vía EA `PythonBridge.mq4`).
+- **`clients/`** — `base_client.py` define la interfaz común; `mt4_client.py` (bridge vía EA `PythonBridge.mq4`).
 - **`api/server.py`** — Flask REST + WebSocket. `async_mode="threading"` forzado, `ping_timeout=60`.
 
 ## Sistema agéntico
