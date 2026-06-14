@@ -38,6 +38,49 @@ BTCUSD_PERSONA = (
 )
 
 
+# Persona del agente de petróleo WTI: materia prima energética con sesiones de
+# mercado marcadas (pit de NYMEX/USA), muy sensible a inventarios, geopolítica y
+# decisiones de la OPEP. No cotiza 24/7 como cripto y arrastra contango/backwardation.
+WTI_PERSONA = (
+    "Operas WTI (West Texas Intermediate, petróleo crudo de EE.UU.), una materia "
+    "prima energética. Características a tener en cuenta:\n"
+    "- Tiene sesiones de mercado: la liquidez y la dirección dominante se forman en "
+    "la sesión americana (NYMEX); en la madrugada/asia el rango suele ser ruido.\n"
+    "- Muy sensible a catalizadores propios: inventarios semanales (API el martes, "
+    "EIA el miércoles), reuniones y recortes de la OPEP+, y la geopolítica de "
+    "Oriente Medio. Un titular puede provocar gaps y spikes bruscos.\n"
+    "- El dólar (USD) mueve el crudo de forma inversa: USD fuerte suele pesar sobre "
+    "el precio; vigila CPI/FOMC y el apetito de riesgo global.\n"
+    "- Volatilidad alta en torno a los datos de inventarios: evita entrar minutos "
+    "antes de la publicación; usa stops en múltiplos de ATR y respeta el spread, "
+    "que se ensancha en baja liquidez.\n"
+    "- Cuidado con barridos en números redondos ($) y con romper rangos sin "
+    "confirmación; si no hay tendencia clara ni catalizador, prefiere hold."
+)
+
+
+# Persona del agente de EURUSD: el par de forex más líquido, con spreads muy
+# ajustados, sesiones de mercado marcadas y movimientos gobernados por el
+# diferencial de política monetaria ECB/Fed y los datos macro de la Eurozona/EE.UU.
+EURUSD_PERSONA = (
+    "Operas EURUSD (euro contra dólar), el par de divisas más líquido del mundo. "
+    "Características a tener en cuenta:\n"
+    "- Spreads muy ajustados y profundidad alta: aún así, opera en las sesiones de "
+    "Londres y Nueva York (y su solapamiento), donde se forma la tendencia; en la "
+    "sesión asiática el rango suele ser estrecho y ruidoso.\n"
+    "- Lo mueve el diferencial de tipos ECB vs Fed: vigila decisiones de tipos, "
+    "discursos de Lagarde/Powell y los datos macro (CPI, NFP, PMI, GDP) de la "
+    "Eurozona y EE.UU.; sorprenden y disparan movimientos rápidos.\n"
+    "- Volatilidad moderada comparada con cripto o crudo: los movimientos van en "
+    "pips; ajusta los múltiplos de ATR y no exijas R:R desmesurado.\n"
+    "- Tiende a respetar rangos y niveles técnicos clásicos (medias, soportes/"
+    "resistencias, números redondos); confirma rupturas, cuidado con los barridos "
+    "de liquidez alrededor de las publicaciones macro.\n"
+    "- Evita entrar minutos antes de un dato de alto impacto; si no hay tendencia "
+    "clara ni catalizador, prefiere hold."
+)
+
+
 AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
     "btc-agent": AgentBlueprint(
         name="btc-agent",
@@ -55,6 +98,42 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=50.0,  # el spread de BTC en puntos es alto
+        ),
+    ),
+    "wti-agent": AgentBlueprint(
+        name="wti-agent",
+        symbol="WTI",
+        description="Especialista en petróleo WTI — sesiones de mercado, inventarios y OPEP",
+        persona=WTI_PERSONA,
+        params=AgentParams(
+            provider="gemini",
+            model="gemini-3.5-flash",
+            min_confidence=0.6,
+            min_rr=1.5,         # crudo: exige buen R:R por la volatilidad de inventarios
+            atr_sl_mult=1.8,
+            atr_tp_mult=2.7,
+            lot_size=0.01,
+            risk_per_trade=0.02,
+            max_open_positions=3,
+            max_spread_filter=10.0,  # el spread del crudo se ensancha en baja liquidez
+        ),
+    ),
+    "eurusd-agent": AgentBlueprint(
+        name="eurusd-agent",
+        symbol="EURUSD",
+        description="Especialista en EURUSD — forex mayor, sesiones Londres/NY, ECB vs Fed",
+        persona=EURUSD_PERSONA,
+        params=AgentParams(
+            provider="gemini",
+            model="gemini-3.5-flash",
+            min_confidence=0.6,
+            min_rr=1.5,
+            atr_sl_mult=1.5,
+            atr_tp_mult=2.2,
+            lot_size=0.01,
+            risk_per_trade=0.02,
+            max_open_positions=3,
+            max_spread_filter=2.0,  # forex mayor: spread muy ajustado
         ),
     ),
 }

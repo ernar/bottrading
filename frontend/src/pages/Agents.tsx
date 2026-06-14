@@ -93,7 +93,14 @@ export function AgentsPage() {
             <div key={a.name} className="bg-gray-800 rounded-lg p-5 border border-gray-700">
               <div className="flex items-baseline justify-between">
                 <h3 className="text-lg font-bold text-cyan-300">{a.name}</h3>
-                <span className="text-sm font-mono text-gray-400">{a.symbol}</span>
+                <div className="flex items-center gap-2">
+                  {a.market_open === false && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-amber-900 text-amber-200">
+                      Mercado cerrado
+                    </span>
+                  )}
+                  <span className="text-sm font-mono text-gray-400">{a.symbol}</span>
+                </div>
               </div>
               <p className="text-xs text-gray-400 mt-1">{a.description}</p>
               <ModelSelector

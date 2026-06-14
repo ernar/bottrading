@@ -136,8 +136,10 @@ string GetSymbolInfo(string symbol)
    if(!SymbolSelect(symbol, true))
       return "ERROR|symbol not found: " + symbol;
 
+   // MODE_TRADEALLOWED: el broker lo pone a 0 cuando el mercado del simbolo
+   // esta cerrado (fin de semana, fuera de sesion). Inmune a la zona horaria.
    return StringFormat(
-      "OK|symbol=%s|point=%.10f|digits=%d|spread=%.1f|tick_value=%.5f|lot_min=%.2f|lot_max=%.2f|lot_step=%.2f",
+      "OK|symbol=%s|point=%.10f|digits=%d|spread=%.1f|tick_value=%.5f|lot_min=%.2f|lot_max=%.2f|lot_step=%.2f|trade_allowed=%d",
       symbol,
       MarketInfo(symbol, MODE_POINT),
       (int)MarketInfo(symbol, MODE_DIGITS),
@@ -145,7 +147,8 @@ string GetSymbolInfo(string symbol)
       MarketInfo(symbol, MODE_TICKVALUE),
       MarketInfo(symbol, MODE_MINLOT),
       MarketInfo(symbol, MODE_MAXLOT),
-      MarketInfo(symbol, MODE_LOTSTEP)
+      MarketInfo(symbol, MODE_LOTSTEP),
+      (int)MarketInfo(symbol, MODE_TRADEALLOWED)
    );
 }
 

@@ -291,8 +291,13 @@ class AgentOrchestrator:
         available = set(self.client.get_symbols() or [])
         print(console.dim("  Disponibilidad de agentes:"))
         for agent in self.agents:
-            ready = (not available) or (agent.symbol in available)
-            estado = console.ok("disponible") if ready else console.err("NO DISPONIBLE en el broker")
+            in_broker = (not available) or (agent.symbol in available)
+            if not in_broker:
+                estado = console.err("NO DISPONIBLE en el broker")
+            elif not self.client.is_market_open(agent.symbol):
+                estado = console.warn("NO DISPONIBLE — mercado cerrado")
+            else:
+                estado = console.ok("disponible")
             print(f"    {console.dim('·')} {agent.name} [{console.info(agent.symbol)}]: {estado}")
 
         mode = "mesa de dirección" if self.coordinator is not None else "clásico por agente"
@@ -532,6 +537,12 @@ class AgentOrchestrator:
         symbol = agent.symbol
         print(f"\n  {console.accent('▸')} {console.bold(agent.name)} "
               f"{console.dim('analiza')} {console.info(symbol)}")
+
+        # Mercado cerrado (fin de semana / fuera de sesión): no analizamos ni
+        # gastamos LLM. El símbolo figura como NO DISPONIBLE hasta que reabra.
+        if not self.client.is_market_open(symbol):
+            print("  " + console.warn(f"⏸ {symbol}: mercado cerrado — no disponible, análisis omitido."))
+            return None
 
         tick = self.client.get_tick(symbol)
         if tick:
@@ -1153,6 +1164,9 @@ class AgentOrchestrator:
                 "description": agent.description,
                 "provider": p.provider,
                 "model": p.model,
+                # False = mercado cerrado (fin de semana / fuera de sesión): el
+                # agente figura como no disponible y no analiza hasta que reabra.
+                "market_open": self.client.is_market_open(agent.symbol),
                 "params": {
                     "min_confidence": p.min_confidence,
                     "min_rr": p.min_rr,

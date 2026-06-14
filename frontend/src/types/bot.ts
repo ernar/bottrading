@@ -69,6 +69,7 @@ export interface AgentInfo {
   description: string
   provider: string
   model: string
+  market_open: boolean
   params: AgentParams
   stats: { signals: number; trades: number; holds: number }
   performance: AgentPerformance

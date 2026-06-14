@@ -26,6 +26,15 @@ class BaseMTClient(ABC):
     @abstractmethod
     def get_tick(self, symbol: str) -> Optional[object]: ...
 
+    def is_market_open(self, symbol: str) -> bool:
+        """True si el mercado del símbolo admite operativa ahora mismo.
+
+        Las subclases que sepan distinguir mercado abierto/cerrado lo
+        sobreescriben (p. ej. MT4 vía MODE_TRADEALLOWED). Por defecto asume
+        abierto para no bloquear a clientes que no expongan el dato.
+        """
+        return True
+
     @abstractmethod
     def get_positions(self, symbol: Optional[str] = None) -> List: ...
 

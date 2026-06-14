@@ -33,7 +33,10 @@
       "Bash(python -m py_compile clients/mt4_client.py clients/base_client.py agents/orchestrator.py)",
       "Bash(python -m py_compile core/memory.py)",
       "Bash(python -c \"from core.memory import SignalMemory; m=SignalMemory\\(path='logs/_tmp_test.json'\\); print\\('OK', m._closed_trades\\)\")",
-      "Bash(python -m py_compile core/strategy.py)"
+      "Bash(python -m py_compile core/strategy.py)",
+      "Bash(python -m py_compile agents/registry.py)",
+      "Bash(python -m py_compile agents/orchestrator.py clients/mt4_client.py clients/base_client.py agents/registry.py)",
+      "Bash(python -c \"from agents.registry import AGENT_BLUEPRINTS, build_agent; print\\(list\\(AGENT_BLUEPRINTS\\)\\); a=build_agent\\('eurusd-agent'\\); print\\(a.name, a.symbol, a.params.provider, a.params.model\\)\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"

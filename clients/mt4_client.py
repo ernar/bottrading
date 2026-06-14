@@ -16,6 +16,9 @@ class SymbolInfo:
         self.volume_min = float(data.get("lot_min", 0.01))
         self.volume_max = float(data.get("lot_max", 100.0))
         self.volume_step = float(data.get("lot_step", 0.01))
+        # El broker pone MODE_TRADEALLOWED a 0 con el mercado cerrado. Si el EA
+        # es antiguo y no lo reporta, asumimos abierto (1) para no romper nada.
+        self.trade_allowed = bool(int(float(data.get("trade_allowed", 1))))
 
 
 class TickInfo:
@@ -144,6 +147,18 @@ class MT4Client(BaseMTClient):
         if not resp.startswith("OK|"):
             return None
         return SymbolInfo(self._parse_kv(resp[3:]))
+
+    def is_market_open(self, symbol: str) -> bool:
+        """True si el mercado del símbolo está abierto para operar.
+
+        Se apoya en MODE_TRADEALLOWED del broker (reportado por el EA): inmune a
+        la zona horaria. Fail-safe: si no se puede consultar el símbolo, asume
+        abierto para no bloquear el bot por un fallo puntual del bridge.
+        """
+        info = self.get_symbol_info(symbol)
+        if info is None:
+            return True
+        return getattr(info, "trade_allowed", True)
 
     def get_tick(self, symbol: str) -> Optional[TickInfo]:
         resp = self._send(f"TICK|{symbol}")
