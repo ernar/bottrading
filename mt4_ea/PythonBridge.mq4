@@ -94,7 +94,7 @@ string HandleCommand(string cmd)
    if(op == "SYMBOLS")        return GetSymbols();
    if(op == "SYMBOL_INFO" && count >= 2)  return GetSymbolInfo(parts[1]);
    if(op == "TICK"        && count >= 2)  return GetTick(parts[1]);
-   if(op == "OHLCV"       && count >= 3)  return GetOHLCV(parts[1], (int)StringToInteger(parts[2]));
+   if(op == "OHLCV"       && count >= 3)  return GetOHLCV(parts[1], (int)StringToInteger(parts[2]), count >= 4 ? parts[3] : "H1");
    if(op == "POSITIONS")  return GetPositions(count >= 2 ? parts[1] : "");
    if(op == "ORDERS")     return GetOrders();
    if(op == "PLACE_ORDER" && count >= 5)  return PlaceOrder(parts);
@@ -167,17 +167,45 @@ string GetTick(string symbol)
 }
 
 //+------------------------------------------------------------------+
-string GetOHLCV(string symbol, int bars)
+int TimeframeToPeriod(string tf)
+{
+   string t = tf;
+   StringToUpper(t);
+   if(t == "M1")  return PERIOD_M1;
+   if(t == "M5")  return PERIOD_M5;
+   if(t == "M15") return PERIOD_M15;
+   if(t == "M30") return PERIOD_M30;
+   if(t == "H1")  return PERIOD_H1;
+   if(t == "H4")  return PERIOD_H4;
+   if(t == "D1")  return PERIOD_D1;
+   if(t == "W1")  return PERIOD_W1;
+   if(t == "MN1") return PERIOD_MN1;
+   return PERIOD_H1;
+}
+
+string GetOHLCV(string symbol, int bars, string timeframe)
 {
    if(!SymbolSelect(symbol, true))
       return "ERROR|symbol not found: " + symbol;
    if(bars <= 0 || bars > 500) bars = 20;
 
+   int tf = TimeframeToPeriod(timeframe);
+
+   // IMPORTANTE: usar iOpen/iHigh/... con symbol+timeframe explicitos.
+   // Los arrays de serie Open[]/Close[]/... estan ligados al simbolo/periodo
+   // del GRAFICO donde cuelga el EA, NO al simbolo pedido: usarlos devolvia las
+   // velas del grafico a TODOS los simbolos (EURUSD recibia velas de BTCUSD, etc.).
+   int available = iBars(symbol, tf);
+   if(available <= 0)
+      return "ERROR|no data for " + symbol;
+   if(bars > available) bars = available;
+
    string result = "OK|";
    for(int i = bars - 1; i >= 0; i--) {
       if(i < bars - 1) result += ";";
       result += StringFormat("%d,%.10f,%.10f,%.10f,%.10f,%d",
-         (int)Time[i], Open[i], High[i], Low[i], Close[i], (long)Volume[i]);
+         (int)iTime(symbol, tf, i), iOpen(symbol, tf, i), iHigh(symbol, tf, i),
+         iLow(symbol, tf, i), iClose(symbol, tf, i), (long)iVolume(symbol, tf, i));
    }
    return result;
 }
