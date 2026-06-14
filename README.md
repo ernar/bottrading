@@ -39,7 +39,8 @@ mt4_ollama_bot/
 │   ├── agents/              # Memoria aislada por agente (<name>_memory.json)
 │   └── mt4/
 │       ├── signals.csv      # Historial de señales generadas
-│       └── trades.csv       # Historial de órdenes ejecutadas
+│       ├── trades.csv       # Historial de órdenes ejecutadas
+│       └── equity.csv       # Evolución de balance/equity (gráfico del dashboard)
 └── frontend/                # Dashboard React + TypeScript + Tailwind
 ```
 
@@ -150,6 +151,8 @@ MAX_DAILY_LOSS_PCT=0.05   # cooldown si la pérdida del día supera el 5% (0 = d
 > Los umbrales y símbolos **no se eligen en el menú**: cada agente trae los suyos en su blueprint (`agents/registry.py`). Se pueden **sobreescribir por `.env`** con precedencia símbolo > modelo > default (p. ej. `MAX_OPEN_POSITIONS_BTCUSD`, `MIN_CONFIDENCE_BTCUSD`, `COMMISSION_PER_LOT`…); ver [`.env.example`](.env.example) para la lista completa. El **modelo** se elige al arrancar (menú) o en caliente desde el dashboard.
 
 > Si activas `API_TOKEN`, el dashboard debe enviarlo: define `VITE_API_TOKEN` (con el mismo valor) en `frontend/.env`.
+
+> La **URL del backend** y el **token** también se configuran en caliente desde la pestaña **Ajustes** del dashboard (se guardan en el navegador y tienen prioridad sobre `VITE_API_URL`/`VITE_API_TOKEN`). Útil para apuntar el dashboard a un backend en otra máquina sin recompilar. El botón **Probar conexión** valida la URL contra `/api/state`.
 
 ### Elegir el modelo de cada agente
 

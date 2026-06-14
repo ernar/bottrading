@@ -14,7 +14,7 @@ from datetime import date, datetime
 from core import console
 from core.state import bot_state
 from core.bot_state import Trade
-from core.logger import log_trade, log_closed_trade
+from core.logger import log_trade, log_closed_trade, log_equity
 from core.trade_metrics import calc_trade_metrics
 from agents.base_agent import AgentParams
 from agents.positions import _pos_get, _pos_to_float, _pos_direction
@@ -193,6 +193,10 @@ class AgentOrchestrator:
         self._last_news_poll = clock
         self._last_junta = clock
         self._last_report = clock
+        # Registro de la evolución de la cartera (equity.csv) para el gráfico del
+        # dashboard. Se loguea como mucho cada equity_log_seconds (default 60s).
+        self.equity_log_seconds = self.schedule_cfg.get("equity_log_seconds", 60)
+        self._last_equity_log = 0.0  # 0 = registrar en la primera rotación
         # Control de pérdida diaria (0 = desactivado). Al tocarlo se entra en
         # cooldown (no se abren operaciones), no se detiene el bot.
         self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
@@ -228,6 +232,7 @@ class AgentOrchestrator:
                 if account_info:
                     bot_state.update_account(account_info)
                     self._check_daily_loss_guard(account_info)
+                    self._log_equity_snapshot(account_info)
 
                 if not bot_state.bot_running:
                     time.sleep(5)
@@ -377,6 +382,28 @@ class AgentOrchestrator:
                       f"{ev.get('title', '?')} {meta}. "
                       f"Forzando análisis del especialista vía mesa.")
         return forced
+
+    def _log_equity_snapshot(self, account_info: dict):
+        """Registra una instantánea de la cartera en equity.csv, con throttle
+        (equity_log_seconds) para no inflar el fichero. Tolerante a fallos: un
+        error de escritura nunca debe tumbar el loop."""
+        now = time.monotonic()
+        if not self._due(self._last_equity_log, self.equity_log_seconds, now):
+            return
+        self._last_equity_log = now
+        equity = account_info.get("equity") or 0
+        if equity <= 0:
+            return
+        platform = (account_info.get("platform") or "mt4").lower()
+        try:
+            log_equity(
+                balance=account_info.get("balance") or 0,
+                equity=equity,
+                free_margin=account_info.get("free_margin") or 0,
+                platform=platform,
+            )
+        except OSError:
+            pass
 
     def _check_daily_loss_guard(self, account_info: dict):
         """Control de pérdida diaria por *cooldown* (no detiene el bot).

@@ -19,6 +19,8 @@ CLOSED_TRADES_HEADERS = [
     "close_reason",
 ]
 
+EQUITY_HEADERS = ["timestamp", "platform", "balance", "equity", "free_margin"]
+
 
 def _signals_path(platform: str) -> str:
     return f"logs/{platform}/signals.csv"
@@ -30,6 +32,10 @@ def _trades_path(platform: str) -> str:
 
 def _closed_trades_path(platform: str) -> str:
     return f"logs/{platform}/closed_trades.csv"
+
+
+def _equity_path(platform: str) -> str:
+    return f"logs/{platform}/equity.csv"
 
 
 def _ensure_file(path: str, headers: list):
@@ -85,6 +91,49 @@ def log_trade(symbol: str, action: str, volume: float, price: float,
     ]
     with open(path, "a", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow(row)
+
+
+def log_equity(balance: float, equity: float, free_margin: float = 0.0,
+               platform: str = "mt4"):
+    """Registra una instantánea de la cartera (balance/equity) para dibujar su
+    evolución en el dashboard. El llamante decide la cadencia (throttle)."""
+    path = _equity_path(platform)
+    _ensure_file(path, EQUITY_HEADERS)
+    row = [
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        platform.upper(),
+        f"{balance:.2f}", f"{equity:.2f}", f"{free_margin:.2f}",
+    ]
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(row)
+
+
+def read_equity_series(platform: str = "mt4", limit: int = 500) -> list:
+    """Devuelve la serie de equity como lista de puntos
+    ``{"t", "balance", "equity"}`` ordenada por tiempo. Si hay más filas que
+    `limit`, submuestrea de forma uniforme conservando el primer y último punto.
+    """
+    path = _equity_path(platform)
+    if not os.path.exists(path):
+        return []
+    points = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            try:
+                points.append({
+                    "t": r.get("timestamp", ""),
+                    "balance": float(r.get("balance", 0) or 0),
+                    "equity": float(r.get("equity", 0) or 0),
+                })
+            except ValueError:
+                continue  # fila corrupta: se ignora
+    if limit and len(points) > limit:
+        # Submuestreo uniforme: paso = n/limit, manteniendo el último punto.
+        step = len(points) / limit
+        sampled = [points[int(i * step)] for i in range(limit)]
+        sampled[-1] = points[-1]
+        points = sampled
+    return points
 
 
 def log_closed_trade(symbol: str, action: str, volume: float, entry_price: float,

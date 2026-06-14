@@ -1,15 +1,14 @@
 import axios from 'axios'
 import { BotState, Signal, Position, Trade, AccountInfo } from '../types/bot'
+import { getApiUrl, getApiHeaders } from '../config'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
-const API_TOKEN = import.meta.env.VITE_API_TOKEN || ''
+const API_URL = getApiUrl()
 
 const api = axios.create({
   baseURL: API_URL,
   timeout: 10000,
-  // Si el backend tiene API_TOKEN configurado, las rutas que mutan estado
-  // (start/stop, cerrar posición...) exigen esta cabecera.
-  headers: API_TOKEN ? { 'X-API-Token': API_TOKEN } : {},
+  // Token (si el backend lo exige) + skip de la advertencia de ngrok.
+  headers: getApiHeaders(),
 })
 
 export function useApi() {

@@ -23,7 +23,7 @@ export function PositionsPage({ state }: PositionsPageProps) {
 
   if (Object.keys(positions).length === 0) {
     return (
-      <div className="p-8">
+      <div className="p-4 sm:p-8">
         <h2 className="text-xl font-bold mb-4">Open Positions</h2>
         <div className="bg-gray-800 text-gray-400 p-8 rounded text-center">
           No open positions

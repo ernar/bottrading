@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { AgentsOverview } from '../types/bot'
+import { getApiUrl, getApiHeaders } from '../config'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = getApiUrl()
 
 export function AgentsPage() {
   const [overview, setOverview] = useState<AgentsOverview | null>(null)
@@ -9,7 +10,7 @@ export function AgentsPage() {
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
-    fetch(`${API_URL}/api/agents`)
+    fetch(`${API_URL}/api/agents`, { headers: getApiHeaders() })
       .then(r => r.json())
       .then(setOverview)
       .catch(() => {})
@@ -17,7 +18,7 @@ export function AgentsPage() {
 
   useEffect(() => {
     load()
-    fetch(`${API_URL}/api/models`)
+    fetch(`${API_URL}/api/models`, { headers: getApiHeaders() })
       .then(r => r.json())
       .then(setModels)
       .catch(() => {})
@@ -29,7 +30,7 @@ export function AgentsPage() {
     setBusy(true)
     fetch(`${API_URL}/api/agents/${name}/model`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
       body: JSON.stringify({ provider, model }),
     })
       .then(r => r.json())
@@ -42,7 +43,7 @@ export function AgentsPage() {
     setBusy(true)
     fetch(`${API_URL}/api/agents/optimize`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
       body: JSON.stringify({ apply }),
     })
       .then(r => r.json())
@@ -56,7 +57,7 @@ export function AgentsPage() {
 
   if (agents.length === 0) {
     return (
-      <div className="p-8">
+      <div className="p-4 sm:p-8">
         <div className="bg-gray-800 text-gray-400 p-8 rounded text-center">
           No hay agentes activos. Arranca el sistema agéntico (<code>python main.py</code>) y
           selecciona al menos un agente.
@@ -66,9 +67,9 @@ export function AgentsPage() {
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-8 space-y-8">
       <section>
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h2 className="text-xl font-bold">Agentes activos</h2>
           <div className="flex gap-2">
             <button

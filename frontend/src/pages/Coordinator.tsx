@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Coordination, CoordinatorDecision, CoordinatorOverview } from '../types/bot'
+import { getApiUrl, getApiHeaders } from '../config'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = getApiUrl()
 
 const pct = (n: number | null | undefined, dp = 1) =>
   n === null || n === undefined ? 'n/a' : `${(n * 100).toFixed(dp)}%`
@@ -13,7 +14,7 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
-    fetch(`${API_URL}/api/coordinator`)
+    fetch(`${API_URL}/api/coordinator`, { headers: getApiHeaders() })
       .then(r => r.json())
       .then(setOverview)
       .catch(() => {})
@@ -27,7 +28,7 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
 
   const forceDecision = () => {
     setBusy(true)
-    fetch(`${API_URL}/api/coordinator/decide`, { method: 'POST' })
+    fetch(`${API_URL}/api/coordinator/decide`, { method: 'POST', headers: getApiHeaders() })
       .then(r => r.json())
       .then(() => load())
       .catch(() => {})
@@ -36,7 +37,7 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
 
   if (overview && overview.enabled === false) {
     return (
-      <div className="p-8">
+      <div className="p-4 sm:p-8">
         <div className="bg-gray-800 text-gray-400 p-8 rounded text-center">
           La mesa de dirección está desactivada. Arranca el bot con
           <code className="mx-1">COORDINATOR_ENABLED=true</code>
@@ -54,9 +55,9 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
   for (const d of coordination?.decisions || []) decisionBySymbol[d.symbol] = d
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-8 space-y-8">
       <section>
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
           <h2 className="text-xl font-bold">Mesa de dirección</h2>
           <button
             onClick={forceDecision}

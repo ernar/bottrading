@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { BotState, Signal, Position, AccountInfo, Trade, Coordination } from '../types/bot'
+import { getApiUrl, getApiHeaders } from '../config'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = getApiUrl()
 
 export function useWebSocket() {
   const [state, setState] = useState<BotState | null>(null)
@@ -18,6 +19,9 @@ export function useWebSocket() {
       reconnectionDelayMax: 5000,
       reconnectionAttempts: Infinity,
       timeout: 20000,
+      // El handshake va por polling (XHR): manda las cabeceras (token + skip de
+      // la advertencia de ngrok) para que no falle tras un túnel ngrok-free.
+      extraHeaders: getApiHeaders(),
     })
 
     socketRef.current = socket

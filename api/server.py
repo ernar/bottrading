@@ -145,6 +145,16 @@ def get_csv_trades():
     return jsonify(_read_csv_rows(f"logs/{platform}/trades.csv", limit)), 200
 
 
+@app.route("/api/equity", methods=["GET"])
+def get_equity():
+    """Serie temporal de la cartera (balance/equity) para el gráfico de evolución
+    del dashboard. Submuestreada a `limit` puntos."""
+    from core.logger import read_equity_series
+    limit = int(request.args.get("limit", 500))
+    platform = request.args.get("platform", "mt4").lower()
+    return jsonify(read_equity_series(platform, limit)), 200
+
+
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """Estadísticas agregadas de señales (CSV) y memoria de resultados."""

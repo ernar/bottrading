@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BotState, Signal } from '../types/bot'
 import { StatusBadge } from '../components/StatusBadge'
+import { getApiUrl, getApiHeaders } from '../config'
 
 interface CsvSignal {
   timestamp: string
@@ -25,10 +26,10 @@ export function SignalsPage({ state }: SignalsPageProps) {
   const liveSignals = Object.values(state?.signals || {})
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+  const API_URL = getApiUrl()
 
   useEffect(() => {
-    fetch(`${API_URL}/api/csv/signals?limit=15&platform=${platform}`)
+    fetch(`${API_URL}/api/csv/signals?limit=15&platform=${platform}`, { headers: getApiHeaders() })
       .then(r => r.json())
       .then(setCsvSignals)
       .catch(() => {})
@@ -41,7 +42,7 @@ export function SignalsPage({ state }: SignalsPageProps) {
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-8 space-y-8">
       {liveSignals.length > 0 && (
         <section>
           <h2 className="text-xl font-bold mb-4">Live Signals (session)</h2>

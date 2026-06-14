@@ -68,10 +68,23 @@ This project uses Tailwind CSS for styling. All colors and themes are defined in
 
 ## Troubleshooting
 
-### Dashboard won't connect to API
-- Ensure Flask server is running on port 5000
-- Check that CORS is enabled in `api_server.py`
-- Verify your `.env` file has the correct `VITE_API_URL`
+### Dashboard won't connect to API ("Failed to fetch")
+- Ensure the Flask server is running (`python main.py` on port 5000). "Failed to
+  fetch" / "No se pudo conectar" almost always means the backend isn't started.
+- Check that CORS is enabled in `api/server.py`
+- Set the URL from the **Ajustes** tab in the dashboard (saved per-browser,
+  overrides `VITE_API_URL`), or via `VITE_API_URL` in `.env`. Use **Probar
+  conexión** there to diagnose.
+
+### Using an ngrok tunnel ("Failed to fetch" with a *.ngrok-free.dev URL)
+- Free ngrok tunnels show a browser interstitial warning page. `fetch`/XHR/
+  WebSocket requests receive that HTML (without CORS headers), so the browser
+  reports "Failed to fetch" even though the URL opens fine in the browser tab.
+- The dashboard already sends the `ngrok-skip-browser-warning` header on every
+  request (axios, WebSocket and direct fetches) to bypass it — see
+  `getApiHeaders()` in `src/config.ts`. Just refresh, set the URL in **Ajustes**
+  and **Probar conexión**.
+- Paid ngrok domains have no interstitial; the header is harmless there too.
 
 ### WebSocket connection fails
 - Check browser console for error messages

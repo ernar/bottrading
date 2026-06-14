@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { BotState, Signal } from '../types/bot'
 import { StatusBadge } from '../components/StatusBadge'
+import { PortfolioChart, EquityPoint } from '../components/PortfolioChart'
+import { getApiUrl, getApiHeaders } from '../config'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = getApiUrl()
 
 interface Stats {
   signals_total: number
@@ -89,26 +91,45 @@ function SignalCard({ signal }: { signal: Signal }) {
 
 export function DashboardPage({ state }: DashboardPageProps) {
   const [stats, setStats] = useState<Stats | null>(null)
+  const [equity, setEquity] = useState<EquityPoint[]>([])
   const liveSignals = Object.values(state?.signals || {})
   const positions = Object.values(state?.positions || {})
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
+  const liveEquity = state?.account_info?.equity
 
   useEffect(() => {
-    const load = () =>
-      fetch(`${API_URL}/api/stats?platform=${platform}`)
+    const load = () => {
+      fetch(`${API_URL}/api/stats?platform=${platform}`, { headers: getApiHeaders() })
         .then(r => r.json())
         .then(setStats)
         .catch(() => {})
+      fetch(`${API_URL}/api/equity?platform=${platform}&limit=500`, { headers: getApiHeaders() })
+        .then(r => r.json())
+        .then(setEquity)
+        .catch(() => {})
+    }
     load()
     const interval = setInterval(load, 30000)
     return () => clearInterval(interval)
   }, [platform, liveSignals.length])
 
+  // Punto en vivo: añade el equity actual (WebSocket) como último punto para que
+  // el gráfico se mueva sin esperar al próximo refresco/registro del backend.
+  const equitySeries: EquityPoint[] =
+    liveEquity != null && equity.length > 0 && equity[equity.length - 1].equity !== liveEquity
+      ? [...equity, { t: 'now', equity: liveEquity }]
+      : equity
+
   const floatingPnl = positions.reduce((sum, p) => sum + (p.profit || 0), 0)
   const winRate = stats?.memory.win_rate
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-8 space-y-8">
+      <section>
+        <h2 className="text-xl font-bold mb-4">Evolución de la cartera</h2>
+        <PortfolioChart points={equitySeries} />
+      </section>
+
       <section>
         <h2 className="text-xl font-bold mb-4">Resumen</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">

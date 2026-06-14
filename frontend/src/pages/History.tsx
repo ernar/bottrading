@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BotState, Trade } from '../types/bot'
+import { getApiUrl, getApiHeaders } from '../config'
 
 interface CsvTrade {
   timestamp: string
@@ -23,10 +24,10 @@ export function HistoryPage({ state }: HistoryPageProps) {
   const sessionTrades = state?.closed_trades || []
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+  const API_URL = getApiUrl()
 
   useEffect(() => {
-    fetch(`${API_URL}/api/csv/trades?limit=50&platform=${platform}`)
+    fetch(`${API_URL}/api/csv/trades?limit=50&platform=${platform}`, { headers: getApiHeaders() })
       .then(r => r.json())
       .then(setCsvTrades)
       .catch(() => {})
@@ -42,7 +43,7 @@ export function HistoryPage({ state }: HistoryPageProps) {
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-8 space-y-8">
       {sessionTrades.length > 0 && (
         <section>
           <h2 className="text-xl font-bold mb-4">Closed Trades (session)</h2>

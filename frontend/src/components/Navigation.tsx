@@ -7,6 +7,7 @@ const LINKS = [
   { to: '/signals', label: 'Signals' },
   { to: '/positions', label: 'Positions' },
   { to: '/history', label: 'History' },
+  { to: '/settings', label: 'Ajustes' },
 ]
 
 export function Navigation() {
@@ -17,12 +18,13 @@ export function Navigation() {
 
   return (
     <nav className="bg-gray-800 border-b border-gray-700">
-      <div className="flex gap-6 px-6">
+      {/* En móvil los enlaces no caben: scroll horizontal sin saltos de línea. */}
+      <div className="flex gap-1 sm:gap-4 px-2 sm:px-6 overflow-x-auto whitespace-nowrap">
         {LINKS.map(({ to, label }) => (
           <Link
             key={to}
             to={to}
-            className={`px-4 py-3 hover:bg-gray-700 hover:text-white transition ${isActive(to)}`}
+            className={`px-3 sm:px-4 py-3 text-sm sm:text-base shrink-0 hover:bg-gray-700 hover:text-white transition ${isActive(to)}`}
           >
             {label}
           </Link>
