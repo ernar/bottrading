@@ -79,6 +79,9 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
         </p>
       </section>
 
+      {/* Diagrama de flujo de información mesa ↔ agentes */}
+      <FlowDiagram coordination={coordination} overview={overview} />
+
       {/* Resumen de cartera */}
       {snap ? (
         <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -156,6 +159,143 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
           </div>
         )}
       </section>
+    </div>
+  )
+}
+
+// Diagrama del flujo de información: los especialistas reportan señales → la
+// mesa (RiskBook snapshot → Director LLM → topes/clamp) decide → ejecución por
+// prioridad. Cada símbolo es un "carril" con su propuesta y su veredicto.
+function FlowDiagram({
+  coordination, overview,
+}: { coordination: Coordination | null; overview: CoordinatorOverview | null }) {
+  const decisions = coordination?.decisions || []
+  const snap = coordination?.snapshot
+  const symbols = snap ? Object.keys(snap.symbols) : decisions.map(d => d.symbol)
+  const decBySym: Record<string, CoordinatorDecision> = {}
+  for (const d of decisions) decBySym[d.symbol] = d
+
+  const actionColors: Record<string, string> = {
+    close: 'bg-red-900 text-red-200',
+    reduce: 'bg-yellow-900 text-yellow-200',
+    hedge: 'bg-indigo-900 text-indigo-200',
+    hold: 'bg-gray-700 text-gray-300',
+  }
+
+  return (
+    <section>
+      <h3 className="text-lg font-bold mb-3">Flujo de información</h3>
+      {/* Tubería de 3 fases */}
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1.4fr_auto_1fr] gap-2 items-stretch">
+        <StageCard
+          title="① Especialistas"
+          accent="text-cyan-300"
+          lines={[
+            `${symbols.length} agente${symbols.length === 1 ? '' : 's'} por símbolo`,
+            'Analizan H1/H4 + noticias',
+            'Reportan señal a la mesa',
+          ]}
+        />
+        <FlowArrow label="recolecta" />
+        <StageCard
+          title="② Mesa de dirección"
+          accent="text-emerald-300"
+          lines={[
+            'RiskBook · snapshot (equity/exposición)',
+            `Director LLM · ${overview?.provider?.toUpperCase() || '—'}/${overview?.model || '—'}`,
+            'Topes duros · clamp (exposición/reversión)',
+          ]}
+          highlight
+        />
+        <FlowArrow label="decide" />
+        <StageCard
+          title="③ Ejecución"
+          accent="text-amber-300"
+          lines={[
+            'Ordenada por prioridad',
+            'Abre entradas aprobadas',
+            'Gestiona close/reduce/hedge',
+          ]}
+        />
+      </div>
+
+      {/* Carriles por símbolo: propuesta del agente → veredicto de la mesa */}
+      {symbols.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {symbols.map(sym => {
+            const d = decBySym[sym]
+            const s = snap?.symbols[sym]
+            return (
+              <div
+                key={sym}
+                className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 bg-gray-800/60 rounded-lg border border-gray-700 px-3 py-2 text-xs"
+              >
+                {/* Especialista */}
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono text-cyan-300">{sym}</span>
+                  {s && (
+                    <span className="text-gray-500 truncate">
+                      {s.long_positions}L/{s.short_positions}S · neto {s.net_direction}
+                    </span>
+                  )}
+                </div>
+                {/* Flecha con prioridad/asignación */}
+                <div className="flex items-center gap-1 text-gray-500 whitespace-nowrap">
+                  {d && <span className="text-[10px] text-gray-400">P{d.priority} · {pct(d.allocation_pct, 0)}</span>}
+                  <span className="text-emerald-400">→</span>
+                </div>
+                {/* Veredicto de la mesa */}
+                <div className="flex items-center justify-end gap-2 flex-wrap">
+                  {d ? (
+                    <>
+                      <span className={`px-2 py-0.5 rounded ${d.approve ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`}>
+                        {d.approve ? 'aprobada' : 'vetada'}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded ${actionColors[d.position_action] || 'bg-gray-700 text-gray-300'}`}>
+                        {d.position_action}{d.manage_direction ? ` (${d.manage_direction})` : ''}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-gray-500">sin decisión</span>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {symbols.length === 0 && (
+        <div className="mt-3 bg-gray-800 text-gray-400 p-4 rounded text-center text-xs">
+          Aún no hay flujo: se dibujará tras la primera coordinación.
+        </div>
+      )}
+    </section>
+  )
+}
+
+function StageCard({
+  title, lines, accent, highlight = false,
+}: { title: string; lines: string[]; accent: string; highlight?: boolean }) {
+  return (
+    <div className={`rounded-lg p-4 border ${highlight ? 'border-emerald-700/60 bg-emerald-950/20' : 'border-gray-700 bg-gray-800'}`}>
+      <div className={`text-sm font-bold mb-2 ${accent}`}>{title}</div>
+      <ul className="space-y-1 text-xs text-gray-300">
+        {lines.map((l, i) => (
+          <li key={i} className="flex gap-1.5">
+            <span className="text-gray-600">•</span>
+            <span className="min-w-0">{l}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function FlowArrow({ label }: { label: string }) {
+  return (
+    <div className="flex md:flex-col items-center justify-center text-gray-500 px-1">
+      <span className="text-2xl text-emerald-400 animate-pulse">→</span>
+      <span className="text-[10px] uppercase tracking-wide md:mt-1">{label}</span>
     </div>
   )
 }

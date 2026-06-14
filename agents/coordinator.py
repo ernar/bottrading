@@ -170,6 +170,21 @@ class RiskBook:
         if day_start_equity and day_start_equity > 0:
             daily_pnl_pct = (equity - day_start_equity) / day_start_equity
 
+        # Factor margen/nocional: la exposición POR SÍMBOLO se mide en MARGEN
+        # real (como la total = used_margin/equity), no en nocional bruto. El
+        # nocional (volume×precio×contrato) de instrumentos apalancados —cripto,
+        # índices— es muchas veces el equity y daba %s absurdos (p. ej. 1616%)
+        # incomparables con el tope del 40%. Repartimos el margen usado por la
+        # cuota de nocional de cada símbolo: sum(margen_símbolo) = used_margin y,
+        # con un solo símbolo, su exposición coincide con la total (lo correcto).
+        total_notional = sum(d["notional"] for d in per_symbol.values())
+        if total_notional > 0 and used_margin > 0:
+            margin_factor = used_margin / total_notional
+        else:
+            # Sin margen real reportado: aproxima por leverage (margen≈nocional/lev).
+            leverage = float(account.get("leverage") or 0) or 1.0
+            margin_factor = 1.0 / leverage
+
         empty = {"notional": 0.0, "profit": 0.0, "count": 0,
                  "long_notional": 0.0, "short_notional": 0.0,
                  "long_vol": 0.0, "short_vol": 0.0, "long_count": 0, "short_count": 0,
@@ -178,7 +193,9 @@ class RiskBook:
         for agent in agents:
             sym = agent.symbol
             ps = per_symbol.get(sym, empty)
-            used_pct = (ps["notional"] / equity) if equity > 0 else 0.0
+            # Margen aproximado del símbolo = nocional × factor (margen/nocional).
+            symbol_margin = ps["notional"] * margin_factor
+            used_pct = (symbol_margin / equity) if equity > 0 else 0.0
             # Sesgo neto: nocional de largos - cortos (con signo). FLAT si se netea.
             net_notional = ps["long_notional"] - ps["short_notional"]
             net_volume = round(ps["long_vol"] - ps["short_vol"], 6)
@@ -193,7 +210,7 @@ class RiskBook:
                 "exposure_notional": round(ps["notional"], 2),
                 "exposure_pct": round(used_pct, 4),
                 "gross_exposure_pct": round(used_pct, 4),
-                "net_exposure_pct": round((net_notional / equity) if equity > 0 else 0.0, 4),
+                "net_exposure_pct": round((net_notional * margin_factor / equity) if equity > 0 else 0.0, 4),
                 "net_volume": net_volume,
                 "net_direction": net_dir,
                 "long_positions": ps["long_count"],

@@ -44,7 +44,10 @@ export function Header({ state, connected }: HeaderProps) {
     return (
       <header className="bg-gray-900 text-white p-4 border-b border-gray-700">
         <div className="flex justify-between items-center gap-2">
-          <h1 className="text-xl sm:text-2xl font-bold">Trading Bot</h1>
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="GamerFurious Trading Bot" className="h-10 w-auto" />
+            <h1 className="text-xl sm:text-2xl font-bold">Trading Bot</h1>
+          </div>
           <StatusBadge status={connected ? 'connected' : 'disconnected'} label="API" />
         </div>
       </header>
@@ -61,6 +64,7 @@ export function Header({ state, connected }: HeaderProps) {
     <header className="bg-gray-900 text-white p-4 border-b border-gray-700">
       <div className="flex flex-wrap justify-between items-center gap-y-2 mb-4">
         <div className="flex items-center gap-3">
+          <img src="/logo.png" alt="GamerFurious Trading Bot" className="h-11 w-auto" />
           <h1 className="text-xl sm:text-2xl font-bold">{platform} Trading Bot</h1>
           {state.last_update && (
             <span className="text-xs text-gray-500 hidden sm:inline">

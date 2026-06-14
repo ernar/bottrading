@@ -52,23 +52,44 @@ export function PositionsPage({ state }: PositionsPageProps) {
           </thead>
           <tbody>
             {Object.entries(positions).map(([key, position]: [string, Position]) => {
-              const pnlColor = position.profit > 0 ? 'text-green-400' : 'text-red-400'
+              // Coacción defensiva: algún origen del bridge puede mandar números
+              // como string; Number() evita que .toFixed reviente el render.
+              const num = (v: unknown) => (v == null ? NaN : Number(v))
+              // Tolera ambos formatos: alias normalizados (backend al día) y
+              // claves crudas del EA (backend viejo / sin _normalize_position):
+              //   direction←type, stop_loss←sl, take_profit←tp,
+              //   current_price←open_price (fallback si no hay tick).
+              const raw = position as unknown as Record<string, unknown>
+              const pick = (...keys: string[]) => {
+                for (const k of keys) if (raw[k] != null && raw[k] !== '') return raw[k]
+                return undefined
+              }
+              const rawDir = String(pick('direction', 'type') ?? '').toUpperCase()
+              const direction = rawDir === '0' ? 'BUY' : rawDir === '1' ? 'SELL' : rawDir
+              const profit = num(pick('profit'))
+              const volume = num(pick('volume'))
+              const openPrice = num(pick('open_price', 'price'))
+              const currentPrice = num(pick('current_price', 'open_price', 'price'))
+              const sl = num(pick('stop_loss', 'sl'))
+              const tp = num(pick('take_profit', 'tp'))
+              const pnlColor = profit > 0 ? 'text-green-400' : 'text-red-400'
+              const fix = (v: number, d: number) => (Number.isFinite(v) ? v.toFixed(d) : 'N/A')
               return (
                 <tr key={key} className="border-b border-gray-700 hover:bg-gray-800">
                   <td className="px-6 py-4 font-semibold">{position.symbol}</td>
                   <td className="px-6 py-4">
-                    <span className={position.direction === 'BUY' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
-                      {position.direction}
+                    <span className={direction === 'BUY' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
+                      {direction || '—'}
                     </span>
                   </td>
-                  <td className="px-6 py-4">{position.volume.toFixed(2)}</td>
-                  <td className="px-6 py-4">{position.open_price.toFixed(5)}</td>
-                  <td className="px-6 py-4">{position.current_price.toFixed(5)}</td>
+                  <td className="px-6 py-4">{fix(volume, 2)}</td>
+                  <td className="px-6 py-4">{fix(openPrice, 5)}</td>
+                  <td className="px-6 py-4">{fix(currentPrice, 5)}</td>
                   <td className={`px-6 py-4 font-semibold ${pnlColor}`}>
-                    ${position.profit.toFixed(2)}
+                    ${fix(profit, 2)}
                   </td>
-                  <td className="px-6 py-4 text-red-400">{position.stop_loss?.toFixed(5) || 'N/A'}</td>
-                  <td className="px-6 py-4 text-green-400">{position.take_profit?.toFixed(5) || 'N/A'}</td>
+                  <td className="px-6 py-4 text-red-400">{sl ? fix(sl, 5) : 'N/A'}</td>
+                  <td className="px-6 py-4 text-green-400">{tp ? fix(tp, 5) : 'N/A'}</td>
                   <td className="px-6 py-4">
                     <button
                       onClick={() => handleClosePosition(position.symbol)}

@@ -108,20 +108,36 @@ def log_equity(balance: float, equity: float, free_margin: float = 0.0,
         csv.writer(f).writerow(row)
 
 
-def read_equity_series(platform: str = "mt4", limit: int = 500) -> list:
+def read_equity_series(platform: str = "mt4", limit: int = 500,
+                       since_seconds: int = 0) -> list:
     """Devuelve la serie de equity como lista de puntos
     ``{"t", "balance", "equity"}`` ordenada por tiempo. Si hay más filas que
     `limit`, submuestrea de forma uniforme conservando el primer y último punto.
+
+    `since_seconds` > 0 filtra a las filas cuyo timestamp esté dentro de esa
+    ventana (p. ej. 3600 = última hora). El filtro temporal se aplica ANTES del
+    submuestreo para conservar la resolución dentro del rango.
     """
     path = _equity_path(platform)
     if not os.path.exists(path):
         return []
+    cutoff = None
+    if since_seconds and since_seconds > 0:
+        cutoff = datetime.now().timestamp() - since_seconds
     points = []
     with open(path, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             try:
+                ts = r.get("timestamp", "")
+                if cutoff is not None:
+                    try:
+                        row_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").timestamp()
+                    except ValueError:
+                        continue  # timestamp ilegible: fuera del filtro
+                    if row_ts < cutoff:
+                        continue
                 points.append({
-                    "t": r.get("timestamp", ""),
+                    "t": ts,
                     "balance": float(r.get("balance", 0) or 0),
                     "equity": float(r.get("equity", 0) or 0),
                 })

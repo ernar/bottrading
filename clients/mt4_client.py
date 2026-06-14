@@ -71,6 +71,26 @@ class MT4Client(BaseMTClient):
                 return candidate
         return ""
 
+    def _safe_remove(self, path: str, retries: int = 20, delay: float = 0.05) -> bool:
+        """Borra un archivo del bridge tolerando que el EA lo tenga abierto.
+
+        En Windows, `os.remove` lanza PermissionError [WinError 32] si MetaTrader
+        mantiene un handle sobre el archivo en ese instante (está escribiendo la
+        respuesta). Reintentamos brevemente en vez de dejar reventar el roundtrip
+        entero. Devuelve True si el archivo ya no existe al terminar."""
+        for _ in range(retries):
+            if not os.path.exists(path):
+                return True
+            try:
+                os.remove(path)
+                return True
+            except FileNotFoundError:
+                return True
+            except PermissionError:
+                # El EA lo tiene abierto: esperamos a que suelte el handle.
+                time.sleep(delay)
+        return not os.path.exists(path)
+
     def _send(self, command: str, timeout: float = None) -> str:
         if not self._files_path:
             return "ERROR|MQL4/Files path not found"
@@ -79,9 +99,9 @@ class MT4Client(BaseMTClient):
 
         # Serializa el roundtrip completo: canal único compartido con el EA.
         with self._send_lock:
-            # Borrar respuesta previa
-            if os.path.exists(self._resp_file):
-                os.remove(self._resp_file)
+            # Borrar respuesta previa (tolerando que el EA aún la tenga abierta).
+            if not self._safe_remove(self._resp_file):
+                return "ERROR|no se pudo limpiar pb_resp.txt (EA ocupado)"
 
             # Escribir comando
             with open(self._cmd_file, "w", encoding="ascii") as f:
@@ -94,13 +114,13 @@ class MT4Client(BaseMTClient):
                     try:
                         with open(self._resp_file, "r", encoding="ascii") as f:
                             return f.read().strip()
-                    except Exception:
+                    except (PermissionError, OSError):
+                        # El EA aún está escribiendo: reintentamos en el próximo giro.
                         pass
                 time.sleep(0.05)
 
             # Timeout — limpiar
-            if os.path.exists(self._cmd_file):
-                os.remove(self._cmd_file)
+            self._safe_remove(self._cmd_file)
             return "ERROR|timeout waiting for EA response"
 
     def _parse_kv(self, payload: str) -> dict:
@@ -230,13 +250,64 @@ class MT4Client(BaseMTClient):
         if not payload:
             return []
         positions = []
+        tick_cache: dict = {}  # symbol -> precio actual (1 roundtrip por símbolo)
         for entry in payload.split(";"):
             if not entry:
                 continue
             data = self._parse_record(entry, self._position_fields(entry))
+            self._coerce_position_numbers(data)
+            self._normalize_position(data, tick_cache)
             positions.append(data)
         self._learn_commission(positions)
         return positions
+
+    # Campos numéricos de una posición: el parsing del EA los devuelve como
+    # strings, pero el estado/serialización y el frontend (p. ej. volume.toFixed)
+    # esperan números. Se convierten aquí, en el origen, de forma tolerante.
+    _POSITION_NUMERIC_FIELDS = ("volume", "open_price", "sl", "tp",
+                                "profit", "commission", "swap")
+
+    def _coerce_position_numbers(self, data: dict) -> None:
+        for field in self._POSITION_NUMERIC_FIELDS:
+            if field in data:
+                try:
+                    data[field] = float(data[field])
+                except (ValueError, TypeError):
+                    pass
+
+    def _normalize_position(self, data: dict, tick_cache: dict) -> None:
+        """Añade los alias que espera el frontend (Position) sin quitar las
+        claves originales del EA, que usan orquestador/coordinador (`type`,
+        `sl`, `tp`). Así la pestaña Positions deja de romper por campos ausentes.
+
+        - `direction`     ← `type` (BUY/SELL en mayúsculas)
+        - `current_price` ← tick actual del símbolo (bid/ask según el lado),
+                            con fallback a `open_price`
+        - `stop_loss`/`take_profit` ← `sl`/`tp`"""
+        raw_type = str(data.get("type", "")).upper()
+        # El EA puede mandar el tipo como número (0=BUY, 1=SELL) o como texto.
+        if raw_type in ("0", "BUY"):
+            direction = "BUY"
+        elif raw_type in ("1", "SELL"):
+            direction = "SELL"
+        else:
+            direction = raw_type or "BUY"
+        data["direction"] = direction
+
+        symbol = data.get("symbol")
+        if symbol and symbol not in tick_cache:
+            tick = self.get_tick(symbol)
+            # Al cerrar, un BUY se valora a bid y un SELL a ask; usamos el lado
+            # de salida para que el P/L mostrado sea coherente.
+            tick_cache[symbol] = tick if tick else None
+        tick = tick_cache.get(symbol)
+        if tick:
+            data["current_price"] = tick.bid if direction == "BUY" else tick.ask
+        else:
+            data["current_price"] = data.get("open_price", 0.0)
+
+        data.setdefault("stop_loss", data.get("sl", 0.0))
+        data.setdefault("take_profit", data.get("tp", 0.0))
 
     def _learn_commission(self, positions: List[dict]):
         """Deduce la comisión por lote de las posiciones reportadas y la cachea

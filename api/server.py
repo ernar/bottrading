@@ -152,7 +152,8 @@ def get_equity():
     from core.logger import read_equity_series
     limit = int(request.args.get("limit", 500))
     platform = request.args.get("platform", "mt4").lower()
-    return jsonify(read_equity_series(platform, limit)), 200
+    since_seconds = int(request.args.get("since", 0) or 0)
+    return jsonify(read_equity_series(platform, limit, since_seconds)), 200
 
 
 @app.route("/api/stats", methods=["GET"])

@@ -9,13 +9,16 @@ export interface EquityPoint {
 interface Props {
   points: EquityPoint[]
   height?: number
+  // Texto del rango temporal activo (p. ej. "últimas 1h") para aclarar a qué
+  // periodo se refiere el cambio mostrado.
+  rangeLabel?: string
 }
 
 // Gráfico de evolución de la cartera: línea verde luminosa sobre fondo oscuro,
 // estilo "terminal". SVG puro (sin librería) para controlar el efecto glow.
 // Mide su ancho con ResizeObserver y dibuja en píxeles para que el grosor del
 // trazo y el resplandor no se deformen al estirar el contenedor.
-export function PortfolioChart({ points, height = 220 }: Props) {
+export function PortfolioChart({ points, height = 220, rangeLabel }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   // id único por instancia para no colisionar los <defs> si hubiera varios.
@@ -79,8 +82,13 @@ export function PortfolioChart({ points, height = 220 }: Props) {
           <span className="text-gray-400 uppercase tracking-wide">Equity</span>
           <span className="font-semibold text-white">{fmt(last)}</span>
         </div>
-        <div className={up ? 'text-emerald-400' : 'text-red-400'}>
-          {up ? '▲' : '▼'} {signed(change)} ({up ? '+' : ''}{changePct.toFixed(2)}%)
+        <div className="flex items-baseline gap-2">
+          {rangeLabel && (
+            <span className="text-gray-500 normal-case tracking-normal">{rangeLabel}</span>
+          )}
+          <span className={up ? 'text-emerald-400' : 'text-red-400'}>
+            {up ? '▲' : '▼'} {signed(change)} ({up ? '+' : ''}{changePct.toFixed(2)}%)
+          </span>
         </div>
       </div>
 

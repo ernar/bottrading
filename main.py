@@ -92,11 +92,24 @@ def select_agents() -> list:
             break
         print("  No seleccionaste ningún agente válido.")
 
-    # 2) Elegir provider/modelo para cada agente seleccionado
+    # 2) Elegir provider/modelo. Se pregunta para el PRIMER agente y, si hay más,
+    #    se ofrece reutilizar ese mismo LLM para todos (Enter = sí) y no repetir
+    #    la elección agente por agente. Quien quiera modelos distintos responde
+    #    'n' y se le pregunta uno a uno como antes.
     agents = []
-    for bp in chosen:
-        print(console.accent(f"\n--- LLM para {bp.name} [{bp.symbol}] ---"))
-        provider, model = select_llm(bp.params.provider, bp.params.model)
+    shared_provider = shared_model = None
+    for i, bp in enumerate(chosen):
+        if shared_provider is not None:
+            provider, model = shared_provider, shared_model
+        else:
+            print(console.accent(f"\n--- LLM para {bp.name} [{bp.symbol}] ---"))
+            provider, model = select_llm(bp.params.provider, bp.params.model)
+            # Tras elegir el del primer agente, ofrecer aplicarlo a los demás.
+            if i == 0 and len(chosen) > 1:
+                ans = input(f"  ¿Usar {provider.upper()}/{model} para los {len(chosen)} "
+                            f"agentes? [S/n]: ").strip().lower()
+                if ans in ("", "s", "si", "sí", "y", "yes"):
+                    shared_provider, shared_model = provider, model
         agents.append(build_agent(bp.name, provider=provider, model=model))
         print(f"  {console.ok('✓')} {bp.name} usará {console.bold(f'{provider.upper()}/{model}')}")
     return agents

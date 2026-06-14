@@ -1,13 +1,41 @@
-import { useEffect, useState, useCallback } from 'react'
-import { AgentsOverview } from '../types/bot'
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { AgentsOverview, AgentInfo } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 
 const API_URL = getApiUrl()
+
+// Columnas ordenables de la tabla de agentes. `get` extrae el valor para
+// ordenar (número o texto); `align` controla la alineación de la celda.
+type SortKey =
+  | 'name' | 'symbol' | 'model' | 'market_open'
+  | 'signals' | 'trades' | 'holds'
+  | 'win_rate' | 'sl_hit_rate' | 'tp_hit_rate' | 'avg_move_pct'
+  | 'min_confidence' | 'min_rr' | 'atr_sl_mult' | 'lot_size'
+
+const COLUMNS: { key: SortKey; label: string; align: 'left' | 'right'; get: (a: AgentInfo) => number | string }[] = [
+  { key: 'name', label: 'Agente', align: 'left', get: a => a.name },
+  { key: 'symbol', label: 'Símbolo', align: 'left', get: a => a.symbol },
+  { key: 'model', label: 'Modelo', align: 'left', get: a => `${a.provider}/${a.model}` },
+  { key: 'market_open', label: 'Mercado', align: 'left', get: a => (a.market_open === false ? 0 : 1) },
+  { key: 'signals', label: 'Señales', align: 'right', get: a => a.stats.signals },
+  { key: 'trades', label: 'Trades', align: 'right', get: a => a.stats.trades },
+  { key: 'holds', label: 'Holds', align: 'right', get: a => a.stats.holds },
+  { key: 'win_rate', label: 'Win rate', align: 'right', get: a => a.performance.win_rate },
+  { key: 'sl_hit_rate', label: 'SL%', align: 'right', get: a => a.performance.sl_hit_rate },
+  { key: 'tp_hit_rate', label: 'TP%', align: 'right', get: a => a.performance.tp_hit_rate },
+  { key: 'avg_move_pct', label: 'Mov. medio', align: 'right', get: a => a.performance.avg_move_pct },
+  { key: 'min_confidence', label: 'Conf. mín.', align: 'right', get: a => a.params.min_confidence },
+  { key: 'min_rr', label: 'R:R mín.', align: 'right', get: a => a.params.min_rr },
+  { key: 'atr_sl_mult', label: 'ATR SL/TP', align: 'right', get: a => a.params.atr_sl_mult },
+  { key: 'lot_size', label: 'Lote', align: 'right', get: a => a.params.lot_size },
+]
 
 export function AgentsPage() {
   const [overview, setOverview] = useState<AgentsOverview | null>(null)
   const [models, setModels] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
+  const [sortKey, setSortKey] = useState<SortKey>('name')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
   const load = useCallback(() => {
     fetch(`${API_URL}/api/agents`, { headers: getApiHeaders() })
@@ -55,6 +83,27 @@ export function AgentsPage() {
   const pct = (n: number) => `${(n * 100).toFixed(0)}%`
   const agents = overview?.agents || []
 
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  const sortedAgents = useMemo(() => {
+    const col = COLUMNS.find(c => c.key === sortKey)
+    if (!col) return agents
+    const dir = sortDir === 'asc' ? 1 : -1
+    return [...agents].sort((a, b) => {
+      const va = col.get(a)
+      const vb = col.get(b)
+      if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir
+      return String(va).localeCompare(String(vb)) * dir
+    })
+  }, [agents, sortKey, sortDir])
+
   if (agents.length === 0) {
     return (
       <div className="p-4 sm:p-8">
@@ -89,60 +138,69 @@ export function AgentsPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          {agents.map(a => (
-            <div key={a.name} className="bg-gray-800 rounded-lg p-5 border border-gray-700">
-              <div className="flex items-baseline justify-between">
-                <h3 className="text-lg font-bold text-cyan-300">{a.name}</h3>
-                <div className="flex items-center gap-2">
-                  {a.market_open === false && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-amber-900 text-amber-200">
-                      Mercado cerrado
-                    </span>
-                  )}
-                  <span className="text-sm font-mono text-gray-400">{a.symbol}</span>
-                </div>
-              </div>
-              <p className="text-xs text-gray-400 mt-1">{a.description}</p>
-              <ModelSelector
-                provider={a.provider}
-                model={a.model}
-                models={models}
-                disabled={busy}
-                onChange={(p, m) => changeModel(a.name, p, m)}
-              />
-
-              <div className="grid grid-cols-3 gap-2 mt-4 text-center">
-                <Stat label="Señales" value={a.stats.signals} />
-                <Stat label="Trades" value={a.stats.trades} />
-                <Stat label="Holds" value={a.stats.holds} />
-              </div>
-
-              <div className="mt-4 text-xs text-gray-300 space-y-1">
-                <div className="font-semibold text-gray-400">Rendimiento (memoria)</div>
-                <div className="flex justify-between">
-                  <span>Win rate</span>
-                  <span>{pct(a.performance.win_rate)} ({a.performance.samples} señales)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>SL tocados / TP alcanzados</span>
-                  <span>{pct(a.performance.sl_hit_rate)} / {pct(a.performance.tp_hit_rate)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Movimiento medio</span>
-                  <span>{a.performance.avg_move_pct >= 0 ? '+' : ''}{a.performance.avg_move_pct}%</span>
-                </div>
-              </div>
-
-              <div className="mt-4 text-xs text-gray-300 space-y-1">
-                <div className="font-semibold text-gray-400">Parámetros</div>
-                <div className="flex justify-between"><span>Confianza mín.</span><span>{pct(a.params.min_confidence)}</span></div>
-                <div className="flex justify-between"><span>R:R mín.</span><span>1:{a.params.min_rr}</span></div>
-                <div className="flex justify-between"><span>ATR SL / TP</span><span>{a.params.atr_sl_mult}× / {a.params.atr_tp_mult}×</span></div>
-                <div className="flex justify-between"><span>Lote</span><span>{a.params.lot_size}</span></div>
-              </div>
-            </div>
-          ))}
+        <div className="overflow-x-auto bg-gray-800 rounded-lg border border-gray-700">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-700 text-gray-400">
+                {COLUMNS.map(col => {
+                  const active = col.key === sortKey
+                  return (
+                    <th
+                      key={col.key}
+                      onClick={() => toggleSort(col.key)}
+                      className={`px-3 py-2 font-semibold whitespace-nowrap cursor-pointer select-none hover:text-gray-200 ${
+                        col.align === 'right' ? 'text-right' : 'text-left'
+                      } ${active ? 'text-cyan-300' : ''}`}
+                    >
+                      {col.label}
+                      <span className="ml-1 text-xs">
+                        {active ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                      </span>
+                    </th>
+                  )
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedAgents.map(a => (
+                <tr key={a.name} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-700/30">
+                  <td className="px-3 py-2 font-bold text-cyan-300 whitespace-nowrap" title={a.description}>{a.name}</td>
+                  <td className="px-3 py-2 font-mono text-gray-300 whitespace-nowrap">{a.symbol}</td>
+                  <td className="px-3 py-2 min-w-[180px]">
+                    <ModelSelector
+                      provider={a.provider}
+                      model={a.model}
+                      models={models}
+                      disabled={busy}
+                      onChange={(p, m) => changeModel(a.name, p, m)}
+                    />
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {a.market_open === false ? (
+                      <span className="text-xs px-2 py-0.5 rounded bg-amber-900 text-amber-200">Cerrado</span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded bg-green-900 text-green-200">Abierto</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{a.stats.signals}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{a.stats.trades}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{a.stats.holds}</td>
+                  <td className="px-3 py-2 text-right tabular-nums" title={`${a.performance.samples} señales`}>
+                    {pct(a.performance.win_rate)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{pct(a.performance.sl_hit_rate)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{pct(a.performance.tp_hit_rate)}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${a.performance.avg_move_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {a.performance.avg_move_pct >= 0 ? '+' : ''}{a.performance.avg_move_pct}%
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{pct(a.params.min_confidence)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">1:{a.params.min_rr}</td>
+                  <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{a.params.atr_sl_mult}× / {a.params.atr_tp_mult}×</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{a.params.lot_size}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -218,11 +276,3 @@ function ModelSelector({
   )
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="bg-gray-900 rounded py-2">
-      <div className="text-lg font-bold">{value}</div>
-      <div className="text-xs text-gray-500">{label}</div>
-    </div>
-  )
-}

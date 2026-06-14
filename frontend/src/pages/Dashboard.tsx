@@ -90,9 +90,24 @@ function SignalCard({ signal }: { signal: Signal }) {
   )
 }
 
+// Rangos temporales del gráfico de evolución. `since` en segundos (0 = todo).
+// `desc` se muestra junto al cambio para aclarar el periodo.
+const EQUITY_RANGES = [
+  { key: '1h', label: '1H', since: 3600, desc: 'última hora' },
+  { key: '1d', label: '1D', since: 86400, desc: 'último día' },
+  { key: '1w', label: '1S', since: 604800, desc: 'última semana' },
+  { key: '1m', label: '1M', since: 2592000, desc: 'último mes' },
+  { key: 'all', label: 'Todo', since: 0, desc: 'histórico completo' },
+] as const
+
 export function DashboardPage({ state }: DashboardPageProps) {
   const [stats, setStats] = useState<Stats | null>(null)
   const [equity, setEquity] = useState<EquityPoint[]>([])
+  const [rangeKey, setRangeKey] = useState<string>('1d')
+  // Antigüedad (en segundos) del punto de equity más viejo registrado; sirve
+  // para atenuar los rangos cuya ventana excede la historia disponible.
+  const [spanSeconds, setSpanSeconds] = useState<number>(0)
+  const range = EQUITY_RANGES.find(r => r.key === rangeKey) ?? EQUITY_RANGES[4]
   const liveSignals = Object.values(state?.signals || {})
   const positions = Object.values(state?.positions || {})
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
@@ -104,15 +119,28 @@ export function DashboardPage({ state }: DashboardPageProps) {
         .then(r => r.json())
         .then(setStats)
         .catch(() => {})
-      fetch(`${API_URL}/api/equity?platform=${platform}&limit=500`, { headers: getApiHeaders() })
+      fetch(`${API_URL}/api/equity?platform=${platform}&limit=500&since=${range.since}`, { headers: getApiHeaders() })
         .then(r => r.json())
         .then(setEquity)
+        .catch(() => {})
+      // Consulta ligera (2 puntos) para conocer el punto más viejo y saber qué
+      // rangos tienen historia suficiente (atenuar los que excedan el span).
+      fetch(`${API_URL}/api/equity?platform=${platform}&limit=2&since=0`, { headers: getApiHeaders() })
+        .then(r => r.json())
+        .then((pts: EquityPoint[]) => {
+          if (Array.isArray(pts) && pts.length > 0) {
+            const oldest = new Date(pts[0].t.replace(' ', 'T')).getTime()
+            if (!Number.isNaN(oldest)) {
+              setSpanSeconds(Math.max(0, (Date.now() - oldest) / 1000))
+            }
+          }
+        })
         .catch(() => {})
     }
     load()
     const interval = setInterval(load, 30000)
     return () => clearInterval(interval)
-  }, [platform, liveSignals.length])
+  }, [platform, liveSignals.length, range.since])
 
   // Punto en vivo: añade el equity actual (WebSocket) como último punto para que
   // el gráfico se mueva sin esperar al próximo refresco/registro del backend.
@@ -123,14 +151,47 @@ export function DashboardPage({ state }: DashboardPageProps) {
       ? [...safeEquity, { t: 'now', equity: liveEquity }]
       : safeEquity
 
-  const floatingPnl = positions.reduce((sum, p) => sum + (p.profit || 0), 0)
+  // P/L flotante: misma fuente que el Header (equity - balance) para que ambos
+  // coincidan; el array de posiciones puede llegar vacío aunque el equity ya
+  // refleje el flotante. Fallback a la suma de posiciones si no hay account_info.
+  const account = state?.account_info
+  const floatingPnl = account
+    ? account.equity - account.balance
+    : positions.reduce((sum, p) => sum + (p.profit || 0), 0)
   const winRate = stats?.memory.win_rate
 
   return (
     <div className="p-4 sm:p-8 space-y-8">
       <section>
-        <h2 className="text-xl font-bold mb-4">Evolución de la cartera</h2>
-        <PortfolioChart points={equitySeries} />
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold">Evolución de la cartera</h2>
+          <div className="flex gap-1">
+            {EQUITY_RANGES.map(r => {
+              // Un rango está "disponible" si hay historia que lo cubra; "Todo"
+              // (since=0) siempre lo está. Sin span aún, no atenuamos nada.
+              const enough = r.since === 0 || spanSeconds === 0 || spanSeconds >= r.since
+              const active = rangeKey === r.key
+              return (
+                <button
+                  key={r.key}
+                  onClick={() => enough && setRangeKey(r.key)}
+                  disabled={!enough}
+                  title={enough ? r.desc : `Sin datos suficientes para ${r.desc}`}
+                  className={`px-2.5 py-1 text-xs rounded transition-colors ${
+                    active
+                      ? 'bg-emerald-500/20 text-emerald-400 font-semibold'
+                      : enough
+                        ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                        : 'text-gray-700 cursor-not-allowed'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <PortfolioChart points={equitySeries} rangeLabel={range.desc} />
       </section>
 
       <section>
