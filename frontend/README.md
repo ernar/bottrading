@@ -1,6 +1,6 @@
-# MT5 Trading Bot Dashboard
+# MT4 Trading Bot Dashboard
 
-React frontend dashboard for the MT5 Ollama Trading Bot.
+React frontend dashboard for the MT4 Ollama Trading Bot.
 
 ## Requirements
 

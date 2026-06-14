@@ -11,6 +11,7 @@ import threading
 import time
 from datetime import date, datetime
 
+from core import console
 from core.state import bot_state
 from core.bot_state import Trade
 from core.logger import log_trade
@@ -106,30 +107,35 @@ class _Spinner:
     """Spinner animado en un hilo aparte mientras se genera el análisis.
 
     A diferencia de un sleep fijo, gira de verdad durante toda la llamada al
-    LLM (que puede tardar varios segundos) y limpia su línea al terminar.
-    Se usa como context manager: ``with _Spinner("..."):``.
+    LLM (que puede tardar varios segundos). Al terminar deja un rastro corto
+    (``✓ (7.0s)``) en vez de desaparecer sin huella, para que el log conserve
+    cuánto tardó cada paso. Se usa como context manager: ``with _Spinner("..."):``.
     """
 
     FRAMES = ["|", "/", "-", "\\"]  # ASCII: se ve bien en cualquier consola Windows
 
-    def __init__(self, message: str, interval: float = 0.12):
+    def __init__(self, message: str, interval: float = 0.12, leave: bool = True):
         self.message = message
         self.interval = interval
+        self.leave = leave
         self._stop = threading.Event()
         self._thread = None
+        self._start = 0.0
+        self.elapsed = 0.0
 
     def __enter__(self):
+        self._start = time.time()
         self._thread = threading.Thread(target=self._spin, daemon=True)
         self._thread.start()
         return self
 
     def _spin(self):
         i = 0
-        start = time.time()
         while not self._stop.is_set():
             frame = self.FRAMES[i % len(self.FRAMES)]
-            elapsed = time.time() - start
-            print(f"\r{self.message} {frame} ({elapsed:4.1f}s)", end="", flush=True)
+            elapsed = time.time() - self._start
+            print(f"\r{self.message} {console.info(frame)} "
+                  f"{console.dim(f'({elapsed:4.1f}s)')}", end="", flush=True)
             i += 1
             time.sleep(self.interval)
 
@@ -137,13 +143,16 @@ class _Spinner:
         self._stop.set()
         if self._thread:
             self._thread.join()
-        # Borra la línea del spinner para que no quede residuo.
-        print(f"\r{' ' * (len(self.message) + 16)}\r", end="", flush=True)
+        self.elapsed = time.time() - self._start
+        # Limpia la línea del spinner y, si procede, deja el rastro de duración.
+        print(f"\r{' ' * (len(self.message) + 24)}\r", end="", flush=True)
+        if self.leave:
+            print(f"{self.message} {console.dim(f'✓ ({self.elapsed:4.1f}s)')}")
 
 
 class AgentOrchestrator:
 
-    def __init__(self, agents: list, client, platform: str = "mt5",
+    def __init__(self, agents: list, client, platform: str = "mt4",
                  optimize_every_cycles: int = 0, coordinator=None, risk_book=None,
                  schedule_cfg: dict = None):
         self.agents = agents
@@ -196,6 +205,8 @@ class AgentOrchestrator:
         # Momento del último análisis por símbolo, para espaciarlo al estar en
         # el máximo de posiciones abiertas.
         self._last_analysis_at: dict = {}
+        # Nº de rotación (para la cabecera de cada ciclo en la terminal).
+        self._rotation_count = 0
 
     # ----- Ejecución -----
 
@@ -260,39 +271,48 @@ class AgentOrchestrator:
         """Secuencia de arranque: la mesa revisa el estado de la cuenta y la
         disponibilidad de cada agente (símbolo presente en el broker) antes de
         la primera rotación."""
-        print(f"\n{'#' * 50}")
-        print("  ARRANQUE — REVISIÓN DE LA MESA")
-        print(f"{'#' * 50}")
+        print("\n" + console.header("ARRANQUE — REVISIÓN DE LA MESA", char="#"))
         if self.risk_book is not None:
             try:
                 snap = self.risk_book.snapshot(
                     self.client, self.agents,
                     day_start_equity=self._day_start_equity, in_cooldown=False)
-                print(f"  Equity: {snap.get('equity', 0):.2f} | "
-                      f"Exposición total: {snap.get('total_exposure_pct', 0):.1%} "
-                      f"/ tope {snap.get('max_total_exposure_pct', 0):.0%}")
-                print(f"  Posiciones abiertas: {snap.get('open_positions_total', 0)} | "
-                      f"Cobertura (hedge): {'sí' if snap.get('hedging') else 'no'}")
+                exp = snap.get("total_exposure_pct", 0)
+                tope = snap.get("max_total_exposure_pct", 0)
+                print(console.kv("Equity", console.money(snap.get("equity", 0))))
+                print(console.kv("Exposición total",
+                                 f"{exp:.1%} {console.dim(f'/ tope {tope:.0%}')}"))
+                print(console.kv("Posiciones abiertas", snap.get("open_positions_total", 0)))
+                print(console.kv("Cobertura (hedge)",
+                                 console.ok("sí") if snap.get("hedging") else console.dim("no")))
             except Exception as exc:  # noqa: BLE001 — el arranque nunca debe fallar
-                print(f"  No se pudo obtener el snapshot inicial: {exc}")
+                print(console.kv("Snapshot inicial", console.err(f"no disponible: {exc}")))
 
         available = set(self.client.get_symbols() or [])
-        print("  Disponibilidad de agentes:")
+        print(console.dim("  Disponibilidad de agentes:"))
         for agent in self.agents:
-            ok = (not available) or (agent.symbol in available)
-            print(f"    - {agent.name} [{agent.symbol}]: "
-                  f"{'disponible' if ok else 'NO DISPONIBLE en el broker'}")
+            ready = (not available) or (agent.symbol in available)
+            estado = console.ok("disponible") if ready else console.err("NO DISPONIBLE en el broker")
+            print(f"    {console.dim('·')} {agent.name} [{console.info(agent.symbol)}]: {estado}")
 
         mode = "mesa de dirección" if self.coordinator is not None else "clásico por agente"
-        print(f"  Modo: {mode}. Rotación {self.rotation_seconds}s · "
-              f"noticias {self.news_poll_seconds // 60}min · "
-              f"junta {self.junta_interval_seconds // 60}min · "
-              f"reporte {self.report_interval_seconds // 60}min.")
+        print(console.kv("Modo", console.accent(mode)))
+        print(console.dim(f"  Cadencias: rotación {self.rotation_seconds}s · "
+                          f"noticias {self.news_poll_seconds // 60}min · "
+                          f"junta {self.junta_interval_seconds // 60}min · "
+                          f"reporte {self.report_interval_seconds // 60}min."))
 
     def _run_rotation(self, forced_symbols: set):
         """Una rotación: con coordinador, ciclo coordinado; sin él, ruta clásica.
         Los símbolos en `forced_symbols` (noticia RED) se analizan saltándose el
         throttle, incluso si la cuenta está en su máximo global de posiciones."""
+        self._rotation_count += 1
+        forced_tag = (console.warn(f" · forzados: {', '.join(sorted(forced_symbols))}")
+                      if forced_symbols else "")
+        print("\n" + console.rule(
+            f"Rotación #{self._rotation_count} · {time.strftime('%H:%M:%S')}{forced_tag}",
+            style=console.info))
+
         if self.coordinator is not None:
             self._run_coordinated_cycle(force_symbols=forced_symbols)
             return
@@ -310,10 +330,11 @@ class AgentOrchestrator:
                 profit = _pos_to_float(_pos_get(p, "profit"))
                 symbols_profit[sym] = symbols_profit.get(sym, 0.0) + profit
             total_profit = sum(symbols_profit.values())
-            print(f"\n  ⏭️ Máximo global de posiciones ({max_global}) alcanzado.")
-            print(f"  💰 Profit no realizado total: ${total_profit:+.2f}")
+            print(f"\n  {console.warn('⏭️ Máximo global de posiciones')} "
+                  f"({max_global}) alcanzado.")
+            print(f"  💰 Profit no realizado total: {console.pnl(total_profit)}")
             for sym, prof in sorted(symbols_profit.items()):
-                print(f"     {sym}: ${prof:+.2f}")
+                print(f"     {sym}: {console.pnl(prof)}")
             return
 
         for agent in self.agents:
@@ -346,8 +367,9 @@ class AgentOrchestrator:
                     continue
                 self._reacted_news_keys.add(key)
                 forced.add(agent.symbol)
-                print(f"\n  [NOTICIA RED] {agent.symbol}: {ev.get('title', '?')} "
-                      f"({ev.get('country', '?')}, {ev.get('when', '')}). "
+                meta = console.dim(f"({ev.get('country', '?')}, {ev.get('when', '')})")
+                print(f"\n  {console.warn('⚡ [NOTICIA RED]')} {console.bold(agent.symbol)}: "
+                      f"{ev.get('title', '?')} {meta}. "
                       f"Forzando análisis del especialista vía mesa.")
         return forced
 
@@ -378,12 +400,13 @@ class AgentOrchestrator:
         drawdown = (baseline - equity) / baseline
         if drawdown >= self.max_daily_loss_pct and self._risk_cooldown_day != today:
             self._risk_cooldown_day = today
-            print(f"\n{'!' * 50}")
-            print(f"  PÉRDIDA DIARIA: {drawdown:.1%} >= límite {self.max_daily_loss_pct:.1%}")
-            print(f"  Equity inicio del día: {baseline:.2f} -> actual: {equity:.2f}")
-            print("  COOLDOWN: no se abren nuevas operaciones; análisis espaciado.")
-            print("  El bot sigue activo esperando el cierre de las posiciones abiertas.")
-            print(f"{'!' * 50}")
+            print("\n" + console.err("!" * console.WIDTH))
+            print("  " + console.err(console.bold(
+                f"PÉRDIDA DIARIA: {drawdown:.1%} >= límite {self.max_daily_loss_pct:.1%}")))
+            print(console.kv("Equity día", f"{baseline:.2f} → {equity:.2f}"))
+            print("  " + console.warn("COOLDOWN: no se abren nuevas operaciones; análisis espaciado."))
+            print(console.dim("  El bot sigue activo esperando el cierre de las posiciones abiertas."))
+            print(console.err("!" * console.WIDTH))
 
     def _risk_cooldown_active(self) -> bool:
         """True si hoy se tocó el límite de pérdida diaria (cooldown vigente)."""
@@ -460,13 +483,14 @@ class AgentOrchestrator:
             duration_seconds=duration,
         )
         bot_state.add_closed_trade(trade)
-        print(f"  Cierre registrado: {trade.action} {symbol} | P/L≈{trade.pnl:.2f}")
+        print(f"  {console.accent('⟳ Cierre registrado')}: {console.side(trade.action)} "
+              f"{symbol} | P/L≈{console.pnl(trade.pnl)}")
 
     def _print_positions_summary(self, symbol: str, positions: list):
         """Resumen de posiciones abiertas con su profit no realizado."""
         if positions:
             total_profit = 0.0
-            print(f"\n  📊 Posiciones abiertas en {symbol}:")
+            print(f"\n  📊 {console.bold(f'Posiciones abiertas en {symbol}')}:")
             for i, pos in enumerate(positions, 1):
                 ticket = _pos_get(pos, "ticket", default="?")
                 direction = _pos_direction(pos)
@@ -475,12 +499,12 @@ class AgentOrchestrator:
                 current_price = _pos_to_float(_pos_get(pos, "current_price"))
                 profit = _pos_to_float(_pos_get(pos, "profit"))
                 total_profit += profit
-                print(f"    {i}. Ticket #{ticket} | {direction} {volume} lotes | "
-                      f"Entry: {open_price} | Actual: {current_price} | "
-                      f"P/L: ${profit:+.2f}")
-            print(f"\n  💰 Profit no realizado total ({symbol}): ${total_profit:+.2f}")
+                print(f"    {i}. {console.dim(f'#{ticket}')} | {console.side(direction)} "
+                      f"{volume} lotes | {console.dim(f'{open_price} → {current_price}')} | "
+                      f"P/L: {console.pnl(profit)}")
+            print(f"  💰 Profit no realizado total ({symbol}): {console.pnl(total_profit)}")
         else:
-            print(f"\n  ✅ No hay posiciones abiertas en {symbol}.")
+            print(f"  {console.ok('✅ Sin posiciones abiertas')} en {symbol}.")
 
     def _gather_signal(self, agent, force: bool = False):
         """Prepara el símbolo (detecta cierres, sincroniza estado, respeta
@@ -494,12 +518,12 @@ class AgentOrchestrator:
         NO ejecuta órdenes ni imprime el detalle de la señal: eso es de la fase
         de ejecución (clásica o coordinada). Sirve a ambas rutas."""
         symbol = agent.symbol
-        print(f"\n{'=' * 50}")
-        print(f"  [{agent.name}] Analizando {symbol}...")
+        print(f"\n  {console.accent('▸')} {console.bold(agent.name)} "
+              f"{console.dim('analiza')} {console.info(symbol)}")
 
         tick = self.client.get_tick(symbol)
         if tick:
-            print(f"  Precio: Ask={tick.ask} | Bid={tick.bid}")
+            print(console.kv("Precio", f"ask {tick.ask} {console.dim('/')} bid {tick.bid}"))
 
         # Posiciones del símbolo: detectar cierres respecto al ciclo previo,
         # sincronizar estado y decidir si conviene analizar.
@@ -521,38 +545,69 @@ class AgentOrchestrator:
                         else AT_MAX_ANALYSIS_INTERVAL)
             if self._throttled(symbol, interval):
                 if in_cooldown:
-                    print(f"  Cooldown por pérdida diaria; análisis aplazado "
-                          f"(cada {interval // 60} min, esperando el cierre de posiciones).")
+                    print(console.dim(f"  ⏸ Cooldown por pérdida diaria; análisis aplazado "
+                                      f"(cada {interval // 60} min, esperando el cierre de posiciones)."))
                 else:
-                    print(f"  {len(positions)} posiciones abiertas (máx {max_pos}); "
-                          f"análisis aplazado (cada {interval // 60} min salvo conf>=90%).")
+                    print(console.dim(f"  ⏸ {len(positions)} posiciones abiertas (máx {max_pos}); "
+                                      f"análisis aplazado (cada {interval // 60} min salvo conf>=90%)."))
                 return None
         elif force and (in_cooldown or at_max):
-            print("  [NOTICIA RED] análisis forzado pese al throttle "
-                  "(la ejecución sigue sujeta a validación/mesa).")
+            print("  " + console.warn("⚡ análisis forzado por noticia pese al throttle "
+                                       "(la ejecución sigue sujeta a validación/mesa)."))
 
         with _Spinner("  Generando análisis" + (" (forzado por noticia)" if force else "")):
             signal = agent.analyze(self.client, platform=self.platform)
         self._last_analysis_at[symbol] = time.time()
         if not signal:
-            print("  No se generó señal.")
+            print("  " + console.err("✗ No se generó señal."))
             return None
 
         self.stats[agent.name]["signals"] += 1
         bot_state.update_signal(signal)
         if signal["action"] == "HOLD":
             self.stats[agent.name]["holds"] += 1
+        # El especialista deja su "reporte" a la vista antes de que la mesa
+        # decida: así se ve qué propuso cada agente, se apruebe o se vete.
+        self._print_signal_brief(agent, signal)
         return signal
+
+    def _print_signal_brief(self, agent, signal):
+        """Reporte compacto de lo que el especialista propone a la mesa.
+
+        Es el resumen que faltaba en terminal: acción, confianza, tendencia,
+        riesgo, niveles y un extracto de la razón. El detalle completo con
+        métricas de P/L se imprime en la fase de ejecución (`_print_signal_details`)."""
+        action = signal.get("action", "?")
+        conf = signal.get("confidence", 0) or 0
+        trend = signal.get("trend", "N/A")
+        risk = signal.get("risk_level", "N/A")
+        label = "📨 reporte → mesa" if self.coordinator is not None else "📨 señal"
+        dot = console.dim("·")
+        head = (f"  {console.accent(label)}: {console.side(action)} "
+                f"{dot} conf {conf:.0%} {dot} tendencia {trend} {dot} riesgo {risk}")
+        print(head)
+        if signal.get("entry"):
+            print(console.dim(f"     niveles: entry {signal['entry']} · "
+                              f"SL {signal.get('stop_loss')} · TP {signal.get('take_profit')}"))
+        reason = str(signal.get("reason", "")).strip()
+        if reason:
+            if len(reason) > 140:
+                reason = reason[:139].rstrip() + "…"
+            print(console.dim(f"     “{reason}”"))
 
     def _print_signal_details(self, agent, signal):
         """Imprime la señal y, si tiene niveles, sus métricas de profit/pérdida."""
         symbol = agent.symbol
         volume = agent.resolve_volume(self.client, signal)
-        print(f"\n  Señal: {signal['action']} | Confianza: {signal['confidence']:.0%}")
-        print(f"  Tendencia: {signal.get('trend', 'N/A')} | Riesgo: {signal.get('risk_level', 'N/A')}")
+        conf = signal["confidence"]
+        bar = console.dim("|")
+        print(f"  Señal: {console.side(signal['action'])} {bar} "
+              f"Confianza: {console.bold(f'{conf:.0%}')}")
+        print(f"  Tendencia: {signal.get('trend', 'N/A')} {bar} "
+              f"Riesgo: {signal.get('risk_level', 'N/A')}")
         if signal.get("entry"):
-            print(f"  Entry: {signal['entry']} | SL: {signal['stop_loss']} | "
-                  f"TP: {signal['take_profit']} | Lote: {volume}")
+            print(f"  Entry: {signal['entry']} {bar} SL: {signal['stop_loss']} "
+                  f"{bar} TP: {signal['take_profit']} {bar} Lote: {volume}")
             metrics = calc_trade_metrics(
                 self.client, symbol, signal["action"],
                 signal["entry"], signal["stop_loss"], signal["take_profit"],
@@ -560,9 +615,12 @@ class AgentOrchestrator:
                 commission_per_lot=agent.config.commission_per_lot,
             )
             if metrics:
-                print(f"  Profit potencial: +${metrics['net_profit']:.2f}  ({metrics['pips_tp']:.0f} pips)")
-                print(f"  Pérdida potencial: -${metrics['net_loss']:.2f}  ({metrics['pips_sl']:.0f} pips)")
-                print(f"  Comisión estimada: ${metrics['commission']:.2f} | R:R = 1:{metrics['rr']}")
+                pips_tp = console.dim(f"({metrics['pips_tp']:.0f} pips)")
+                pips_sl = console.dim(f"({metrics['pips_sl']:.0f} pips)")
+                print(f"  Profit potencial: {console.pnl(metrics['net_profit'])}  {pips_tp}")
+                print(f"  Pérdida potencial: {console.pnl(-metrics['net_loss'])}  {pips_sl}")
+                print(console.dim(f"  Comisión estimada: ${metrics['commission']:.2f} | "
+                                  f"R:R = 1:{metrics['rr']}"))
         print(f"  Razón: {signal['reason']}")
 
     def _scale_volume(self, symbol: str, base_volume: float, scale: float) -> float:
@@ -593,7 +651,7 @@ class AgentOrchestrator:
         total_open = len(self.client.get_positions() or [])
         if not agent.validate(signal, positions, tick=tick,
                               spread_points=spread_points, total_open_positions=total_open):
-            print("  Señal no validada para ejecución.")
+            print("  " + console.warn("⚠ Señal no validada para ejecución."))
             return False
 
         result = self.client.place_order(
@@ -605,7 +663,9 @@ class AgentOrchestrator:
             comment=f"{agent.name}: {signal['reason'][:18]}",
         )
         if result and result.get("success"):
-            print(f"  Orden ejecutada: ticket {result.get('order')} @ {result.get('price')}")
+            print(f"  {console.ok('✓ Orden ejecutada')}: {console.side(signal['action'])} "
+                  f"{symbol} {console.dim('· ticket')} {result.get('order')} "
+                  f"{console.dim('@')} {result.get('price')}")
             self.stats[agent.name]["trades"] += 1
             log_trade(
                 symbol=symbol,
@@ -619,12 +679,12 @@ class AgentOrchestrator:
             )
             return True
         elif result and result.get("timeout"):
-            print("  [!] TIMEOUT esperando al EA: la orden NO se confirmó.")
-            print("      La orden PUEDE haberse ejecutado igualmente. Revisa MT4")
-            print("      antes de que el orquestador reintente en el próximo ciclo.")
+            print("  " + console.warn("[!] TIMEOUT esperando al EA: la orden NO se confirmó."))
+            print(console.dim("      La orden PUEDE haberse ejecutado igualmente. Revisa MT4"))
+            print(console.dim("      antes de que el orquestador reintente en el próximo ciclo."))
         else:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
-            print(f"  Error al ejecutar orden: {err}")
+            print("  " + console.err(f"✗ Error al ejecutar orden: {err}"))
         return False
 
     def _run_agent(self, agent, force: bool = False):
@@ -634,14 +694,15 @@ class AgentOrchestrator:
         signal = self._gather_signal(agent, force=force)
         if not signal:
             return
-        self._print_signal_details(agent, signal)
 
         if signal["action"] == "HOLD":
             return
+        self._print_signal_details(agent, signal)
         # En cooldown por pérdida diaria la señal queda registrada (memoria y
         # contexto) pero NO se abre operación: esperamos al cierre de las abiertas.
         if self._risk_cooldown_active():
-            print("  Cooldown por pérdida diaria: señal registrada, no se abre operación.")
+            print("  " + console.warn("Cooldown por pérdida diaria: señal registrada, "
+                                       "no se abre operación."))
             return
         self._open_from_signal(agent, signal)
 
@@ -653,14 +714,15 @@ class AgentOrchestrator:
 
         `force_symbols` (noticia RED) fuerza el análisis de esos símbolos aunque
         estén throttled; la coordinación y el clamp se aplican igual a todos."""
-        # Fase 1: recolectar las señales de todos los especialistas.
+        # Fase 1/3: recolectar las señales de todos los especialistas.
+        print(console.dim("  [1/3] Recolección de señales"))
         signals = {}
         for agent in self.agents:
             sig = self._gather_signal(agent, force=agent.symbol in force_symbols)
             if sig:
                 signals[agent.symbol] = sig
 
-        # Fase 2: coordinar. Snapshot determinista + decisión LLM + clamp duro.
+        # Fase 2/3: coordinar. Snapshot determinista + decisión LLM + clamp duro.
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
             self.client, self.agents,
@@ -668,20 +730,21 @@ class AgentOrchestrator:
 
         has_positions = snapshot.get("open_positions_total", 0) > 0
         if not signals and not (has_positions and self.risk_book.can_close):
-            print("\n  [Mesa] Sin señales nuevas ni posiciones que gestionar; se omite coordinación.")
+            print(console.dim("\n  [Mesa] Sin señales nuevas ni posiciones que gestionar; "
+                              "se omite coordinación."))
             self._store_coordination(snapshot, {"rationale": "sin actividad este ciclo", "decisions": []})
             return
 
-        print(f"\n{'#' * 50}")
-        print("  [MESA DE DIRECCIÓN] Coordinando cartera...")
+        print("\n" + console.header("[2/3] MESA DE DIRECCIÓN · coordinando cartera", char="#"))
         with _Spinner("  Decidiendo asignación"):
             result = self.coordinator.decide(
                 snapshot, signals, self.agents_overview(),
                 news_context=self._coordinator_news())
-        self._print_coordination(result, snapshot)
+        self._print_coordination(result, snapshot, signals)
         self._store_coordination(snapshot, result)
 
-        # Fase 3: ejecutar por prioridad (1 = primero).
+        # Fase 3/3: ejecutar por prioridad (1 = primero).
+        print(console.dim("\n  [3/3] Ejecución por prioridad"))
         self._execute_decisions(result, signals)
 
     def _execute_decisions(self, result: dict, signals: dict, manage_only: bool = False):
@@ -718,14 +781,18 @@ class AgentOrchestrator:
             return
         if decision.get("approve"):
             alloc = decision.get("allocation_pct", 0.0)
-            print(f"\n  [Mesa -> {agent.name}] Entrada APROBADA {signal['action']} {symbol} "
-                  f"(prioridad {decision.get('priority')}, asignación {alloc:.0%}). "
-                  f"{decision.get('reason', '')}")
+            prio = decision.get("priority")
+            meta = console.dim(f"(prio {prio}, asignación {alloc:.0%})")
+            label = console.ok(f"✓ [Mesa → {agent.name}] Entrada APROBADA")
+            print(f"\n  {label} {console.side(signal['action'])} {symbol} {meta}")
+            reason = decision.get("reason", "")
+            if reason:
+                print(console.dim(f"     {reason}"))
             self._print_signal_details(agent, signal)
             self._open_from_signal(agent, signal, scale=self._alloc_to_scale(alloc))
         else:
             motivo = decision.get("clamp") or decision.get("reason", "decisión del coordinador")
-            print(f"  [Mesa] Entrada VETADA en {symbol}: {motivo}")
+            print(f"  {console.err('✗ [Mesa] Entrada VETADA')} en {symbol}: {console.dim(motivo)}")
 
     def _alloc_to_scale(self, alloc: float) -> float:
         """Traduce la asignación (% del equity) a un multiplicador del lote base
@@ -740,7 +807,7 @@ class AgentOrchestrator:
                                direction: str = None):
         """Cierra (close) o reduce (cierra 1 posición; el cliente no soporta
         cierre parcial) la exposición abierta del símbolo. Si `direction`
-        (BUY/SELL) se indica, actúa solo sobre ese lado del libro (MT5 lo filtra;
+        (BUY/SELL) se indica, actúa solo sobre ese lado del libro (MT4 best-effort);
         MT4 lo ignora y cierra lo que el EA decida — best-effort). Los cierres se
         registran en el historial en el siguiente ciclo (_detect_closed_trades)."""
         positions = self.client.get_positions(symbol) or []
@@ -750,17 +817,21 @@ class AgentOrchestrator:
             return
         tag = f" {direction}" if direction else ""
         if action == "close":
-            print(f"  [Mesa] Cerrando {len(positions)} posición(es){tag} de {symbol}: {reason}")
+            print(f"  {console.warn('⊗ [Mesa] Cerrando')} {len(positions)} posición(es)"
+                  f"{tag} de {symbol}: {console.dim(reason)}")
             for _ in range(len(positions)):
                 res = self.client.close_position(symbol, direction=direction)
                 if not res or not res.get("success"):
-                    print(f"    Cierre detenido: {(res or {}).get('error') or 'sin más posiciones'}")
+                    print(console.dim(f"    Cierre detenido: "
+                                      f"{(res or {}).get('error') or 'sin más posiciones'}"))
                     break
         else:  # reduce: cierra una sola posición del símbolo (del lado indicado)
-            print(f"  [Mesa] Reduciendo {symbol}{tag} (cierra 1 posición): {reason}")
+            print(f"  {console.warn('⊖ [Mesa] Reduciendo')} {symbol}{tag} "
+                  f"(cierra 1 posición): {console.dim(reason)}")
             res = self.client.close_position(symbol, direction=direction)
             if not res or not res.get("success"):
-                print(f"    No se pudo reducir: {(res or {}).get('error') or 'sin posición'}")
+                print(console.dim(f"    No se pudo reducir: "
+                                  f"{(res or {}).get('error') or 'sin posición'}"))
 
     def _hedge_position(self, symbol: str, net_side: str, reason: str):
         """Cubre el sesgo neto del símbolo abriendo una orden OPUESTA por el
@@ -768,7 +839,7 @@ class AgentOrchestrator:
         neutralizar; se abre el contrario. Solo tiene efecto real en cuentas
         hedging; en netting el RiskBook ya degrada la cobertura a 'reduce'."""
         if net_side not in ("BUY", "SELL"):
-            print(f"  [Mesa] Cobertura {symbol}: sin sesgo neto definido, se omite.")
+            print(console.dim(f"  [Mesa] Cobertura {symbol}: sin sesgo neto definido, se omite."))
             return
         positions = self.client.get_positions(symbol) or []
         long_vol = sum(_pos_to_float(_pos_get(p, "volume"))
@@ -777,7 +848,7 @@ class AgentOrchestrator:
                         for p in positions if _pos_direction(p) == "SELL")
         net_vol = abs(long_vol - short_vol)
         if net_vol <= 0:
-            print(f"  [Mesa] Cobertura {symbol}: sin volumen neto que cubrir.")
+            print(console.dim(f"  [Mesa] Cobertura {symbol}: sin volumen neto que cubrir."))
             return
         sym = self.client.get_symbol_info(symbol)
         vmin = getattr(sym, "volume_min", 0.01) or 0.01
@@ -785,17 +856,18 @@ class AgentOrchestrator:
         steps = math.floor(net_vol / vstep + 1e-9)
         volume = max(vmin, round(steps * vstep, 10))
         opposite = "SELL" if net_side == "BUY" else "BUY"
-        print(f"  [Mesa] Cobertura {symbol}: abre {opposite} {volume} para neutralizar "
-              f"el neto {net_side}. {reason}")
+        print(f"  {console.warn('⛨ [Mesa] Cobertura')} {symbol}: abre {console.side(opposite)} "
+              f"{volume} para neutralizar el neto {net_side}. {console.dim(reason)}")
         result = self.client.place_order(
             symbol=symbol, volume=volume, order_type=opposite,
             stop_loss=None, take_profit=None, comment=f"hedge {symbol}",
         )
         if result and result.get("success"):
-            print(f"    Cobertura abierta: ticket {result.get('order')} @ {result.get('price')}")
+            print(f"    {console.ok('✓ Cobertura abierta')}: ticket {result.get('order')} "
+                  f"{console.dim('@')} {result.get('price')}")
         else:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
-            print(f"    No se pudo cubrir: {err}")
+            print("    " + console.err(f"✗ No se pudo cubrir: {err}"))
 
     def _coordinator_news(self) -> str:
         """Resumen de noticias por símbolo para el coordinador (news_provider
@@ -814,20 +886,50 @@ class AgentOrchestrator:
                 parts.append(f"[{agent.symbol}]\n{ctx}")
         return "\n\n".join(parts)
 
-    def _print_coordination(self, result: dict, snapshot: dict):
-        print(f"  Exposición total: {snapshot['total_exposure_pct']:.1%} / "
-              f"tope {snapshot['max_total_exposure_pct']:.0%}")
+    def _print_coordination(self, result: dict, snapshot: dict, signals: dict = None):
+        """Tabla de la mesa: por símbolo, qué propuso el especialista (señal) y
+        qué decidió la mesa (veredicto/prioridad/asignación/gestión + clamp)."""
+        signals = signals or {}
+        exp = snapshot.get("total_exposure_pct", 0)
+        tope = snapshot.get("max_total_exposure_pct", 0)
+        print(console.kv("Exposición total",
+                         f"{exp:.1%} {console.dim(f'/ tope {tope:.0%}')}"))
         if result.get("rationale"):
-            print(f"  Razón de la mesa: {result['rationale']}")
+            print(console.kv("Razón mesa", console.dim(result["rationale"])))
+
+        decisions = result.get("decisions", [])
+        if not decisions:
+            print(console.dim("  (sin decisiones)"))
+            return
+
         sym_info = snapshot.get("symbols", {})
-        for d in result.get("decisions", []):
-            tag = "APROBADA" if d.get("approve") else "vetada  "
-            nd = sym_info.get(d.get("symbol"), {}).get("net_direction", "FLAT")
-            md = f" -> {d['manage_direction']}" if d.get("manage_direction") else ""
-            extra = f" | clamp: {d['clamp']}" if d.get("clamp") else ""
-            print(f"    {d.get('symbol')} [neto {nd}]: {tag} | prio {d.get('priority')} | "
-                  f"asignación {d.get('allocation_pct', 0):.0%} | "
-                  f"pos: {d.get('position_action')}{md}{extra}")
+        headers = ["Símbolo", "Señal", "Neto", "Veredicto", "Prio", "Asig", "Gestión", "Motivo/clamp"]
+        aligns = ["<", "<", "<", "<", ">", ">", "<", "<"]
+        rows = []
+        for d in sorted(decisions, key=lambda x: x.get("priority", 99)):
+            sym = d.get("symbol")
+            sig = signals.get(sym) or {}
+            sig_action = sig.get("action", "—")
+            nd = sym_info.get(sym, {}).get("net_direction", "FLAT")
+            approve = d.get("approve")
+            verdict = ("APROBADA", console.ok) if approve else ("vetada", console.err)
+            pos_action = d.get("position_action", "hold")
+            md = f"→{d['manage_direction']}" if d.get("manage_direction") else ""
+            pos_cell = f"{pos_action}{md}"
+            pos_style = console.warn if pos_action in ("close", "reduce", "hedge") else console.dim
+            motivo = d.get("clamp") or ""
+            rows.append([
+                sym,
+                (sig_action, console.side),
+                (nd, console.dim),
+                verdict,
+                str(d.get("priority", "")),
+                f"{d.get('allocation_pct', 0):.0%}",
+                (pos_cell, pos_style),
+                (motivo, console.dim) if motivo else "",
+            ])
+        for line in console.table(headers, rows, aligns=aligns, indent="  "):
+            print(line)
 
     def _store_coordination(self, snapshot: dict, result: dict):
         """Guarda la última coordinación para el dashboard y la emite por WS."""
@@ -879,9 +981,7 @@ class AgentOrchestrator:
             self.client, self.agents,
             day_start_equity=self._day_start_equity, in_cooldown=in_cooldown)
 
-        print(f"\n{'#' * 50}")
-        print("  JUNTA DE LA MESA (revisión global del libro)")
-        print(f"{'#' * 50}")
+        print("\n" + console.header("JUNTA DE LA MESA · revisión global del libro", char="#"))
         self.last_junta_at = time.strftime("%Y-%m-%d %H:%M:%S")
 
         # Sin coordinador: resumen determinista (sin LLM).
@@ -899,7 +999,7 @@ class AgentOrchestrator:
             result = self.coordinator.decide(
                 snapshot, signals, self.agents_overview(),
                 news_context=self._coordinator_news())
-        self._print_coordination(result, snapshot)
+        self._print_coordination(result, snapshot, signals)
         self._store_coordination(snapshot, result)
         # Gestiona posiciones abiertas (no abre entradas en la junta).
         self._execute_decisions(result, signals, manage_only=True)
@@ -930,9 +1030,7 @@ class AgentOrchestrator:
         self.last_report = report
         self.last_report_at = time.strftime("%Y-%m-%d %H:%M:%S")
 
-        print(f"\n{'=' * 50}")
-        print("  REPORTE PERIÓDICO")
-        print("=" * 50)
+        print("\n" + console.header("REPORTE PERIÓDICO"))
         print(report["text"])
 
         from core.mailer import send_report

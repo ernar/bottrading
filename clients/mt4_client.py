@@ -6,7 +6,7 @@ from clients.base_client import BaseMTClient
 
 
 class SymbolInfo:
-    """Imita la estructura de symbol_info de MT5."""
+    """Imita la estructura de symbol_info."""
     def __init__(self, data: dict):
         self.name = data.get("symbol", "")
         self.point = float(data.get("point", 0.00001))
@@ -19,7 +19,7 @@ class SymbolInfo:
 
 
 class TickInfo:
-    """Imita la estructura de symbol_info_tick de MT5."""
+    """Imita la estructura de symbol_info_tick."""
     def __init__(self, bid: float, ask: float, time: int):
         self.bid = bid
         self.ask = ask
@@ -267,7 +267,7 @@ class MT4Client(BaseMTClient):
         resp = self._send(f"CLOSE_POSITION|{symbol}", timeout=30.0)
         if resp.startswith("OK|"):
             return {"success": True, "retcode": 0, "comment": resp[3:]}
-        # Sin posición abierta: None para que el API devuelva 404 (igual que MT5).
+        # Sin posición abierta: None para que el API devuelva 404.
         if "no open position" in resp:
             return None
         return {"success": False, "error": resp, "timeout": "timeout" in resp}

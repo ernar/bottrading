@@ -41,7 +41,7 @@ def test_clamp_respeta_limites():
 
 
 def test_pos_direction_normaliza_mt4():
-    # MT5 da texto; MT4 da el type como entero.
+    # MT4 da el type como entero.
     assert _pos_direction(SimpleNamespace(direction="BUY")) == "BUY"
     assert _pos_direction({"type": "0"}) == "BUY"
     assert _pos_direction({"type": "1"}) == "SELL"
@@ -51,7 +51,7 @@ def test_pos_direction_normaliza_mt4():
 
 def _orch():
     # El __init__ no usa el cliente; basta con un placeholder para estos tests.
-    orch = AgentOrchestrator([], client=None, platform="mt5")
+    orch = AgentOrchestrator([], client=None, platform="mt4")
     orch.max_daily_loss_pct = 0.05
     orch._risk_day = date.today().isoformat()
     orch._day_start_equity = 1000.0

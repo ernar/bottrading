@@ -1,15 +1,11 @@
 """Helpers tolerantes para leer posiciones de cualquier plataforma.
 
-MT5 devuelve las posiciones como modelos pydantic (`Position`) y MT4 como
-`dict` (parseado del bridge). Estos helpers acceden a los campos de forma
-uniforme para que el resto del código (orquestador, coordinador, RiskBook) no
-tenga que saber de qué plataforma viene la posición.
+MT4 devuelve las posiciones como `dict` (parseado del bridge). Estos helpers acceden a los campos de forma uniforme para que el resto del código (orquestador, coordinador, RiskBook) no tenga que saber de qué plataforma viene la posición.
 """
 
 
 def _pos_get(pos, *fields, default=None):
-    """Lee el primer campo presente de una posición, sea Position (pydantic/MT5)
-    o dict (MT4)."""
+    """Lee el primer campo presente de una posición dict (MT4)."""
     for f in fields:
         if isinstance(pos, dict):
             if pos.get(f) is not None:
@@ -29,7 +25,7 @@ def _pos_to_float(value, default: float = 0.0) -> float:
 
 
 def _pos_direction(pos) -> str:
-    """Normaliza la dirección. MT5 da 'BUY'/'SELL'; MT4 da type entero (0=BUY,1=SELL)."""
+    """Normaliza la dirección. MT4 da type entero (0=BUY,1=SELL)."""
     d = _pos_get(pos, "direction", "type")
     if d is None:
         return "?"

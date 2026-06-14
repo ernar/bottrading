@@ -91,7 +91,7 @@ export function DashboardPage({ state }: DashboardPageProps) {
   const [stats, setStats] = useState<Stats | null>(null)
   const liveSignals = Object.values(state?.signals || {})
   const positions = Object.values(state?.positions || {})
-  const platform = (state?.account_info?.platform || 'mt5').toLowerCase()
+  const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
   useEffect(() => {
     const load = () =>

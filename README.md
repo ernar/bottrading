@@ -5,7 +5,7 @@ Bot de trading automático que integra **MetaTrader 4** con un **LLM** (Ollama l
 ## Estructura del proyecto
 
 ```
-mt5_ollama_bot/
+mt4_ollama_bot/
 ├── main.py                  # Punto de entrada: selección de agentes + orquestador + API en hilo interno
 ├── agents/
 │   ├── base_agent.py        # SymbolAgent: símbolo + modelo + AgentParams + persona + memoria aislada
@@ -37,7 +37,7 @@ mt5_ollama_bot/
 ├── logs/                    # Generado automáticamente (gitignored)
 │   ├── memory.json          # Memoria de señales y resultados evaluados
 │   ├── agents/              # Memoria aislada por agente (<name>_memory.json)
-│   └── {mt5|mt4}/
+│   └── mt4/
 │       ├── signals.csv      # Historial de señales generadas
 │       └── trades.csv       # Historial de órdenes ejecutadas
 └── frontend/                # Dashboard React + TypeScript + Tailwind

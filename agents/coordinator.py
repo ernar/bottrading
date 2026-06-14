@@ -77,7 +77,7 @@ class RiskBook:
 
     @staticmethod
     def _contract_size(client, symbol: str) -> float:
-        """Tamaño de contrato del símbolo. MT5 raw expone `trade_contract_size`;
+        """Tamaño de contrato del símbolo. MT4 expone `trade_contract_size`
         el modelo SymbolInfo de MT4 expone `contract_size`. Fallback 1.0 (cripto)."""
         info = client.get_symbol_info(symbol)
         for attr in ("trade_contract_size", "contract_size"):

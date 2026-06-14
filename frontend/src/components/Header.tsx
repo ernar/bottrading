@@ -51,7 +51,7 @@ export function Header({ state, connected }: HeaderProps) {
   const openPositions = Object.keys(state.positions).length
   const floatingPnl = account.equity - account.balance
   const pnlColor = floatingPnl > 0 ? 'text-green-400' : floatingPnl < 0 ? 'text-red-400' : 'text-white'
-  const platform = account.platform || 'MT5'
+  const platform = account.platform || 'MT4'
 
   return (
     <header className="bg-gray-900 text-white p-4 border-b border-gray-700">

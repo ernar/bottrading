@@ -21,7 +21,7 @@ interface HistoryPageProps {
 export function HistoryPage({ state }: HistoryPageProps) {
   const [csvTrades, setCsvTrades] = useState<CsvTrade[]>([])
   const sessionTrades = state?.closed_trades || []
-  const platform = (state?.account_info?.platform || 'mt5').toLowerCase()
+  const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 

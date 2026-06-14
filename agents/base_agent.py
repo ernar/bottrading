@@ -86,7 +86,7 @@ class SymbolAgent:
 
     # ----- Análisis -----
 
-    def analyze(self, client, platform: str = "mt5") -> Optional[dict]:
+    def analyze(self, client, platform: str = "mt4") -> Optional[dict]:
         """Genera una señal para el símbolo del agente. Devuelve el dict de
         señal (ya con SL/TP rellenados por ATR si faltaban) o None."""
         symbol = self.symbol

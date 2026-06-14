@@ -4,6 +4,7 @@ import threading
 import socket as _socket
 from dotenv import load_dotenv
 
+from core import console
 from core.state import bot_state
 from clients.mt4_client import MT4Client
 from clients.base_client import BaseMTClient
@@ -61,16 +62,14 @@ def select_agents() -> list:
     pregunta el provider/modelo LLM. Devuelve los agentes instanciados."""
     blueprints = list_agents()
 
-    print("\n" + "=" * 50)
-    print("       SELECCIONAR AGENTES")
-    print("=" * 50)
+    print("\n" + console.header("SELECCIONAR AGENTES"))
     for i, bp in enumerate(blueprints, 1):
-        print(f"  {i:2d}. {bp.name:<12} [{bp.symbol}]")
-        print(f"      {bp.description}")
-        print(f"      Modelo: {bp.params.provider.upper()}/{bp.params.model} | "
-              f"conf>={bp.params.min_confidence:.0%} R:R>=1:{bp.params.min_rr}")
-    print("=" * 50)
-    print("  Ejemplo: 1  |  1,2  |  'all' para todos")
+        print(f"  {console.bold(f'{i:2d}.')} {console.bold(f'{bp.name:<12}')} "
+              f"[{console.info(bp.symbol)}]")
+        print(console.dim(f"      {bp.description}"))
+        print(console.dim(f"      Modelo: {bp.params.provider.upper()}/{bp.params.model} | "
+                          f"conf>={bp.params.min_confidence:.0%} R:R>=1:{bp.params.min_rr}"))
+    print(console.dim("  Ejemplo: 1  |  1,2  |  'all' para todos"))
 
     # 1) Elegir qué agentes
     chosen: list = []
@@ -96,10 +95,10 @@ def select_agents() -> list:
     # 2) Elegir provider/modelo para cada agente seleccionado
     agents = []
     for bp in chosen:
-        print(f"\n--- LLM para {bp.name} [{bp.symbol}] ---")
+        print(console.accent(f"\n--- LLM para {bp.name} [{bp.symbol}] ---"))
         provider, model = select_llm(bp.params.provider, bp.params.model)
         agents.append(build_agent(bp.name, provider=provider, model=model))
-        print(f"  {bp.name} usará {provider.upper()}/{model}")
+        print(f"  {console.ok('✓')} {bp.name} usará {console.bold(f'{provider.upper()}/{model}')}")
     return agents
 
 
@@ -110,15 +109,14 @@ def select_coordinator_llm(agents: list, cfg: dict) -> tuple:
     el LLM del primer agente. Devuelve (provider, model) o (None, None) si el
     coordinador está desactivado."""
     if not cfg["enabled"]:
-        print("\n  Coordinador desactivado (COORDINATOR_ENABLED=false): modo clásico por agente.")
+        print(console.dim("\n  Coordinador desactivado (COORDINATOR_ENABLED=false): "
+                          "modo clásico por agente."))
         return None, None
-    print("\n" + "=" * 50)
-    print("       LLM DEL COORDINADOR (MESA DE DIRECCIÓN)")
-    print("=" * 50)
+    print("\n" + console.header("LLM DEL COORDINADOR (MESA DE DIRECCIÓN)"))
     default_provider = cfg["provider"] or agents[0].params.provider
     default_model = cfg["model"] or agents[0].params.model
     provider, model = select_llm(default_provider, default_model)
-    print(f"  Coordinador usará {provider.upper()}/{model}")
+    print(f"  {console.ok('✓')} Coordinador usará {console.bold(f'{provider.upper()}/{model}')}")
     return provider, model
 
 
@@ -133,22 +131,22 @@ def build_client() -> BaseMTClient:
 
 def connect_platform(client: BaseMTClient) -> bool:
     print("Conectando a MT4 via EA bridge...")
-    print("(Asegúrate de que PythonBridge.mq4 esté adjunto a un gráfico en MT4)")
+    print(console.dim("(Asegúrate de que PythonBridge.mq4 esté adjunto a un gráfico en MT4)"))
     for attempt in range(1, 4):
-        print(f"  Intento {attempt}/3...")
+        print(console.dim(f"  Intento {attempt}/3..."))
         if client.connect():
             expected_login = int(os.getenv("MT4_LOGIN", "0"))
             account = client.get_account_info()
             if account and expected_login and account["login"] != expected_login:
-                print(f"  Advertencia: cuenta conectada ({account['login']}) "
-                      f"distinta a la configurada ({expected_login})")
+                print("  " + console.warn(f"⚠ Advertencia: cuenta conectada ({account['login']}) "
+                                          f"distinta a la configurada ({expected_login})"))
             return True
         if attempt < 3:
-            print("  Sin respuesta del EA, reintentando en 5 segundos...")
+            print(console.dim("  Sin respuesta del EA, reintentando en 5 segundos..."))
             time.sleep(5)
-    print("Error: No se pudo conectar al EA de MT4 tras 3 intentos.")
-    print("Verifica que MT4 esté abierto, el EA PythonBridge adjunto a un gráfico")
-    print("y que 'Permitir trading automático' esté activado.")
+    print(console.err("✗ Error: No se pudo conectar al EA de MT4 tras 3 intentos."))
+    print(console.dim("Verifica que MT4 esté abierto, el EA PythonBridge adjunto a un gráfico"))
+    print(console.dim("y que 'Permitir trading automático' esté activado."))
     return False
 
 
@@ -160,18 +158,20 @@ def main():
     coord_provider, coord_model = select_coordinator_llm(agents, coordinator_cfg)
 
     client = build_client()
-    print("\nPlataforma: MT4")
+    print(console.accent("\nPlataforma: MT4"))
     if not connect_platform(client):
         return
 
-    print("Conectado exitosamente.")
+    print(console.ok("✓ Conectado exitosamente."))
     bot_state.set_connected(True)
     set_mt_client(client)
 
     account_info = client.get_account_info()
     if account_info:
         plat = account_info.get("platform", "MT4")
-        print(f"Cuenta: {account_info['login']} | Balance: ${account_info['balance']:.2f} | {plat}")
+        print(console.kv("Cuenta",
+                         f"{account_info['login']} {console.dim('|')} "
+                         f"Balance {console.money(account_info['balance'])} {console.dim('|')} {plat}"))
         bot_state.update_account(account_info)
 
     # Aviso si algún agente opera un símbolo que el broker no expone.
@@ -179,11 +179,11 @@ def main():
     if available:
         for agent in agents:
             if agent.symbol not in available:
-                print(f"  Advertencia: el símbolo {agent.symbol} del agente "
-                      f"'{agent.name}' no aparece en la lista del broker.")
+                print("  " + console.warn(f"⚠ Advertencia: el símbolo {agent.symbol} del agente "
+                                          f"'{agent.name}' no aparece en la lista del broker."))
 
     if _is_port_in_use(5000):
-        print("\n[ERROR] Puerto 5000 ya en uso. Cierra la instancia anterior del bot.")
+        print("\n" + console.err("[ERROR] Puerto 5000 ya en uso. Cierra la instancia anterior del bot."))
         try:
             import urllib.request
             urllib.request.urlopen("http://localhost:5000/api/notify-duplicate", data=b"", timeout=2)
@@ -197,19 +197,19 @@ def main():
     # pon API_HOST=0.0.0.0 en el .env Y configura API_TOKEN.
     api_host = os.getenv("API_HOST", "127.0.0.1")
     if api_host != "127.0.0.1" and not os.getenv("API_TOKEN", "").strip():
-        print(f"  [SEGURIDAD] API_HOST={api_host} sin API_TOKEN: el bot quedaría "
-              "controlable por cualquiera en la red. Define API_TOKEN en el .env.")
+        print("  " + console.warn(f"[SEGURIDAD] API_HOST={api_host} sin API_TOKEN: el bot quedaría "
+                                  "controlable por cualquiera en la red. Define API_TOKEN en el .env."))
     api_thread = threading.Thread(
         target=lambda: socketio.run(app, host=api_host, port=5000, debug=False, allow_unsafe_werkzeug=True),
         daemon=True,
     )
     api_thread.start()
-    print(f"API server iniciado en http://{api_host}:5000")
+    print(f"{console.ok('✓')} API server iniciado en {console.info(f'http://{api_host}:5000')}")
 
-    print("\n" + "=" * 50)
-    print(f"  Agentes activos: {', '.join(f'{a.name}[{a.symbol}]' for a in agents)}")
-    print("  Presiona Ctrl+C para detener")
-    print("=" * 50)
+    activos = ", ".join(f"{a.name}[{a.symbol}]" for a in agents)
+    print("\n" + console.header("BOT EN MARCHA"))
+    print(console.kv("Agentes activos", console.bold(activos)))
+    print(console.dim("  Presiona Ctrl+C para detener"))
 
     # Mesa de dirección: el RiskBook (topes duros) es la tesorería; el
     # CoordinatorAgent (LLM) reparte capital y decide go/no-go por símbolo. Si
@@ -220,16 +220,18 @@ def main():
         coordinator = CoordinatorAgent(
             provider=coord_provider, model=coord_model,
             risk_book=risk_book, temperature=coordinator_cfg["temperature"])
-        print(f"  Mesa de dirección activa con {coord_provider.upper()}/{coord_model}.")
+        print(console.kv("Mesa de dirección",
+                         f"{console.ok('activa')} con {console.bold(f'{coord_provider.upper()}/{coord_model}')}"))
 
     # Planificador de cadencias: rotación (tick base), sonda de noticias RED,
     # junta horaria y reporte periódico. Ver get_schedule_config().
     schedule_cfg = get_schedule_config()
-    print(f"  Cadencias: rotación {schedule_cfg['rotation_seconds']}s · "
-          f"noticias {schedule_cfg['news_poll_seconds'] // 60}min · "
-          f"junta {schedule_cfg['junta_interval_seconds'] // 60}min · "
-          f"reporte {schedule_cfg['report_interval_seconds'] // 60}min "
-          f"(email {'ON' if schedule_cfg['smtp_enabled'] else 'OFF'}).")
+    email_tag = console.ok("ON") if schedule_cfg["smtp_enabled"] else console.dim("OFF")
+    print(console.dim(f"  Cadencias: rotación {schedule_cfg['rotation_seconds']}s · "
+                      f"noticias {schedule_cfg['news_poll_seconds'] // 60}min · "
+                      f"junta {schedule_cfg['junta_interval_seconds'] // 60}min · "
+                      f"reporte {schedule_cfg['report_interval_seconds'] // 60}min")
+          + f" {console.dim('(email')} {email_tag}{console.dim(')')}.")
 
     # optimize_every_cycles=20 -> ~cada 20 ciclos el orquestador revisa el
     # rendimiento de cada agente y ajusta sus parámetros (0 para desactivar).
@@ -244,7 +246,7 @@ def main():
         bot_state.set_bot_running(False)
         bot_state.set_connected(False)
         client.disconnect()
-        print("Desconectado.")
+        print(console.dim("Desconectado."))
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ interface SignalsPageProps {
 export function SignalsPage({ state }: SignalsPageProps) {
   const [csvSignals, setCsvSignals] = useState<CsvSignal[]>([])
   const liveSignals = Object.values(state?.signals || {})
-  const platform = (state?.account_info?.platform || 'mt5').toLowerCase()
+  const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 

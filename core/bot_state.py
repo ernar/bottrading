@@ -152,8 +152,7 @@ class BotState:
         with self._lock:
             positions = {}
             for k, v in self.positions.items():
-                # MT5 devuelve modelos Position (pydantic); MT4 devuelve dicts
-                # planos. Soportamos ambos + dataclasses sin reventar.
+                # MT4 devuelve dicts planas. Soportamos dataclasses sin reventar.
                 if isinstance(v, dict):
                     positions[k] = v
                 elif hasattr(v, "model_dump"):

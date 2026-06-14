@@ -50,6 +50,7 @@ El bucle (`run_forever`) corre en **un único proceso/hilo** (sin eventlet) con 
 
 ## Convenciones y gotchas
 
+- **Salida de terminal:** centralizada en `core/console.py` (color semántico vía `colorama`, reglas/cabeceras, `kv`, tablas alineadas con color por celda, helpers `money`/`pnl`/`side`). Reconfigura stdout a UTF‑8 (`errors="replace"`) para que los glifos/emojis no revienten en consolas cp1252. Color **on** por defecto en TTY; desactivar con `NO_COLOR`/`BOT_NO_COLOR`, forzar con `BOT_FORCE_COLOR` (al redirigir); degrada a texto plano si falta `colorama`. El ciclo coordinado imprime 3 fases: `[1/3]` recolección con el **reporte de cada especialista a la mesa** (`_print_signal_brief`) → `[2/3]` mesa como **tabla** propuesta↔veredicto (`_print_coordination`) → `[3/3]` ejecución.
 - **Nunca añadir `eventlet`** a requirements: rompe el WebSocket (el API corre en hilo plano sin monkey_patch). Usar `simple-websocket`.
 - Un proceso del bot zombi puede retener el puerto 5000 y servir código viejo. Al depurar comportamiento "raro" del server: `netstat -ano | findstr :5000`.
 - Redondeo de precios de órdenes: usar `round(price, sym_info.digits)` (no `point*10`).

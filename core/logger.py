@@ -59,7 +59,7 @@ def log_signal(signal: dict, platform: str = "mt4"):
 
 def log_trade(symbol: str, action: str, volume: float, price: float,
               stop_loss: float, take_profit: float, result: dict,
-              platform: str = "mt5"):
+              platform: str = "mt4"):
     path = _trades_path(platform)
     _ensure_file(path, TRADES_HEADERS)
     row = [
