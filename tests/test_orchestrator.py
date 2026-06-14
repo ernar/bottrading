@@ -1,8 +1,11 @@
 """Tests de la optimización por reglas (tune_params) y helpers de posiciones."""
+import time
+from datetime import date
 from types import SimpleNamespace
 
 from agents.base_agent import AgentParams
-from agents.orchestrator import tune_params, _pos_direction, _clamp
+from agents.orchestrator import AgentOrchestrator, tune_params, _pos_direction, _clamp
+from core.state import bot_state
 
 
 def _perf(samples=10, win_rate=0.5, sl_hit_rate=0.2, tp_hit_rate=0.3, avg_move_pct=0.1):
@@ -42,3 +45,46 @@ def test_pos_direction_normaliza_mt4():
     assert _pos_direction(SimpleNamespace(direction="BUY")) == "BUY"
     assert _pos_direction({"type": "0"}) == "BUY"
     assert _pos_direction({"type": "1"}) == "SELL"
+
+
+# ----- Cooldown por pérdida diaria -----
+
+def _orch():
+    # El __init__ no usa el cliente; basta con un placeholder para estos tests.
+    orch = AgentOrchestrator([], client=None, platform="mt5")
+    orch.max_daily_loss_pct = 0.05
+    orch._risk_day = date.today().isoformat()
+    orch._day_start_equity = 1000.0
+    return orch
+
+
+def test_cooldown_se_activa_y_no_detiene_el_bot():
+    orch = _orch()
+    bot_state.set_bot_running(True)
+    orch._check_daily_loss_guard({"equity": 940.0})  # -6% > 5%
+    assert orch._risk_cooldown_active() is True
+    # Clave del requisito: el bot NO se detiene, sigue corriendo.
+    assert bot_state.bot_running is True
+
+
+def test_sin_cooldown_si_perdida_bajo_limite():
+    orch = _orch()
+    orch._check_daily_loss_guard({"equity": 970.0})  # -3% < 5%
+    assert orch._risk_cooldown_active() is False
+
+
+def test_cooldown_se_rearma_en_nuevo_dia():
+    orch = _orch()
+    orch._risk_cooldown_day = "2000-01-01"  # cooldown de un día pasado
+    orch._risk_day = "2000-01-01"
+    orch._check_daily_loss_guard({"equity": 940.0})  # nuevo día: solo fija baseline
+    assert orch._risk_cooldown_active() is False
+    assert orch._day_start_equity == 940.0
+
+
+def test_throttled_espacia_analisis():
+    orch = _orch()
+    orch._last_analysis_at["BTCUSD"] = time.time()
+    assert orch._throttled("BTCUSD", 900) is True       # recién analizado
+    orch._last_analysis_at["BTCUSD"] = time.time() - 1000
+    assert orch._throttled("BTCUSD", 900) is False      # ya pasó el intervalo

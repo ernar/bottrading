@@ -123,6 +123,8 @@ ollama pull qwen3:8b
 
 Crea `.env` en la raíz:
 
+Parte de una plantilla completa sin secretos: copia [`.env.example`](.env.example) a `.env` y rellena tus valores.
+
 ```env
 MT5_LOGIN=tu_numero_cuenta
 MT5_PASSWORD=tu_contraseña
@@ -138,9 +140,20 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.0-flash
+
+# --- Seguridad del API / dashboard ---
+API_HOST=127.0.0.1   # solo local (recomendado). 0.0.0.0 = acceso remoto: ÚSALO solo con API_TOKEN
+API_TOKEN=           # si lo defines, las rutas POST que mutan estado exigen la cabecera X-API-Token
+
+# --- Gestión de riesgo ---
+MAX_DAILY_LOSS_PCT=0.05   # cooldown si la pérdida del día supera el 5% (0 = desactivado)
 ```
 
-> Los umbrales y símbolos **no se configuran en `.env`**: cada agente trae los suyos en su blueprint (`agents/registry.py`). El **modelo** se elige al arrancar (menú interactivo) o en caliente desde el dashboard.
+> ⚠️ **`.env` contiene credenciales reales y está en `.gitignore`** — nunca lo subas a git. Si alguna vez se filtró (apareció en un commit), rota las claves y la contraseña del bróker.
+
+> Los umbrales y símbolos **no se eligen en el menú**: cada agente trae los suyos en su blueprint (`agents/registry.py`). Se pueden **sobreescribir por `.env`** con precedencia símbolo > modelo > default (p. ej. `MAX_OPEN_POSITIONS_BTCUSD`, `MIN_CONFIDENCE_BTCUSD`, `COMMISSION_PER_LOT`…); ver [`.env.example`](.env.example) para la lista completa. El **modelo** se elige al arrancar (menú) o en caliente desde el dashboard.
+
+> Si activas `API_TOKEN`, el dashboard debe enviarlo: define `VITE_API_TOKEN` (con el mismo valor) en `frontend/.env`.
 
 ### Elegir el modelo de cada agente
 
@@ -198,15 +211,25 @@ python main.py
    - Construye contexto estructurado: indicadores H1 y H4 calculados en Python
      (RSI, EMA20/50, MACD, Bollinger, ATR, soportes/resistencias), últimas velas,
      posiciones abiertas, noticias y eventos económicos próximos y rendimiento reciente.
+   - Detecta posiciones que se cerraron desde el ciclo anterior y las registra en el historial.
    - Inyecta la **persona** del agente al prompt del sistema.
    - Envía el contexto al LLM (formato JSON forzado) → recibe señal.
-   - Si SL=0 y acción ≠ HOLD, calcula SL/TP de respaldo con los múltiplos de ATR del agente.
+   - Si faltan SL y/o TP y la acción ≠ HOLD, los rellena (cada uno por separado) con los
+     múltiplos de ATR del agente.
    - Valida contra los umbrales del agente: confianza mínima, R:R mínimo, niveles SL/TP
-     coherentes por lado, entry cercano al precio real, sin posición duplicada en la misma
-     dirección, máximo de posiciones y filtro de spread.
+     coherentes por lado, entry cercano al precio real, máximo **global** de posiciones de la
+     cuenta y filtro de spread. Una señal con confianza ≥ `max_pos_override_confidence`
+     (default 0.90) se salta el límite de posiciones para reforzar.
+   - Calcula el volumen: lote fijo, o por riesgo hasta el SL si `use_risk_sizing` está activo.
    - Ejecuta orden si pasa validación.
    - Registra señal en `logs/` y en la memoria del agente (`logs/agents/<name>_memory.json`).
-5. Cada 20 ciclos el orquestador llama a `optimize()`: ajuste **basado en reglas** (no ML) de
+   - **Throttle**: con el símbolo en su máximo de posiciones, el análisis se espacia a 15 min
+     (no se consulta al LLM cada ciclo si no se va a poder operar, salvo señal de conf ≥ 90%).
+5. **Cooldown por pérdida diaria**: si la pérdida del día supera `MAX_DAILY_LOSS_PCT`, el bot
+   **no se detiene**; deja de abrir nuevas operaciones y espacia el análisis (para no perder
+   contexto/memoria) a la espera de que las posiciones abiertas se cierren. Se rearma al
+   cambiar de día.
+6. Cada 20 ciclos el orquestador llama a `optimize()`: ajuste **basado en reglas** (no ML) de
    los `AgentParams` de cada agente según su rendimiento (win rate, SL/TP tocados, holds…),
    con límites en `PARAM_BOUNDS`.
 
@@ -217,10 +240,13 @@ Los agentes se definen como *blueprints* declarativos en [`agents/registry.py`](
 
 | Agente | Símbolo | Modelo | Notas |
 |---|---|---|---|
-| `btc-agent` | BTCUSD | ollama/qwen3:8b | Cripto 24/7, alta volatilidad: R:R ≥ 1:1.5, ATR SL 1.8× / TP 2.7×, máx. 2 posiciones, filtro de spread alto |
+| `btc-agent` | BTCUSD | ollama/qwen3:8b | Cripto 24/7, alta volatilidad: R:R ≥ 1:1.5, ATR SL 1.8× / TP 2.7×, máx. 3 posiciones, filtro de spread alto |
 
 Cada agente expone parámetros (`AgentParams`): `provider`, `model`, `min_confidence`, `min_rr`,
-`atr_sl_mult`, `atr_tp_mult`, `lot_size`, `risk_per_trade`, `max_open_positions`, `max_spread_filter`.
+`atr_sl_mult`, `atr_tp_mult`, `lot_size`, `risk_per_trade`, `max_open_positions`, `max_spread_filter`,
+`temperature`, `use_risk_sizing` (volumen por riesgo en vez de lote fijo) y
+`max_pos_override_confidence` (confianza que salta el límite de posiciones). Estos valores se
+pueden sobreescribir por `.env` (precedencia símbolo > modelo > default); ver [`.env.example`](.env.example).
 
 ## API endpoints
 
@@ -243,21 +269,39 @@ POST /api/bot/stop                  Pausar bot
 POST /api/positions/{symbol}/close  Cerrar posición
 ```
 
+> Las rutas **POST que mutan estado** (`bot/start`, `bot/stop`, `positions/{symbol}/close`,
+> `agents/{name}/model`, `agents/optimize`) exigen la cabecera `X-API-Token` **si** `API_TOKEN`
+> está configurado en el `.env`. Sin `API_TOKEN` no se pide (uso puramente local).
+
 ## Parámetros de riesgo por defecto (`AgentParams`)
 
 | Parámetro | Valor por defecto |
 |---|---|
 | Lot size | 0.01 |
+| Volumen por riesgo (`use_risk_sizing`) | desactivado → usa lote fijo |
 | Riesgo por trade | 2% del balance |
 | Confianza mínima | 60% |
 | R:R mínimo | 1:1 |
-| Máx. posiciones abiertas | 5 |
+| Máx. posiciones abiertas (global) | 5 (btc-agent: 3) |
+| Override de posiciones por confianza | ≥ 90% |
 | SL automático | 1.5 × ATR H1 |
 | TP automático | 2.0 × ATR H1 |
 | Filtro de spread | 2.0 puntos |
+| Comisión por lote | $7.0 |
+| Cooldown pérdida diaria | `MAX_DAILY_LOSS_PCT` en `.env` (0 = off) |
 
-> Cada agente puede sobreescribir estos valores en su blueprint (ver `btc-agent` arriba), y el
-> orquestador los ajusta en caliente vía `optimize()`.
+> Cada agente puede sobreescribir estos valores en su blueprint (ver `btc-agent` arriba) o por
+> `.env` (precedencia símbolo > modelo > default), y el orquestador los ajusta en caliente vía
+> `optimize()`.
+
+## Tests
+
+Funciones puras (indicadores, validación de señales, sizing, optimización, memoria y cooldown):
+
+```bat
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
 
 ## Notas
 
@@ -277,6 +321,10 @@ POST /api/positions/{symbol}/close  Cerrar posición
 **Puerto 5000 ya en uso** → Un proceso del bot anterior quedó vivo: `netstat -ano | findstr :5000` y ciérralo.
 
 **Señal no validada** → No alcanza la confianza o el R:R mínimo del agente, demasiadas posiciones abiertas, spread por encima del filtro o entry lejos del precio.
+
+**`401 unauthorized` desde el dashboard** → Tienes `API_TOKEN` en el `.env` pero el dashboard no lo envía: define `VITE_API_TOKEN` (mismo valor) en `frontend/.env`.
+
+**El bot dejó de abrir operaciones pero sigue corriendo** → Se alcanzó el límite de pérdida diaria (`MAX_DAILY_LOSS_PCT`): está en *cooldown*, esperando a que se cierren las posiciones abiertas. Se rearma solo al cambiar de día.
 
 ---
 

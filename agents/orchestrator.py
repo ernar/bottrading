@@ -68,6 +68,11 @@ MIN_SAMPLES_TO_TUNE = 5   # nº mínimo de señales evaluadas para ajustar
 # operar. Una señal de confianza >= 90% se salta igualmente el límite.
 AT_MAX_ANALYSIS_INTERVAL = 15 * 60
 
+# Tras tocar el límite de pérdida diaria el bot NO se detiene: entra en cooldown,
+# deja de abrir operaciones y espacia el análisis a este intervalo para no perder
+# contexto/memoria mientras espera a que las posiciones abiertas se cierren.
+RISK_COOLDOWN_ANALYSIS_INTERVAL = 15 * 60
+
 
 def _clamp(value: float, key: str) -> float:
     lo, hi = PARAM_BOUNDS[key]
@@ -184,11 +189,12 @@ class AgentOrchestrator:
         # Reporte de la última optimización (para exponer al dashboard).
         self.last_optimization = None
         self.last_optimization_at = None
-        # Circuit breaker de pérdida diaria (0 = desactivado).
+        # Control de pérdida diaria (0 = desactivado). Al tocarlo se entra en
+        # cooldown (no se abren operaciones), no se detiene el bot.
         self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
         self._risk_day = None          # día (ISO) cuyo equity inicial guardamos
         self._day_start_equity = None  # equity al primer ciclo del día
-        self._risk_halted_day = None   # día en que ya saltó el breaker
+        self._risk_cooldown_day = None  # día en el que se activó el cooldown
         # Última instantánea de posiciones por símbolo {symbol: {ticket: snap}}:
         # base para detectar cierres y registrarlos en el historial.
         self._prev_positions: dict = {}
@@ -243,13 +249,14 @@ class AgentOrchestrator:
             print("\n\nOrquestador detenido por el usuario.")
 
     def _check_daily_loss_guard(self, account_info: dict):
-        """Kill-switch por pérdida diaria.
+        """Control de pérdida diaria por *cooldown* (no detiene el bot).
 
         Fija el equity al primer ciclo de cada día y, si en ciclos posteriores
-        cae por debajo del límite configurado, pausa el bot (deja de abrir
-        operaciones). Salta una sola vez por día; se rearma al cambiar de día.
-        Un resume manual desde el dashboard lo anula para el resto del día (el
-        usuario asume el control)."""
+        cae por debajo del límite configurado, activa el cooldown: el bot sigue
+        corriendo (actualiza estado, evalúa memoria y detecta cierres) pero deja
+        de abrir nuevas operaciones y espacia el análisis, a la espera de que las
+        posiciones abiertas se cierren. Se activa una vez por día y se rearma al
+        cambiar de día."""
         if not self.max_daily_loss_pct:
             return
         equity = account_info.get("equity") or 0
@@ -261,27 +268,28 @@ class AgentOrchestrator:
             # Nuevo día: rearmar con el equity actual como referencia.
             self._risk_day = today
             self._day_start_equity = equity
+            self._risk_cooldown_day = None
             return
 
         baseline = self._day_start_equity or equity
         drawdown = (baseline - equity) / baseline
-        if (drawdown >= self.max_daily_loss_pct
-                and bot_state.bot_running
-                and self._risk_halted_day != today):
-            self._risk_halted_day = today
-            bot_state.set_bot_running(False)
+        if drawdown >= self.max_daily_loss_pct and self._risk_cooldown_day != today:
+            self._risk_cooldown_day = today
             print(f"\n{'!' * 50}")
-            print(f"  CIRCUIT BREAKER: pérdida del día {drawdown:.1%} "
-                  f">= límite {self.max_daily_loss_pct:.1%}")
+            print(f"  PÉRDIDA DIARIA: {drawdown:.1%} >= límite {self.max_daily_loss_pct:.1%}")
             print(f"  Equity inicio del día: {baseline:.2f} -> actual: {equity:.2f}")
-            print("  BOT PAUSADO. Revisa la cuenta antes de reanudar desde el dashboard.")
+            print("  COOLDOWN: no se abren nuevas operaciones; análisis espaciado.")
+            print("  El bot sigue activo esperando el cierre de las posiciones abiertas.")
             print(f"{'!' * 50}")
 
-    def _should_analyze_at_max(self, symbol: str) -> bool:
-        """True si toca volver a analizar pese a estar en el máximo de posiciones
-        (ha pasado AT_MAX_ANALYSIS_INTERVAL desde el último análisis del símbolo)."""
-        last = self._last_analysis_at.get(symbol, 0)
-        return (time.time() - last) >= AT_MAX_ANALYSIS_INTERVAL
+    def _risk_cooldown_active(self) -> bool:
+        """True si hoy se tocó el límite de pérdida diaria (cooldown vigente)."""
+        return self._risk_cooldown_day == date.today().isoformat()
+
+    def _throttled(self, symbol: str, interval: float) -> bool:
+        """True si aún no han pasado `interval` segundos desde el último análisis
+        del símbolo (sirve para espaciar análisis en máximo de posiciones/cooldown)."""
+        return (time.time() - self._last_analysis_at.get(symbol, 0)) < interval
 
     def _spread_points(self, symbol: str, tick) -> float:
         """Spread actual en puntos, o None si no se puede calcular."""
@@ -385,16 +393,25 @@ class AgentOrchestrator:
         else:
             print(f"\n  ✅ No hay posiciones abiertas en {symbol}.")
 
-        # Si el símbolo está en su máximo de posiciones, espaciar el análisis a
-        # AT_MAX_ANALYSIS_INTERVAL: solo lo justifica una señal de confianza muy
-        # alta (>=90%) que se salte el límite, así que no merece la pena consultar
-        # al LLM cada ciclo.
+        # Estados que espacian el análisis y bloquean abrir nuevas operaciones:
+        #  - cooldown por pérdida diaria: esperamos a que las posiciones abiertas
+        #    se cierren sin asumir más riesgo, pero seguimos analizando de vez en
+        #    cuando para no perder contexto/memoria.
+        #  - símbolo en su máximo de posiciones: igual, salvo señal de conf >=90%.
+        in_cooldown = self._risk_cooldown_active()
         max_pos = agent.params.max_open_positions
         at_max = bool(max_pos) and len(positions) >= max_pos
-        if at_max and not self._should_analyze_at_max(symbol):
-            print(f"  {len(positions)} posiciones abiertas (máx {max_pos}); "
-                  f"análisis aplazado (cada {AT_MAX_ANALYSIS_INTERVAL // 60} min salvo conf>=90%).")
-            return
+        if in_cooldown or at_max:
+            interval = (RISK_COOLDOWN_ANALYSIS_INTERVAL if in_cooldown
+                        else AT_MAX_ANALYSIS_INTERVAL)
+            if self._throttled(symbol, interval):
+                if in_cooldown:
+                    print(f"  Cooldown por pérdida diaria; análisis aplazado "
+                          f"(cada {interval // 60} min, esperando el cierre de posiciones).")
+                else:
+                    print(f"  {len(positions)} posiciones abiertas (máx {max_pos}); "
+                          f"análisis aplazado (cada {interval // 60} min salvo conf>=90%).")
+                return
 
         with _Spinner("  Generando análisis"):
             signal = agent.analyze(self.client, platform=self.platform)
@@ -429,6 +446,12 @@ class AgentOrchestrator:
 
         if signal["action"] == "HOLD":
             self.stats[agent.name]["holds"] += 1
+            return
+
+        # En cooldown por pérdida diaria la señal queda registrada (memoria y
+        # contexto) pero NO se abre operación: esperamos al cierre de las abiertas.
+        if in_cooldown:
+            print("  Cooldown por pérdida diaria: señal registrada, no se abre operación.")
             return
 
         # Contexto extra para la validación: spread actual (filtro de coste) y

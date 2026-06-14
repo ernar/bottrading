@@ -72,17 +72,13 @@ def test_override_confianza_salta_max_posiciones():
                               total_open_positions=3) is True
 
 
-def test_rechaza_duplicar_direccion():
-    eng = _engine()
+def test_permite_apilar_misma_direccion_bajo_el_limite():
+    # El proyecto permite varias posiciones en la misma dirección (reforzar);
+    # el control es max_open_positions, no un veto a duplicar.
+    eng = _engine(max_open_positions=5)
     pos = SimpleNamespace(direction="BUY")
-    assert eng.validate_trade(_buy_signal(), positions=[pos], tick=_tick()) is False
-
-
-def test_override_confianza_salta_duplicado():
-    eng = _engine(max_pos_override_confidence=0.90)
-    pos = SimpleNamespace(direction="BUY")
-    sig = _buy_signal(confidence=0.95)
-    assert eng.validate_trade(sig, positions=[pos], tick=_tick()) is True
+    assert eng.validate_trade(_buy_signal(), positions=[pos], tick=_tick(),
+                              total_open_positions=1) is True
 
 
 # ----- calculate_lot_size -----
