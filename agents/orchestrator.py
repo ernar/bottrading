@@ -212,6 +212,25 @@ class AgentOrchestrator:
                     time.sleep(5)
                     continue
 
+                # Check global de posiciones abiertas antes de analizar:
+                # si ya estamos en el máximo global, saltar directamente al
+                # siguiente ciclo y ahorrar llamadas al LLM.
+                all_positions = self.client.get_positions() or []
+                max_global = max((a.params.max_open_positions for a in self.agents), default=0)
+                if bool(max_global) and len(all_positions) >= max_global:
+                    symbols_profit = {}
+                    for p in all_positions:
+                        sym = _pos_get(p, "symbol", default="?")
+                        profit = _pos_to_float(_pos_get(p, "profit"))
+                        symbols_profit[sym] = symbols_profit.get(sym, 0.0) + profit
+                    total_profit = sum(symbols_profit.values())
+                    print(f"\n  ⏭️ Máximo global de posiciones ({max_global}) alcanzado.")
+                    print(f"  💰 Profit no realizado total: ${total_profit:+.2f}")
+                    for sym, prof in sorted(symbols_profit.items()):
+                        print(f"     {sym}: ${prof:+.2f}")
+                    time.sleep(poll_seconds)
+                    continue
+
                 for agent in self.agents:
                     self._run_agent(agent)
 
