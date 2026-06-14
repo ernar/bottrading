@@ -636,10 +636,17 @@ class AgentOrchestrator:
                 router.unregister(tid)
 
         sys.stdout = router
+        # El hilo principal queda libre mientras los workers generan el análisis
+        # (escriben a sus buffers); animamos un spinner en la consola real para
+        # que se note que la recolección está en marcha. El spinner corre en su
+        # propio hilo, NO registrado en el router, así que escribe a real_out; se
+        # detiene antes de volcar los buffers para no pisar su '\r'.
+        n = len(self.agents)
         try:
-            with ThreadPoolExecutor(max_workers=len(self.agents),
-                                    thread_name_prefix="analyze") as ex:
-                collected = list(ex.map(work, self.agents))
+            with _Spinner(f"  Analizando {n} símbolos en paralelo"):
+                with ThreadPoolExecutor(max_workers=n,
+                                        thread_name_prefix="analyze") as ex:
+                    collected = list(ex.map(work, self.agents))
         finally:
             sys.stdout = real_out
 
