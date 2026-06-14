@@ -5,6 +5,7 @@ evalúa si el precio se movió a favor o en contra (o tocó SL/TP) y genera
 un resumen de rendimiento por símbolo que se inyecta en el prompt para
 que el modelo tenga feedback de sus señales recientes.
 """
+import csv
 import json
 import os
 import threading
@@ -12,6 +13,8 @@ from datetime import datetime
 from typing import Optional
 
 MEMORY_PATH = "logs/memory.json"
+# Cierres persistentes (plataforma por defecto mt4; ver core/logger.py).
+CLOSED_TRADES_CSV = "logs/mt4/closed_trades.csv"
 MAX_RECORDS_PER_SYMBOL = 30
 MIN_EVAL_AGE_SECONDS = 30 * 60        # primera evaluación a partir de 30 min
 MAX_EVAL_AGE_SECONDS = 24 * 60 * 60   # tras 24h se cierra como terminal aunque no toque SL/TP
