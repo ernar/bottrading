@@ -157,6 +157,35 @@ def get_agent_param_overrides(symbol: str, model: str) -> dict:
     return overrides
 
 
+def get_coordinator_config() -> dict:
+    """Configuración del coordinador (mesa de dirección) desde .env.
+
+    El coordinador es una capa por encima de los agentes especialistas que
+    reparte capital y decide go/no-go por símbolo. Variables soportadas:
+
+    - COORDINATOR_ENABLED (bool, default True): activa la capa coordinadora.
+      Si está desactivado, el orquestador usa la ruta clásica por agente.
+    - COORDINATOR_PROVIDER / COORDINATOR_MODEL: LLM del coordinador. Si están
+      vacíos, en main.py se hereda el LLM del primer agente como default.
+    - COORDINATOR_CAN_CLOSE (bool, default True): permite cerrar/reducir
+      posiciones abiertas. Kill-switch del cierre automático.
+    - COORDINATOR_TEMPERATURE (float, default 0.2): temperatura del LLM.
+    - MAX_TOTAL_EXPOSURE_PCT (float, default 0.5): exposición total máxima
+      (margen usado / equity) por encima de la cual no se aprueban entradas.
+    - MAX_SYMBOL_ALLOCATION_PCT (float, default 0.4): asignación máxima de
+      capital por símbolo (fracción del equity).
+    """
+    return {
+        "enabled": _env_bool("COORDINATOR_ENABLED", True),
+        "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
+        "model": os.getenv("COORDINATOR_MODEL", "").strip(),
+        "can_close": _env_bool("COORDINATOR_CAN_CLOSE", True),
+        "temperature": _env_float("COORDINATOR_TEMPERATURE", 0.2),
+        "max_total_exposure_pct": _env_float("MAX_TOTAL_EXPOSURE_PCT", 0.5),
+        "max_symbol_allocation_pct": _env_float("MAX_SYMBOL_ALLOCATION_PCT", 0.4),
+    }
+
+
 def get_commission_per_lot(default: float = 7.0) -> float:
     """Lee la comisión por lote desde .env.
     

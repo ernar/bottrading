@@ -123,6 +123,14 @@ class StrategyEngine:
                 print(f"  [AI error] {self.provider}/{model}: {e}")
             return None
 
+    def chat_json(self, system: str, user: str) -> Optional[str]:
+        """Llamada LLM genérica que devuelve el texto crudo (se espera JSON).
+
+        Reutiliza el transporte/proveedor de la estrategia (ollama/openai/gemini)
+        y su manejo de errores para que otros agentes —p. ej. el coordinador—
+        no dupliquen la fontanería. Devuelve el contenido o None si falla."""
+        return self._call_ai(system, user)
+
     def analyze_market(self, symbol: str, timeframe: str = "H1", market_data: str = "") -> Optional[str]:
         user_prompt = f"""Analiza {symbol} (timeframe principal {timeframe}) y decide buy, sell o hold.
 

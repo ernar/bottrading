@@ -6,6 +6,7 @@ de rendimiento por agente que servirá de base para la fase de optimización
 (ajuste automático de parámetros / modelo de cada agente).
 """
 import os
+import math
 import threading
 import time
 from datetime import date, datetime
@@ -15,42 +16,7 @@ from core.bot_state import Trade
 from core.logger import log_trade
 from core.trade_metrics import calc_trade_metrics
 from agents.base_agent import AgentParams
-
-
-def _pos_get(pos, *fields, default=None):
-    """Lee el primer campo presente de una posición, sea Position (pydantic/MT5)
-    o dict (MT4)."""
-    for f in fields:
-        if isinstance(pos, dict):
-            if pos.get(f) is not None:
-                return pos[f]
-        else:
-            v = getattr(pos, f, None)
-            if v is not None:
-                return v
-    return default
-
-
-def _pos_to_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _pos_direction(pos) -> str:
-    """Normaliza la dirección. MT5 da 'BUY'/'SELL'; MT4 da type entero (0=BUY,1=SELL)."""
-    d = _pos_get(pos, "direction", "type")
-    if d is None:
-        return "?"
-    s = str(d).upper()
-    if s in ("BUY", "SELL"):
-        return s
-    if s in ("0", "0.0"):
-        return "BUY"
-    if s in ("1", "1.0"):
-        return "SELL"
-    return s
+from agents.positions import _pos_get, _pos_to_float, _pos_direction
 
 
 # Límites de seguridad para que la optimización no deje a un agente en una
