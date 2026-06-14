@@ -21,7 +21,7 @@ load_dotenv()
 def select_llm(default_provider: str, default_model: str) -> tuple[str, str]:
     """Pregunta el provider/modelo LLM para un agente.
 
-    Solo lista proveedores con clave configurada (ollama siempre). Enter
+    Solo lista proveedores con clave configurada (gemini por defecto). Enter
     mantiene el modelo por defecto del blueprint."""
     providers = available_providers()
     options: list[tuple[str, str]] = [

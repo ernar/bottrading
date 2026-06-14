@@ -29,6 +29,15 @@ class BaseMTClient(ABC):
     @abstractmethod
     def get_positions(self, symbol: Optional[str] = None) -> List: ...
 
+    def get_commission_per_lot(self, symbol: str) -> Optional[float]:
+        """Comisión por lote observada de operaciones reales del bróker.
+
+        Se deduce de las posiciones abiertas (no es una propiedad del símbolo).
+        Las subclases que no la expongan devuelven None y el caller recurre al
+        valor de `.env` como fallback.
+        """
+        return None
+
     @abstractmethod
     def get_orders(self, symbol: Optional[str] = None) -> List: ...
 

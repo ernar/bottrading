@@ -15,6 +15,7 @@ Dos capas que cooperan:
   determinista (fail-safe), igual que el proveedor de noticias.
 """
 import json
+import time
 from typing import Optional
 
 from core.models import BotConfig
@@ -30,10 +31,27 @@ class RiskBook:
         self.max_total_exposure_pct = float(config.get("max_total_exposure_pct", 0.5))
         self.max_symbol_allocation_pct = float(config.get("max_symbol_allocation_pct", 0.4))
         self.can_close = bool(config.get("can_close", True))
+        # Si False (default), la mesa NO ejecuta la gestión DISCRECIONAL del LLM
+        # (reduce/close/hedge propuestos "por criterio"): solo cierra por FUERZA
+        # MAYOR (guardias deterministas: hard-stop y reversión). Las posiciones
+        # tienen su propio Stop Loss y se respeta. `can_close` sigue siendo el
+        # kill-switch global (si es False, ni siquiera las guardias cierran).
+        self.llm_can_close = bool(config.get("llm_can_close", False))
         # Control de concentración direccional / reversión de tendencia.
         self.max_net_direction_pct = float(config.get("max_net_direction_pct", 0.6))
         self.reversal_drawdown_pct = float(config.get("reversal_drawdown_pct", 0.015))
         self.max_symbol_loss_pct = float(config.get("max_symbol_loss_pct", 0.0))
+        # Período de gracia para posiciones recién abiertas (segundos). Mientras la
+        # posición más joven de un símbolo no lo supere, las guardias deterministas
+        # de reversión y los cierres/reducciones que proponga el LLM se aplazan
+        # (se le da tiempo a evolucionar); solo el hard-stop catastrófico lo rompe.
+        self.min_hold_seconds = float(config.get("min_hold_seconds", 300.0))
+        # Edad de las posiciones MEDIDA POR LA MESA: {ticket: monotonic_ts del
+        # primer avistamiento}. Usar tiempo monótono local (no el open_time del
+        # bróker) evita depender del desfase de zona horaria del servidor MT.
+        # Tras un reinicio, las posiciones preexistentes se ven "recién abiertas"
+        # y gozan de gracia durante min_hold_seconds (sesgo conservador a propósito).
+        self._first_seen: dict = {}
 
     # ----- Helpers de dirección (estáticos, reutilizados por el prompt) -----
 
@@ -104,6 +122,8 @@ class RiskBook:
         hedging = bool(account.get("hedging", False))
 
         all_positions = client.get_positions() or []
+        now_mono = time.monotonic()
+        current_tickets: set = set()
         per_symbol: dict = {}
         for p in all_positions:
             sym = _pos_get(p, "symbol", default="?")
@@ -117,10 +137,21 @@ class RiskBook:
                 "long_notional": 0.0, "short_notional": 0.0,
                 "long_vol": 0.0, "short_vol": 0.0,
                 "long_count": 0, "short_count": 0,
+                "newest_age": None, "oldest_age": None,
             })
             d["notional"] += notional
             d["profit"] += profit
             d["count"] += 1
+            # Edad de la posición vista por la mesa (primer avistamiento).
+            ticket = _pos_get(p, "ticket")
+            if ticket is not None:
+                tk = str(ticket)
+                current_tickets.add(tk)
+                age = now_mono - self._first_seen.setdefault(tk, now_mono)
+                if d["newest_age"] is None or age < d["newest_age"]:
+                    d["newest_age"] = age
+                if d["oldest_age"] is None or age > d["oldest_age"]:
+                    d["oldest_age"] = age
             if direction == "BUY":
                 d["long_notional"] += notional
                 d["long_vol"] += vol
@@ -130,6 +161,10 @@ class RiskBook:
                 d["short_vol"] += vol
                 d["short_count"] += 1
 
+        # Poda: olvida la edad de los tickets que ya no están abiertos.
+        self._first_seen = {t: s for t, s in self._first_seen.items()
+                            if t in current_tickets}
+
         total_exposure_pct = (used_margin / equity) if equity > 0 else 0.0
         daily_pnl_pct = None
         if day_start_equity and day_start_equity > 0:
@@ -137,7 +172,8 @@ class RiskBook:
 
         empty = {"notional": 0.0, "profit": 0.0, "count": 0,
                  "long_notional": 0.0, "short_notional": 0.0,
-                 "long_vol": 0.0, "short_vol": 0.0, "long_count": 0, "short_count": 0}
+                 "long_vol": 0.0, "short_vol": 0.0, "long_count": 0, "short_count": 0,
+                 "newest_age": None, "oldest_age": None}
         symbols = {}
         for agent in agents:
             sym = agent.symbol
@@ -164,6 +200,10 @@ class RiskBook:
                 "short_positions": ps["short_count"],
                 "floating_pnl": round(ps["profit"], 2),
                 "open_positions": ps["count"],
+                "newest_position_age": (round(ps["newest_age"], 1)
+                                        if ps.get("newest_age") is not None else None),
+                "oldest_position_age": (round(ps["oldest_age"], 1)
+                                        if ps.get("oldest_age") is not None else None),
                 "max_allocation_pct": self.max_symbol_allocation_pct,
                 "remaining_pct": round(max(0.0, self.max_symbol_allocation_pct - used_pct), 4),
             }
@@ -179,6 +219,7 @@ class RiskBook:
             "max_net_direction_pct": self.max_net_direction_pct,
             "reversal_drawdown_pct": self.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.max_symbol_loss_pct,
+            "min_hold_seconds": self.min_hold_seconds,
             "hedging": hedging,
             "daily_pnl_pct": round(daily_pnl_pct, 4) if daily_pnl_pct is not None else None,
             "in_cooldown": bool(in_cooldown),
@@ -202,11 +243,19 @@ class RiskBook:
         - si el símbolo ya está en su tope de asignación, no se aprueban entradas;
         - NO se apila en la dirección ya saturada (``max_net_direction_pct``).
 
-        Guardias de posiciones abiertas (deterministas, solo si ``can_close``):
-        - hard-stop por símbolo (``max_symbol_loss_pct``) -> close;
+        Gestión de posiciones abiertas. Por defecto la mesa solo cierra por
+        FUERZA MAYOR: la gestión discrecional del LLM (reduce/close/hedge "por
+        criterio") se ignora (-> hold) salvo que ``llm_can_close`` esté activo;
+        las posiciones tienen su propio Stop Loss y se respeta. Las guardias
+        deterministas SÍ actúan siempre (solo si ``can_close``):
+        - hard-stop por símbolo (``max_symbol_loss_pct``) -> close (rompe la gracia);
         - reversión: sesgo abierto vs tendencia nueva con pérdida flotante
           (``reversal_drawdown_pct``) -> reduce (o close si la pérdida es grande),
-          fijando ``manage_direction`` al lado a cerrar;
+          fijando ``manage_direction`` al lado a cerrar; SE PAUSA si la posición
+          más reciente está dentro del período de gracia (``min_hold_seconds``);
+        - período de gracia: un ``reduce``/``close`` propuesto por el LLM sobre una
+          posición recién abierta (más joven que ``min_hold_seconds``) se aplaza a
+          ``hold`` — se le da tiempo a evolucionar; solo el hard-stop lo salta;
         - ``hedge`` se degrada a ``reduce`` si la cuenta no es hedging o si la
           exposición total ya está en el tope; a ``hold`` si ``can_close`` está off.
         """
@@ -235,6 +284,11 @@ class RiskBook:
             floating_pnl = sym_info.get("floating_pnl", 0.0) or 0.0
             open_positions = sym_info.get("open_positions", 0) or 0
             loss_pct = (-floating_pnl / equity) if (equity > 0 and floating_pnl < 0) else 0.0
+            # Período de gracia: la posición más reciente del símbolo es demasiado
+            # joven para tocarla (salvo emergencia hard-stop).
+            newest_age = sym_info.get("newest_position_age")
+            in_grace = (self.min_hold_seconds > 0 and newest_age is not None
+                        and newest_age < self.min_hold_seconds)
 
             sig = signals.get(sym) or {}
             entry_side = str(sig.get("action", "")).upper()
@@ -263,12 +317,41 @@ class RiskBook:
                         and net_direction in ("LONG", "SHORT")
                         and trend_dir != net_direction
                         and loss_pct >= self.reversal_drawdown_pct):
-                    needed = "close" if loss_pct >= 2 * self.reversal_drawdown_pct else "reduce"
-                    action = self._stronger_action(action, needed)
-                    manage_direction = net_side
-                    forced = True
-                    notes.append(f"reversión: libro {net_direction} vs tendencia "
-                                 f"{trend_dir.lower()}, pérdida {loss_pct:.1%} -> {action}")
+                    if in_grace:
+                        # Recién abierta: se le da tiempo a evolucionar antes de
+                        # forzar la reversión.
+                        notes.append(f"reversión en pausa: posición reciente "
+                                     f"({newest_age:.0f}s < {self.min_hold_seconds:.0f}s "
+                                     f"de gracia)")
+                    else:
+                        needed = "close" if loss_pct >= 2 * self.reversal_drawdown_pct else "reduce"
+                        action = self._stronger_action(action, needed)
+                        manage_direction = net_side
+                        forced = True
+                        notes.append(f"reversión: libro {net_direction} vs tendencia "
+                                     f"{trend_dir.lower()}, pérdida {loss_pct:.1%} -> {action}")
+
+            # 3b) Período de gracia: un reduce/close que proponga el LLM sobre una
+            # posición recién abierta se aplaza (se le da tiempo a evolucionar).
+            # Solo el hard-stop/reversión forzados (forced=True) lo saltan.
+            if action in ("reduce", "close") and in_grace and not forced and self.can_close:
+                notes.append(f"posición reciente ({newest_age:.0f}s < "
+                             f"{self.min_hold_seconds:.0f}s de gracia): {action} aplazado -> hold")
+                action = "hold"
+                manage_direction = None
+
+            # 3c) Fuerza mayor: salvo que se habilite explícitamente
+            # (COORDINATOR_LLM_CAN_CLOSE), la mesa NO ejecuta la gestión
+            # DISCRECIONAL del LLM (reduce/close/hedge "por criterio", p. ej. por
+            # exposición) sobre posiciones que ya tienen su propio Stop Loss.
+            # Solo las guardias deterministas (hard-stop / reversión, forced=True)
+            # pueden tocar lo abierto.
+            if (action in ("reduce", "close", "hedge") and not forced
+                    and not self.llm_can_close):
+                notes.append(f"{action} discrecional del LLM ignorado: la mesa solo "
+                             f"cierra por fuerza mayor (S/L propio respetado)")
+                action = "hold"
+                manage_direction = None
 
             # 4) Cobertura (hedge): degradar según cuenta/exposición.
             if action == "hedge":
@@ -354,8 +437,15 @@ Reglas:
   si conviene mantener las posiciones pero frenar la sangría.
 - "hedge" solo tiene sentido si la cuenta permite cobertura (ver "Cobertura disponible" en el
   contexto); si no, la capa de riesgo lo convertirá en "reduce".
-- Si la cartera ya está muy expuesta o en pérdidas del día, sé conservador: menos entradas y
-  considera reduce/close/hedge en lo que vaya en contra.
+- Si la cartera ya está muy expuesta o en pérdidas del día, sé conservador GESTIONANDO LAS
+  ENTRADAS: no apruebes operaciones nuevas. NO cierres/reduzcas posiciones abiertas solo por
+  "controlar exposición": cada posición ya tiene su Stop Loss y se respeta. Reserva reduce/close
+  para un CONFLICTO CLARO de reversión (el libro va en una dirección y la tendencia gira en
+  contra con pérdida real). Gestionar exposición = abrir menos, NO cerrar lo que ya está.
+- PACIENCIA CON LO RECIÉN ABIERTO: una posición acaba de abrirse no se cierra a la primera de
+  cambio. Fíjate en la "Antigüedad posiciones": si está marcada "EN PERÍODO DE GRACIA", déjala
+  evolucionar (usa "hold") salvo emergencia clara; la capa de riesgo aplazará igualmente los
+  reduce/close prematuros sobre posiciones demasiado jóvenes.
 - Una señal "hold" del especialista normalmente NO se aprueba como entrada nueva.
 - Tus números son propuestas: una capa de riesgo posterior recortará lo que exceda los límites
   duros (incluidos topes de dirección neta y guardias de reversión). Aun así, respeta los topes
@@ -440,6 +530,10 @@ class CoordinatorAgent:
         lines.append(f"Tope de asignación por símbolo: {snapshot.get('max_symbol_allocation_pct', 0):.0%}"
                      f" | Tope de dirección neta por símbolo: {snapshot.get('max_net_direction_pct', 0):.0%}")
         lines.append(f"Cobertura (hedge) disponible en la cuenta: {'sí' if snapshot.get('hedging') else 'no'}")
+        if not self.risk_book.llm_can_close:
+            lines.append("POLÍTICA: la mesa solo cierra por fuerza mayor. Tus reduce/close/hedge "
+                         "discrecionales se IGNORARÁN (las posiciones tienen su Stop Loss). "
+                         "Gestiona el riesgo aprobando menos entradas, no cerrando lo abierto.")
         if snapshot.get("daily_pnl_pct") is not None:
             lines.append(f"P/L del día: {snapshot['daily_pnl_pct']:+.2%}")
         if snapshot.get("in_cooldown"):
@@ -463,6 +557,18 @@ class CoordinatorAgent:
                          f"({si.get('open_positions', 0)} pos, "
                          f"P/L flotante {si.get('floating_pnl', 0):+.2f}) | "
                          f"margen para asignar: {self._pct(si.get('remaining_pct'))}")
+            # Antigüedad de las posiciones abiertas: la mesa avisa de las recién
+            # abiertas (en gracia) para no cerrarlas antes de que evolucionen.
+            if si.get("open_positions") and si.get("newest_position_age") is not None:
+                min_hold = self.risk_book.min_hold_seconds
+                age = si["newest_position_age"]
+                grace = " ⏳ EN PERÍODO DE GRACIA (no cerrar aún salvo emergencia)" \
+                    if (min_hold > 0 and age < min_hold) else ""
+                oldest = si.get("oldest_position_age")
+                rango = (f"reciente {self._fmt_age(age)}"
+                         + (f", más antigua {self._fmt_age(oldest)}"
+                            if oldest is not None and oldest != age else ""))
+                lines.append(f"  Antigüedad posiciones: {rango}{grace}")
             nd = si.get("net_direction", "FLAT")
             lines.append(f"  Sesgo abierto: {si.get('long_positions', 0)}L / "
                          f"{si.get('short_positions', 0)}S · neto {nd} "
@@ -472,10 +578,13 @@ class CoordinatorAgent:
                 lines.append(f"  ⚠ CONFLICTO: libro {nd} vs tendencia {sig.get('trend')} "
                              f"-> considera reduce/close/hedge del lado {nd}.")
             a = perf_by_symbol.get(sym)
-            if a and a.get("performance"):
-                p = a["performance"]
+            p = (a or {}).get("performance") or {}
+            if p.get("samples"):
                 lines.append(f"  Rendimiento agente: win {self._pct(p.get('win_rate'))} "
-                             f"sobre {p.get('samples', 0)} señales")
+                             f"sobre {p.get('samples', 0)} señales evaluadas")
+            else:
+                lines.append("  Rendimiento agente: sin histórico evaluado aún "
+                             "(señales todavía sin resultado)")
 
         if news_context:
             lines.append(f"\n=== NOTICIAS / MACRO ===\n{news_context[:1500]}")
@@ -489,6 +598,19 @@ class CoordinatorAgent:
             return f"{float(value):.0%}"
         except (TypeError, ValueError):
             return "n/a"
+
+    @staticmethod
+    def _fmt_age(seconds) -> str:
+        """Antigüedad legible (s / m / h) para el contexto del coordinador."""
+        try:
+            s = float(seconds)
+        except (TypeError, ValueError):
+            return "n/a"
+        if s < 90:
+            return f"{s:.0f}s"
+        if s < 5400:
+            return f"{s / 60:.0f}m"
+        return f"{s / 3600:.1f}h"
 
     # ----- Parseo / fallback -----
 

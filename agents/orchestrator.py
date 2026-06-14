@@ -14,7 +14,7 @@ from datetime import date, datetime
 from core import console
 from core.state import bot_state
 from core.bot_state import Trade
-from core.logger import log_trade
+from core.logger import log_trade, log_closed_trade
 from core.trade_metrics import calc_trade_metrics
 from agents.base_agent import AgentParams
 from agents.positions import _pos_get, _pos_to_float, _pos_direction
@@ -483,6 +483,18 @@ class AgentOrchestrator:
             duration_seconds=duration,
         )
         bot_state.add_closed_trade(trade)
+        # Persistir a CSV para que el rendimiento sobreviva al reinicio.
+        log_closed_trade(
+            symbol=symbol,
+            action=snap.get("direction", "?"),
+            volume=snap.get("volume", 0.0),
+            entry_price=snap.get("open_price", 0.0),
+            exit_price=exit_price,
+            pnl=snap.get("profit", 0.0),
+            commission=0.0,  # se rellenará cuando el broker lo devuelva
+            duration_seconds=duration,
+            platform=self.platform,
+        )
         print(f"  {console.accent('⟳ Cierre registrado')}: {console.side(trade.action)} "
               f"{symbol} | P/L≈{console.pnl(trade.pnl)}")
 
@@ -595,6 +607,16 @@ class AgentOrchestrator:
                 reason = reason[:139].rstrip() + "…"
             print(console.dim(f"     “{reason}”"))
 
+    def _effective_commission(self, agent) -> float:
+        """Comisión por lote a usar en las métricas: prioriza el valor observado
+        de MT (deducido de posiciones reales) y, mientras no haya datos del
+        símbolo, recurre al de `.env` (semilla en `agent.config`). Persiste lo
+        aprendido en la config del agente para los ciclos siguientes."""
+        learned = self.client.get_commission_per_lot(agent.symbol)
+        if learned is not None:
+            agent.config.commission_per_lot = learned
+        return agent.config.commission_per_lot
+
     def _print_signal_details(self, agent, signal):
         """Imprime la señal y, si tiene niveles, sus métricas de profit/pérdida."""
         symbol = agent.symbol
@@ -612,7 +634,7 @@ class AgentOrchestrator:
                 self.client, symbol, signal["action"],
                 signal["entry"], signal["stop_loss"], signal["take_profit"],
                 volume,
-                commission_per_lot=agent.config.commission_per_lot,
+                commission_per_lot=self._effective_commission(agent),
             )
             if metrics:
                 pips_tp = console.dim(f"({metrics['pips_tp']:.0f} pips)")
@@ -663,6 +685,14 @@ class AgentOrchestrator:
             comment=f"{agent.name}: {signal['reason'][:18]}",
         )
         if result and result.get("success"):
+            ticket = str(result.get("order", ""))
+            trade_id = f"{agent.name}/{symbol}/{ticket}" if ticket else ""
+            # Marcar la señal como ejecutada y vincular con el trade.
+            signal["executed"] = True
+            signal["trade_id"] = trade_id
+            from core.logger import log_signal as _log_sig
+            _log_sig(signal, platform=self.platform)
+            
             print(f"  {console.ok('✓ Orden ejecutada')}: {console.side(signal['action'])} "
                   f"{symbol} {console.dim('· ticket')} {result.get('order')} "
                   f"{console.dim('@')} {result.get('price')}")
@@ -1150,11 +1180,13 @@ class AgentOrchestrator:
             "provider": self.coordinator.provider,
             "model": self.coordinator.model,
             "can_close": self.risk_book.can_close,
+            "llm_can_close": self.risk_book.llm_can_close,
             "max_total_exposure_pct": self.risk_book.max_total_exposure_pct,
             "max_symbol_allocation_pct": self.risk_book.max_symbol_allocation_pct,
             "max_net_direction_pct": self.risk_book.max_net_direction_pct,
             "reversal_drawdown_pct": self.risk_book.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.risk_book.max_symbol_loss_pct,
+            "min_hold_seconds": self.risk_book.min_hold_seconds,
             "last_coordination": self.last_coordination,
             "last_coordination_at": self.last_coordination_at,
             "last_junta_at": self.last_junta_at,

@@ -43,8 +43,8 @@ def _coordination():
 def _agents_overview():
     return {
         "agents": [
-            {"name": "btc-agent", "symbol": "BTCUSD", "provider": "ollama",
-             "model": "qwen3:8b",
+            {"name": "btc-agent", "symbol": "BTCUSD", "provider": "gemini",
+             "model": "gemini-2.0-flash",
              "stats": {"signals": 12, "trades": 4, "holds": 6},
              "performance": {"samples": 8, "win_rate": 0.5, "sl_hit_rate": 0.25,
                              "tp_hit_rate": 0.375, "avg_move_pct": 0.4}},

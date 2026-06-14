@@ -168,7 +168,13 @@ def get_coordinator_config() -> dict:
     - COORDINATOR_PROVIDER / COORDINATOR_MODEL: LLM del coordinador. Si están
       vacíos, en main.py se hereda el LLM del primer agente como default.
     - COORDINATOR_CAN_CLOSE (bool, default True): permite cerrar/reducir
-      posiciones abiertas. Kill-switch del cierre automático.
+      posiciones abiertas. Kill-switch del cierre automático (si es False, ni
+      siquiera las guardias deterministas cierran).
+    - COORDINATOR_LLM_CAN_CLOSE (bool, default False): permite la gestión
+      DISCRECIONAL del LLM (reduce/close/hedge "por criterio", p. ej. por
+      exposición). Por defecto desactivado: la mesa solo cierra por FUERZA
+      MAYOR (guardias deterministas: hard-stop y reversión). Las posiciones
+      tienen su propio Stop Loss y se respeta.
     - COORDINATOR_TEMPERATURE (float, default 0.2): temperatura del LLM.
     - MAX_TOTAL_EXPOSURE_PCT (float, default 0.5): exposición total máxima
       (margen usado / equity) por encima de la cual no se aprueban entradas.
@@ -186,18 +192,25 @@ def get_coordinator_config() -> dict:
     - MAX_SYMBOL_LOSS_PCT (float, default 0 = off): hard-stop por símbolo
       independiente de la tendencia; si la pérdida flotante del símbolo supera
       este % del equity, se fuerza el cierre.
+    - MIN_HOLD_SECONDS (float, default 300): período de gracia para posiciones
+      recién abiertas. Mientras la posición más reciente de un símbolo sea más
+      joven que esto, la guardia de reversión se pausa y un reduce/close que
+      proponga el LLM se aplaza a hold (se le da tiempo a evolucionar). Solo el
+      hard-stop catastrófico (MAX_SYMBOL_LOSS_PCT) rompe la gracia. 0 = off.
     """
     return {
         "enabled": _env_bool("COORDINATOR_ENABLED", True),
         "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
         "model": os.getenv("COORDINATOR_MODEL", "").strip(),
         "can_close": _env_bool("COORDINATOR_CAN_CLOSE", True),
+        "llm_can_close": _env_bool("COORDINATOR_LLM_CAN_CLOSE", False),
         "temperature": _env_float("COORDINATOR_TEMPERATURE", 0.2),
         "max_total_exposure_pct": _env_float("MAX_TOTAL_EXPOSURE_PCT", 0.5),
         "max_symbol_allocation_pct": _env_float("MAX_SYMBOL_ALLOCATION_PCT", 0.4),
         "max_net_direction_pct": _env_float("MAX_NET_DIRECTION_PCT", 0.6),
         "reversal_drawdown_pct": _env_float("REVERSAL_DRAWDOWN_PCT", 0.015),
         "max_symbol_loss_pct": _env_float("MAX_SYMBOL_LOSS_PCT", 0.0),
+        "min_hold_seconds": _env_float("MIN_HOLD_SECONDS", 300.0),
     }
 
 

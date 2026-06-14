@@ -31,8 +31,8 @@ load_dotenv()
 class AgentParams(BaseModel):
     """Parámetros ajustables de un agente. El orquestador podrá modificarlos
     en caliente para optimizar resultados."""
-    provider: str = "ollama"
-    model: str = "qwen3:8b"
+    provider: str = "gemini"
+    model: str = "gemini-2.0-flash"
     min_confidence: float = 0.6
     min_rr: float = 1.0
     atr_sl_mult: float = 1.5
@@ -49,6 +49,28 @@ class AgentParams(BaseModel):
     # Por encima de esta confianza, la señal se salta el límite de posiciones
     # abiertas del símbolo (cuenta y no-duplicar dirección).
     max_pos_override_confidence: float = 0.90
+    # --- Gestión dinámica de posición ---
+    # Si True, activa trailing stop dinámico: mueve el SL a breakeven cuando el
+    # precio se mueve atr_trailing_breakeven_pct a favor, y luego lo sigue con
+    # atr_trailing_step_pct.
+    use_trailing_stop: bool = False
+    # Multiplicador ATR para el trigger de breakeven (ej: 1.0×ATR a favor = mover
+    # SL a entry). Solo aplica si use_trailing_stop=True.
+    trailing_breakeven_atr_mult: float = 1.0
+    # Multiplicador ATR para el paso del trailing stop después del breakeven
+    # (ej: 0.5×ATR = el SL sigue al precio a medio ATR).
+    trailing_step_atr_mult: float = 0.5
+    # Porcentaje mínimo de movimiento a favor para activar partial profit.
+    # Cuando el precio alcanza este % de ganancia, se cierra parcialmente la
+    # posición (partial_profit_pct del volumen) y se mueve SL a breakeven.
+    partial_profit_trigger_pct: float = 0.0
+    partial_profit_pct: float = 0.5
+    # Filtro de spread dinámico: si True, el umbral de spread se ajusta según la
+    # hora del día (más permisivo en horas de baja liquidez).
+    dynamic_spread_filter: bool = False
+    # Multiplicador adicional para el spread en horas de alta volatilidad.
+    # Se aplica cuando el spread medio de los últimos N ticks supera este umbral.
+    volatility_spread_mult: float = 1.5
 
 
 class SymbolAgent:

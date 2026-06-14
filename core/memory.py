@@ -22,7 +22,43 @@ class SignalMemory:
     def __init__(self, path: str = MEMORY_PATH):
         self._path = path
         self._lock = threading.Lock()
+        self._closed_trades: list = self._load_closed_trades()
         self._data: dict = self._load()
+
+    def _load_closed_trades(self) -> list:
+        """Carga trades cerrados desde CSV persistente para vincular PnL real."""
+        if not os.path.exists(CLOSED_TRADES_CSV):
+            return []
+        try:
+            with open(CLOSED_TRADES_CSV, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                return list(reader)
+        except (csv.Error, OSError):
+            return []
+
+    def _sync_pnl_real(self):
+        """Sincroniza pnl_real de las señales existentes con los cierres en CSV."""
+        if not self._closed_trades:
+            return
+        with self._lock:
+            for symbol, records in self._data.items():
+                for rec in records:
+                    trade_id = rec.get("trade_id", "")
+                    if not trade_id or rec.get("pnl_real") is not None:
+                        continue
+                    for ct in self._closed_trades:
+                        if (ct.get("symbol") == symbol and
+                            ct.get("action", "").upper() == rec.get("action", "").upper()):
+                            try:
+                                entry = float(ct.get("entry_price", 0))
+                                rec_entry = rec.get("price", 0)
+                                if abs(entry - rec_entry) < 1e-10:
+                                    rec["pnl_real"] = float(ct.get("pnl", 0))
+                                    rec["outcome"] = "ganador" if rec["pnl_real"] > 0 else "perdedor"
+                                    rec["final"] = True
+                                    break
+                            except (ValueError, TypeError):
+                                pass
 
     def _load(self) -> dict:
         if os.path.exists(self._path):
@@ -41,7 +77,10 @@ class SignalMemory:
         os.replace(tmp, self._path)
 
     def record_signal(self, symbol: str, signal: dict, price: float):
-        """Guarda una señal junto al precio de mercado del momento."""
+        """Guarda una señal junto al precio de mercado del momento.
+        
+        Si la señal tiene trade_id y ya existe un cierre en CSV, se carga
+        el PnL real inmediatamente."""
         if not price:
             return
         with self._lock:
@@ -53,6 +92,8 @@ class SignalMemory:
                 "price": price,
                 "stop_loss": signal.get("stop_loss") or None,
                 "take_profit": signal.get("take_profit") or None,
+                "trade_id": signal.get("trade_id", ""),
+                "pnl_real": None,   # se rellena si hay cierre en CSV
                 "outcome": None,    # provisional (favorable/adverso) hasta ser terminal
                 "move_pct": None,
                 "final": False,     # terminal: tocó SL/TP o superó MAX_EVAL_AGE_SECONDS

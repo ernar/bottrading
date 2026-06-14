@@ -104,7 +104,7 @@ def available_providers() -> dict[str, list[str]]:
     """
     providers: dict[str, list[str]] = {}
 
-    if _env_bool("OLLAMA_ENABLED", default=True):
+    if _env_bool("OLLAMA_ENABLED", default=False):
         ollama_models = _split(os.getenv("OLLAMA_MODELS")) or [os.getenv("MODEL", "qwen3:8b")]
         providers["ollama"] = _dedup(ollama_models)
 

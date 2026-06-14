@@ -47,6 +47,10 @@ class MT4Client(BaseMTClient):
         self._resp_file = os.path.join(files_path, "pb_resp.txt")
         self._lock_file = os.path.join(files_path, "pb_lock.txt")
 
+        # Comisión por lote aprendida de operaciones reales (símbolo -> $/lote).
+        # Se actualiza como efecto colateral de get_positions().
+        self._commission_cache: dict = {}
+
     def _find_files_dir(self, mq_base: str) -> str:
         """Busca automáticamente la carpeta MQL4/Files del primer terminal MT4."""
         if not os.path.isdir(mq_base):
@@ -166,7 +170,35 @@ class MT4Client(BaseMTClient):
                 continue
             data = self._parse_kv(entry.replace(",", "|"))
             positions.append(data)
+        self._learn_commission(positions)
         return positions
+
+    def _learn_commission(self, positions: List[dict]):
+        """Deduce la comisión por lote de las posiciones reportadas y la cachea
+        por símbolo: |comisión total| / volumen total del símbolo. Robusto frente
+        a varias posiciones del mismo símbolo. El EA debe reportar `commission`
+        (PythonBridge.mq4 >= versión con OrderCommission)."""
+        agg: dict = {}  # symbol -> [comisión acumulada, volumen acumulado]
+        for p in positions:
+            sym = p.get("symbol")
+            if not sym or "commission" not in p:
+                continue
+            try:
+                comm = abs(float(p.get("commission", 0)))
+                vol = float(p.get("volume", 0))
+            except (ValueError, TypeError):
+                continue
+            if vol <= 0:
+                continue
+            acc = agg.setdefault(sym, [0.0, 0.0])
+            acc[0] += comm
+            acc[1] += vol
+        for sym, (comm, vol) in agg.items():
+            if vol > 0:
+                self._commission_cache[sym] = round(comm / vol, 4)
+
+    def get_commission_per_lot(self, symbol: str) -> Optional[float]:
+        return self._commission_cache.get(symbol)
 
     def get_orders(self, symbol: Optional[str] = None) -> List[dict]:
         resp = self._send("ORDERS")

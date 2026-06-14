@@ -107,7 +107,7 @@ def build_market_context(client, symbol: str, positions: list = None,
 
     if rates_h1:
         lines.append("")
-        lines += _candles_section(rates_h1, digits)
+        lines += _candles_section(rates_h1, digits, last_n=6)
 
     if positions:
         lines.append("")
@@ -129,11 +129,11 @@ def build_market_context(client, symbol: str, positions: list = None,
     if news_context:
         lines.append("")
         lines.append("--- Noticias y eventos económicos ---")
-        lines.append(news_context)
+        lines.append(news_context[:800])
 
     if memory_summary:
         lines.append("")
         lines.append("--- Rendimiento reciente de tus señales en este símbolo ---")
-        lines.append(memory_summary)
+        lines.append(memory_summary[:400])
 
     return "\n".join(lines)

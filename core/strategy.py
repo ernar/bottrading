@@ -83,7 +83,7 @@ class StrategyEngine:
     MIN_RR = 1.0
     MAX_ENTRY_DEVIATION_PCT = 0.5  # entry no puede alejarse más de 0.5% del precio real
 
-    def __init__(self, config: BotConfig, provider: str = "ollama",
+    def __init__(self, config: BotConfig, provider: str = "gemini",
                  system_suffix: str = "", min_confidence: float = None,
                  min_rr: float = None, temperature: float = 0.2,
                  commission_per_lot: float = None):

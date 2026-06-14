@@ -20,7 +20,7 @@ from email.utils import parsedate_to_datetime
 
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 YAHOO_RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) mt4-ollama-bot/1.0"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) mt5-gemini-bot/1.0"
 
 HEADLINES_TTL = 15 * 60       # refrescar titulares cada 15 min
 CALENDAR_TTL = 60 * 60        # el calendario semanal cambia poco

@@ -4,13 +4,18 @@ from agents.coordinator import RiskBook, CoordinatorAgent
 
 
 def _rb(can_close=True, max_total=0.5, max_symbol=0.4, max_net=0.6,
-        reversal=0.015, symbol_loss=0.0) -> RiskBook:
+        reversal=0.015, symbol_loss=0.0, min_hold=0.0, llm_can_close=True) -> RiskBook:
+    # min_hold por defecto 0 (gracia off) y llm_can_close=True (gestión
+    # discrecional permitida) para no alterar los tests existentes; el default
+    # real de producción es llm_can_close=False (solo fuerza mayor).
     return RiskBook({"max_total_exposure_pct": max_total,
                      "max_symbol_allocation_pct": max_symbol,
                      "can_close": can_close,
                      "max_net_direction_pct": max_net,
                      "reversal_drawdown_pct": reversal,
-                     "max_symbol_loss_pct": symbol_loss})
+                     "max_symbol_loss_pct": symbol_loss,
+                     "min_hold_seconds": min_hold,
+                     "llm_can_close": llm_can_close})
 
 
 def _snapshot(total_exposure=0.0, in_cooldown=False, max_total=0.5,
@@ -28,7 +33,8 @@ def _snapshot(total_exposure=0.0, in_cooldown=False, max_total=0.5,
 
 
 def _sym(remaining_pct=0.4, net_direction="FLAT", net_exposure_pct=0.0,
-         open_positions=0, floating_pnl=0.0, long_positions=0, short_positions=0) -> dict:
+         open_positions=0, floating_pnl=0.0, long_positions=0, short_positions=0,
+         newest_position_age=None) -> dict:
     return {
         "remaining_pct": remaining_pct,
         "net_direction": net_direction,
@@ -37,6 +43,8 @@ def _sym(remaining_pct=0.4, net_direction="FLAT", net_exposure_pct=0.0,
         "floating_pnl": floating_pnl,
         "long_positions": long_positions,
         "short_positions": short_positions,
+        # None = edad desconocida (la gracia no aplica, como en los tests previos).
+        "newest_position_age": newest_position_age,
     }
 
 
@@ -100,7 +108,7 @@ def test_clamp_no_toca_decision_valida():
 # ----- CoordinatorAgent: parseo y fallback -----
 
 def _coord(max_symbol=0.4) -> CoordinatorAgent:
-    return CoordinatorAgent("ollama", "qwen3:8b", _rb(max_symbol=max_symbol))
+    return CoordinatorAgent("gemini", "gemini-2.0-flash", _rb(max_symbol=max_symbol))
 
 
 def test_parse_json_valido():
@@ -240,6 +248,110 @@ def test_clamp_hedge_valido_se_mantiene_en_cuenta_hedging():
     assert out[0]["manage_direction"] == "SELL"
 
 
+# ----- Fuerza mayor: la mesa no ejecuta gestión discrecional del LLM -----
+
+def test_clamp_ignora_reduce_discrecional_del_llm():
+    # Caso del usuario: el LLM propone reduce por "exposición excesiva". Con
+    # llm_can_close=False (default real) se ignora: la posición tiene su S/L.
+    rb = _rb(reversal=0.0, llm_can_close=False)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=2, floating_pnl=-50.0)})
+    out = rb.clamp([_decision(approve=False, action="reduce")], snap)
+    assert out[0]["position_action"] == "hold"
+    assert out[0].get("manage_direction") is None
+    assert "fuerza mayor" in out[0]["clamp"]
+
+
+def test_clamp_ignora_hedge_discrecional_del_llm():
+    rb = _rb(reversal=0.0, llm_can_close=False)
+    snap = _snapshot(equity=10000, hedging=True, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=2, floating_pnl=-50.0)})
+    out = rb.clamp([_decision(approve=False, action="hedge")], snap)
+    assert out[0]["position_action"] == "hold"
+
+
+def test_clamp_hard_stop_actua_aunque_llm_no_pueda_cerrar():
+    # Fuerza mayor: el hard-stop determinista cierra aunque la gestión
+    # discrecional del LLM esté desactivada.
+    rb = _rb(reversal=0.0, symbol_loss=0.03, llm_can_close=False)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=2, floating_pnl=-350.0)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD", "trend": "bullish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "close"
+    assert "hard-stop" in out[0]["clamp"]
+
+
+def test_clamp_reversion_actua_aunque_llm_no_pueda_cerrar():
+    rb = _rb(reversal=0.015, llm_can_close=False)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=3, floating_pnl=-200.0)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD", "trend": "bearish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "reduce"
+    assert "reversión" in out[0]["clamp"]
+
+
+def test_clamp_reduce_discrecional_se_permite_si_se_habilita():
+    # Con llm_can_close=True el reduce discrecional del LLM se respeta.
+    rb = _rb(reversal=0.0, llm_can_close=True)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=2, floating_pnl=-50.0)})
+    out = rb.clamp([_decision(approve=False, action="reduce")], snap)
+    assert out[0]["position_action"] == "reduce"
+
+
+# ----- Período de gracia para posiciones recién abiertas -----
+
+def test_clamp_gracia_pausa_reversion():
+    # Mismo escenario que test_clamp_reversion_fuerza_reduce pero la posición es
+    # recién abierta (30s < 300s de gracia): la reversión NO se fuerza.
+    rb = _rb(reversal=0.015, min_hold=300)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=3,
+        floating_pnl=-200.0, newest_position_age=30)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD", "trend": "bearish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "hold"
+    assert "gracia" in out[0]["clamp"]
+
+
+def test_clamp_gracia_aplaza_close_del_llm():
+    # El LLM propone close sobre una posición recién abierta: se aplaza a hold.
+    rb = _rb(reversal=0.0, min_hold=300)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=1,
+        floating_pnl=-10.0, newest_position_age=45)})
+    out = rb.clamp([_decision(approve=False, action="close")], snap)
+    assert out[0]["position_action"] == "hold"
+    assert out[0].get("manage_direction") is None
+    assert "aplazado" in out[0]["clamp"]
+
+
+def test_clamp_hard_stop_rompe_la_gracia():
+    # El hard-stop catastrófico se impone incluso dentro del período de gracia.
+    rb = _rb(reversal=0.0, symbol_loss=0.03, min_hold=300)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=2,
+        floating_pnl=-350.0, newest_position_age=10)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD", "trend": "bullish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "close"
+    assert "hard-stop" in out[0]["clamp"]
+
+
+def test_clamp_reversion_actua_pasada_la_gracia():
+    # Posición ya madura (600s > 300s): la reversión vuelve a actuar.
+    rb = _rb(reversal=0.015, min_hold=300)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=3,
+        floating_pnl=-200.0, newest_position_age=600)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD", "trend": "bearish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "reduce"
+    assert out[0]["manage_direction"] == "BUY"
+
+
 # ----- RiskBook.snapshot: cálculo del sesgo neto (con cliente mock) -----
 
 class _FakeInfo:
@@ -302,3 +414,29 @@ def test_snapshot_neto_flat_cuando_se_netea():
     assert s["net_direction"] == "FLAT"
     assert s["net_volume"] == 0.0
     assert snap["hedging"] is False
+
+
+def test_snapshot_registra_edad_de_posiciones():
+    # La mesa registra cuándo vio cada ticket por primera vez; en el primer
+    # snapshot la edad es ~0 (recién vista) y poda los tickets que desaparecen.
+    rb = _rb(min_hold=300)
+    positions = [
+        {"symbol": "BTCUSD", "ticket": 111, "direction": "BUY", "volume": 0.1,
+         "current_price": 50000, "profit": 0.0},
+    ]
+    client = _FakeClient(_account(), positions)
+    snap = rb.snapshot(client, [_FakeAgent("BTCUSD")])
+    age = snap["symbols"]["BTCUSD"]["newest_position_age"]
+    assert age is not None and age >= 0
+    assert "111" in rb._first_seen
+    # Si la posición desaparece, su edad se olvida.
+    client2 = _FakeClient(_account(), [])
+    rb.snapshot(client2, [_FakeAgent("BTCUSD")])
+    assert "111" not in rb._first_seen
+
+
+def test_snapshot_sin_posiciones_edad_none():
+    rb = _rb()
+    client = _FakeClient(_account(), [])
+    snap = rb.snapshot(client, [_FakeAgent("BTCUSD")])
+    assert snap["symbols"]["BTCUSD"]["newest_position_age"] is None

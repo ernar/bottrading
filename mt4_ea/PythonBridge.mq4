@@ -191,10 +191,10 @@ string GetPositions(string symbol)
       if(!first) result += ";";
       first = false;
       result += StringFormat(
-         "ticket=%d,symbol=%s,type=%d,volume=%.2f,open_price=%.10f,sl=%.10f,tp=%.10f,profit=%.2f,open_time=%d,comment=%s",
+         "ticket=%d,symbol=%s,type=%d,volume=%.2f,open_price=%.10f,sl=%.10f,tp=%.10f,profit=%.2f,commission=%.2f,swap=%.2f,open_time=%d,comment=%s",
          OrderTicket(), OrderSymbol(), OrderType(), OrderLots(),
          OrderOpenPrice(), OrderStopLoss(), OrderTakeProfit(),
-         OrderProfit(), (int)OrderOpenTime(), OrderComment()
+         OrderProfit(), OrderCommission(), OrderSwap(), (int)OrderOpenTime(), OrderComment()
       );
    }
    return result;
