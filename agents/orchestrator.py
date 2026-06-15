@@ -1611,6 +1611,42 @@ class AgentOrchestrator:
         print(f"  [{name}] modelo cambiado a {provider.upper()}/{model}")
         return {"name": name, "provider": provider, "model": model}
 
+    # Parámetros editables a mano desde el dashboard (umbrales de señal). Se
+    # acotan con PARAM_BOUNDS para no dejar al agente en una config absurda.
+    EDITABLE_PARAMS = ("min_confidence", "min_rr", "atr_sl_mult", "atr_tp_mult")
+
+    def set_agent_params(self, name: str, updates: dict) -> dict:
+        """Ajusta a mano los umbrales de un agente en caliente (desde el
+        dashboard). Solo acepta las claves de `EDITABLE_PARAMS`, cada una
+        validada como número y recortada a su rango en `PARAM_BOUNDS`. El cambio
+        surte efecto en el siguiente análisis del agente (no reconstruye la
+        estrategia: provider/modelo no cambian aquí).
+
+        Lanza KeyError si el agente no existe y ValueError si no llega ninguna
+        clave válida o algún valor no es numérico."""
+        agent = next((a for a in self.agents if a.name == name), None)
+        if agent is None:
+            raise KeyError(name)
+        clean = {}
+        for key, value in (updates or {}).items():
+            if key not in self.EDITABLE_PARAMS:
+                continue
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"valor no numérico para {key}: {value!r}")
+            lo, hi = PARAM_BOUNDS[key]
+            clean[key] = _clamp(num, key)
+            if num < lo or num > hi:
+                print(f"  [{name}] {key}={num} recortado a {clean[key]} (rango {lo}–{hi})")
+        if not clean:
+            raise ValueError("no se recibió ningún parámetro editable válido")
+        new_params = agent.params.model_copy(update=clean)
+        agent.apply_params(new_params)
+        cambios = ", ".join(f"{k}={v}" for k, v in clean.items())
+        print(f"  [{name}] parámetros ajustados a mano: {cambios}")
+        return {"name": name, "params": clean}
+
     def set_agent_enabled(self, name: str, enabled: bool) -> dict:
         """Activa/desactiva un agente en caliente. Desactivado, el orquestador lo
         omite en la recolección de las siguientes rotaciones (deja de analizar y

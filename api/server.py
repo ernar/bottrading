@@ -431,6 +431,26 @@ def set_agent_model(name):
     return jsonify({"status": "ok", **result}), 200
 
 
+@app.route("/api/agents/<name>/params", methods=["POST"])
+@require_token
+def set_agent_params(name):
+    """Ajusta a mano los umbrales de señal de un agente en caliente.
+    Body: {"min_rr": 1.3, "min_confidence": 0.6, ...}. Solo se aceptan las
+    claves editables (min_confidence, min_rr, atr_sl_mult, atr_tp_mult);
+    cada valor se recorta a su rango de seguridad."""
+    if _orchestrator is None:
+        return jsonify({"error": "orchestrator not running"}), 503
+    body = request.get_json(silent=True) or {}
+    try:
+        result = _orchestrator.set_agent_params(name, body)
+    except KeyError:
+        return jsonify({"error": f"agente '{name}' no encontrado"}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    socketio.emit("agent_params_changed", result)
+    return jsonify({"status": "ok", **result}), 200
+
+
 @app.route("/api/agents/<name>/enabled", methods=["POST"])
 @require_token
 def set_agent_enabled(name):

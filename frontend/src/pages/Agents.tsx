@@ -94,6 +94,19 @@ export function AgentsPage() {
       .finally(() => setBusy(false))
   }
 
+  const changeParams = (name: string, updates: Record<string, number>) => {
+    setBusy(true)
+    return fetch(`${API_URL}/api/agents/${name}/params`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
+      body: JSON.stringify(updates),
+    })
+      .then(r => r.json())
+      .then(() => load())
+      .catch(() => {})
+      .finally(() => setBusy(false))
+  }
+
   const runOptimization = (apply: boolean) => {
     setBusy(true)
     fetch(`${API_URL}/api/agents/optimize`, {
@@ -238,7 +251,13 @@ export function AgentsPage() {
                     {a.performance.avg_move_pct >= 0 ? '+' : ''}{a.performance.avg_move_pct}%
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{pct(a.params.min_confidence)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">1:{a.params.min_rr}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    <EditableRR
+                      value={a.params.min_rr}
+                      disabled={busy}
+                      onCommit={v => changeParams(a.name, { min_rr: v })}
+                    />
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{a.params.atr_sl_mult}× / {a.params.atr_tp_mult}×</td>
                   <td className="px-3 py-2 text-right tabular-nums">{a.params.lot_size}</td>
                 </tr>
@@ -316,6 +335,63 @@ export function AgentsPage() {
         )}
       </section>
     </div>
+  )
+}
+
+// Celda editable del R:R mínimo: muestra "1:x.x" y al hacer clic abre un input
+// numérico. Confirma con Enter o al perder el foco (Esc cancela). El backend
+// recorta el valor a su rango de seguridad (1.0–3.0).
+function EditableRR({
+  value, disabled, onCommit,
+}: {
+  value: number
+  disabled: boolean
+  onCommit: (v: number) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(String(value))
+
+  const start = () => {
+    if (disabled) return
+    setDraft(String(value))
+    setEditing(true)
+  }
+
+  const commit = () => {
+    setEditing(false)
+    const v = parseFloat(draft)
+    if (!Number.isNaN(v) && v !== value) onCommit(v)
+  }
+
+  if (!editing) {
+    return (
+      <button
+        onClick={start}
+        disabled={disabled}
+        title="Click para editar el R:R mínimo"
+        className="tabular-nums hover:text-cyan-300 disabled:opacity-50 cursor-pointer"
+      >
+        1:{value}
+      </button>
+    )
+  }
+
+  return (
+    <input
+      type="number"
+      step="0.1"
+      min="1"
+      max="3"
+      autoFocus
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') commit()
+        else if (e.key === 'Escape') setEditing(false)
+      }}
+      className="w-16 bg-gray-900 border border-cyan-600 rounded px-1 py-0.5 text-right text-xs text-gray-100"
+    />
   )
 }
 
