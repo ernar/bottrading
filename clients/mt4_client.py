@@ -1,9 +1,24 @@
 import os
 import time
 import threading
+import unicodedata
 from typing import Optional, List
 from datetime import datetime
 from clients.base_client import BaseMTClient
+
+
+def _ascii_comment(text: str) -> str:
+    """Normaliza el comentario de la orden a ASCII legible.
+
+    El canal de archivos del EA es ASCII; los comentarios se arman con la razón
+    del LLM (español con ñ/acentos). En vez de sustituir por "?" (lo que daría
+    "se?ales"), descompone los acentos y conserva la letra base ("señales" →
+    "senales"). Cualquier resto fuera de ASCII se descarta.
+    """
+    if not text:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return decomposed.encode("ascii", "ignore").decode("ascii")
 
 
 class SymbolInfo:
@@ -106,8 +121,11 @@ class MT4Client(BaseMTClient):
             if not self._safe_remove(self._resp_file):
                 return "ERROR|no se pudo limpiar pb_resp.txt (EA ocupado)"
 
-            # Escribir comando
-            with open(self._cmd_file, "w", encoding="ascii") as f:
+            # Escribir comando. `errors="replace"`: el comentario de la orden se
+            # arma con la razón del LLM (texto en español con ñ/acentos) y el
+            # canal de archivos del EA es ASCII; un glifo fuera de rango NO debe
+            # tumbar el loop — se sustituye por "?" en vez de lanzar UnicodeEncodeError.
+            with open(self._cmd_file, "w", encoding="ascii", errors="replace") as f:
                 f.write(command)
 
             # Esperar respuesta
@@ -115,7 +133,7 @@ class MT4Client(BaseMTClient):
             while time.time() < deadline:
                 if os.path.exists(self._resp_file) and not os.path.exists(self._lock_file):
                     try:
-                        with open(self._resp_file, "r", encoding="ascii") as f:
+                        with open(self._resp_file, "r", encoding="ascii", errors="replace") as f:
                             return f.read().strip()
                     except (PermissionError, OSError):
                         # El EA aún está escribiendo: reintentamos en el próximo giro.
@@ -423,7 +441,7 @@ class MT4Client(BaseMTClient):
         price = price or 0
         sl = stop_loss or 0
         tp = take_profit or 0
-        cmd = f"PLACE_ORDER|{symbol}|{order_type.upper()}|{volume}|{price}|{sl}|{tp}|{comment}"
+        cmd = f"PLACE_ORDER|{symbol}|{order_type.upper()}|{volume}|{price}|{sl}|{tp}|{_ascii_comment(comment)}"
         # Las órdenes implican un viaje al servidor del broker: timeout amplio.
         resp = self._send(cmd, timeout=30.0)
         if resp.startswith("OK|"):

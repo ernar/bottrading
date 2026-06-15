@@ -162,17 +162,23 @@ export interface CoordinatorOverview {
   max_total_exposure_pct?: number
   max_symbol_allocation_pct?: number
   max_net_direction_pct?: number
+  max_pyramid_direction_pct?: number
   reversal_drawdown_pct?: number
   max_symbol_loss_pct?: number
+  min_hold_seconds?: number
+  risk_profile?: RiskProfile
   last_coordination?: Coordination | null
   last_coordination_at?: string | null
   last_junta_at?: string | null
   last_report_at?: string | null
   rotation_seconds?: number
+  at_max_analysis_interval?: number
   news_poll_seconds?: number
   junta_interval_seconds?: number
   report_interval_seconds?: number
 }
+
+export type RiskProfile = 'conservative' | 'moderate' | 'aggressive' | 'extreme'
 
 export interface BotState {
   signals: Record<string, Signal>

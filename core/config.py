@@ -215,6 +215,11 @@ def get_coordinator_config() -> dict:
         "max_total_exposure_pct": _env_float("MAX_TOTAL_EXPOSURE_PCT", 0.5),
         "max_symbol_allocation_pct": _env_float("MAX_SYMBOL_ALLOCATION_PCT", 0.4),
         "max_net_direction_pct": _env_float("MAX_NET_DIRECTION_PCT", 0.6),
+        # Tope superior del sesgo neto tolerado SOLO al piramidar ganadores (posición
+        # en ganancia + tendencia confirma). Default = max_net_direction_pct (sin
+        # piramidación extra si no se configura).
+        "max_pyramid_direction_pct": _env_float(
+            "MAX_PYRAMID_DIRECTION_PCT", _env_float("MAX_NET_DIRECTION_PCT", 0.6)),
         "reversal_drawdown_pct": _env_float("REVERSAL_DRAWDOWN_PCT", 0.015),
         "max_symbol_loss_pct": _env_float("MAX_SYMBOL_LOSS_PCT", 0.0),
         "min_hold_seconds": _env_float("MIN_HOLD_SECONDS", 300.0),
@@ -245,6 +250,11 @@ def get_schedule_config() -> dict:
       no haya tenido actividad.
     - REPORT_INTERVAL_SECONDS (int, default 7200 = 2 h): cada cuánto se genera el
       reporte y se intenta enviar por correo.
+    - AT_MAX_ANALYSIS_INTERVAL (int, default 900 = 15 min): con el símbolo en su
+      máximo de posiciones, cada cuánto se vuelve a analizar (en vez de cada
+      rotación) para no gastar llamadas al LLM sin poder operar. Una señal de
+      confianza >= 90% se salta el límite. Los perfiles agresivos lo bajan para
+      detectar antes oportunidades de piramidar/reentrar.
 
     Reporte / email (ver core/mailer.py). El envío real está APAGADO por defecto
     (SMTP_ENABLED=false): el reporte se genera y se muestra, pero no se manda
@@ -258,6 +268,7 @@ def get_schedule_config() -> dict:
     """
     return {
         "rotation_seconds": _env_int("ROTATION_SECONDS", 60),
+        "at_max_analysis_interval": _env_int("AT_MAX_ANALYSIS_INTERVAL", 15 * 60),
         "news_poll_seconds": _env_int("NEWS_POLL_SECONDS", 30 * 60),
         "junta_interval_seconds": _env_int("JUNTA_INTERVAL_SECONDS", 60 * 60),
         "report_interval_seconds": _env_int("REPORT_INTERVAL_SECONDS", 2 * 60 * 60),

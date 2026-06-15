@@ -39,6 +39,14 @@ class RiskBook:
         self.llm_can_close = bool(config.get("llm_can_close", False))
         # Control de concentración direccional / reversión de tendencia.
         self.max_net_direction_pct = float(config.get("max_net_direction_pct", 0.6))
+        # Piramidación a favor (add-to-winners): tope superior del sesgo neto que se
+        # tolera SOLO cuando la posición neta del símbolo va en GANANCIA y la
+        # tendencia del especialista confirma la dirección. Permite añadir a una
+        # tendencia ganadora más allá de `max_net_direction_pct` sin levantar los
+        # techos duros de exposición total/asignación. Default = max_net_direction_pct
+        # (sin piramidación extra si no se configura).
+        self.max_pyramid_direction_pct = float(
+            config.get("max_pyramid_direction_pct", self.max_net_direction_pct))
         self.reversal_drawdown_pct = float(config.get("reversal_drawdown_pct", 0.015))
         self.max_symbol_loss_pct = float(config.get("max_symbol_loss_pct", 0.0))
         # Rango del R:R objetivo (tp_rr) que la mesa puede fijar por entrada para
@@ -283,6 +291,7 @@ class RiskBook:
             "max_total_exposure_pct": self.max_total_exposure_pct,
             "max_symbol_allocation_pct": self.max_symbol_allocation_pct,
             "max_net_direction_pct": self.max_net_direction_pct,
+            "max_pyramid_direction_pct": self.max_pyramid_direction_pct,
             "reversal_drawdown_pct": self.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.max_symbol_loss_pct,
             "min_hold_seconds": self.min_hold_seconds,
@@ -468,11 +477,24 @@ class RiskBook:
                 approve = False
 
             # Anti-apilamiento: no añadir más en la dirección neta ya saturada.
+            # EXCEPCIÓN (piramidar ganadores / add-to-winners): si la posición neta
+            # del símbolo va en GANANCIA y la tendencia del especialista CONFIRMA la
+            # dirección, se tolera seguir apilando hasta `max_pyramid_direction_pct`
+            # (> max_net_direction_pct). Nunca se piramidan perdedores ni contra
+            # tendencia, y los techos duros de exposición total/asignación (vetos
+            # anteriores) siguen mandando.
             if (approve and entry_net is not None and entry_net == net_direction
                     and abs(net_exposure_pct) >= self.max_net_direction_pct):
-                notes.append(f"sesgo neto {net_direction} {abs(net_exposure_pct):.0%} >= "
-                             f"tope {self.max_net_direction_pct:.0%}: no apilar")
-                approve = False
+                pyramiding = (floating_pnl > 0 and trend_dir == net_direction
+                              and abs(net_exposure_pct) < self.max_pyramid_direction_pct)
+                if pyramiding:
+                    notes.append(f"piramidando ganador: neto {net_direction} "
+                                 f"{abs(net_exposure_pct):.0%} en ganancia y tendencia "
+                                 f"{trend_dir.lower()} confirma (tope {self.max_pyramid_direction_pct:.0%})")
+                else:
+                    notes.append(f"sesgo neto {net_direction} {abs(net_exposure_pct):.0%} >= "
+                                 f"tope {self.max_net_direction_pct:.0%}: no apilar")
+                    approve = False
 
             # En reversión/hard-stop forzado, no abrir en la dirección que se está cortando.
             if forced and approve and entry_net is not None and entry_net == net_direction:
@@ -525,6 +547,13 @@ Reglas:
   una dirección y la TENDENCIA del especialista gira en contra (marcado como ⚠ CONFLICTO), no
   añadas en esa dirección y protege la pérdida: usa "reduce"/"close" del lado perdedor, o "hedge"
   si conviene mantener las posiciones pero frenar la sangría.
+- PIRAMIDAR GANADORES (add-to-winners): cuando un símbolo YA tiene posición neta EN GANANCIA y el
+  especialista CONFIRMA la continuación de la tendencia en esa misma dirección, NO te quedes en
+  "hold": considera APROBAR una entrada adicional a favor (piramidar) con una allocation_pct
+  incremental, y sube el tp_rr para dejar correr la tendencia. Es la forma de exprimir una
+  tendencia clara. Disciplina estricta: solo se piramida lo que va en GANANCIA y A FAVOR; nunca se
+  añade a una posición en pérdida ni contra la tendencia. La capa de riesgo tolera este apilamiento
+  hasta un tope superior solo en ese caso (ganador + tendencia confirma).
 - "hedge" solo tiene sentido si la cuenta permite cobertura (ver "Cobertura disponible" en el
   contexto); si no, la capa de riesgo lo convertirá en "reduce".
 - Si la cartera ya está muy expuesta o en pérdidas del día, sé conservador GESTIONANDO LAS

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Coordination, CoordinatorDecision, CoordinatorOverview } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
+import { RiskProfileSelector } from '../components/RiskProfileSelector'
 
 const API_URL = getApiUrl()
 
@@ -78,6 +79,9 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
           {' · '}último reporte: <span className="text-gray-300">{overview?.last_report_at || 'pendiente'}</span>
         </p>
       </section>
+
+      {/* Selector de perfil de riesgo (mesa + agentes, en vivo) */}
+      <RiskProfileSelector overview={overview} onChanged={load} />
 
       {/* Diagrama de flujo de información mesa ↔ agentes */}
       <FlowDiagram coordination={coordination} overview={overview} />

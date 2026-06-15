@@ -241,6 +241,10 @@ class AgentOrchestrator:
         # tiempo (time.monotonic) comparando contra su último disparo.
         self.schedule_cfg = schedule_cfg or {}
         self.rotation_seconds = self.schedule_cfg.get("rotation_seconds", 60)
+        # Con el símbolo en su máximo de posiciones, cada cuánto se vuelve a
+        # analizar (configurable; los perfiles agresivos lo bajan).
+        self.at_max_analysis_interval = self.schedule_cfg.get(
+            "at_max_analysis_interval", AT_MAX_ANALYSIS_INTERVAL)
         self.news_poll_seconds = self.schedule_cfg.get("news_poll_seconds", 30 * 60)
         self.junta_interval_seconds = self.schedule_cfg.get("junta_interval_seconds", 60 * 60)
         self.report_interval_seconds = self.schedule_cfg.get("report_interval_seconds", 2 * 60 * 60)
@@ -820,7 +824,7 @@ class AgentOrchestrator:
         at_max = bool(max_pos) and len(positions) >= max_pos
         if (in_cooldown or at_max) and not force:
             interval = (RISK_COOLDOWN_ANALYSIS_INTERVAL if in_cooldown
-                        else AT_MAX_ANALYSIS_INTERVAL)
+                        else self.at_max_analysis_interval)
             if self._throttled(symbol, interval):
                 if in_cooldown:
                     print(console.dim(f"  ⏸ Cooldown por pérdida diaria; análisis aplazado "
@@ -1759,12 +1763,15 @@ class AgentOrchestrator:
         LLM, cadencias del planificador y guardias de riesgo. Las claves que solo
         se leen al arrancar (credenciales, modelo, NEWS_ENABLED…) no se tocan aquí
         —el editor las marca como 'requiere reinicio'."""
-        from core.config import get_coordinator_config, get_schedule_config
+        from core.config import (get_coordinator_config, get_schedule_config,
+                                  get_agent_param_overrides)
 
         # --- Cadencias del planificador ---
         sched = get_schedule_config()
         self.schedule_cfg = sched  # el reporte (SMTP) lee de aquí
         self.rotation_seconds = sched.get("rotation_seconds", self.rotation_seconds)
+        self.at_max_analysis_interval = sched.get(
+            "at_max_analysis_interval", self.at_max_analysis_interval)
         self.news_poll_seconds = sched.get("news_poll_seconds", self.news_poll_seconds)
         self.junta_interval_seconds = sched.get("junta_interval_seconds", self.junta_interval_seconds)
         self.report_interval_seconds = sched.get("report_interval_seconds", self.report_interval_seconds)
@@ -1783,6 +1790,7 @@ class AgentOrchestrator:
         self.risk_book.can_close = bool(cfg["can_close"])
         self.risk_book.llm_can_close = bool(cfg["llm_can_close"])
         self.risk_book.max_net_direction_pct = float(cfg["max_net_direction_pct"])
+        self.risk_book.max_pyramid_direction_pct = float(cfg["max_pyramid_direction_pct"])
         self.risk_book.reversal_drawdown_pct = float(cfg["reversal_drawdown_pct"])
         self.risk_book.max_symbol_loss_pct = float(cfg["max_symbol_loss_pct"])
         self.risk_book.min_hold_seconds = float(cfg["min_hold_seconds"])
@@ -1793,6 +1801,19 @@ class AgentOrchestrator:
                 engine.temperature = float(cfg["temperature"])
             except (ValueError, TypeError):
                 pass
+
+        # --- Parámetros de los agentes (umbrales de señal) ---
+        # Re-aplica en caliente los overrides de .env (incluidas las claves
+        # <PARAM>_DEFAULT que mueven a TODOS los agentes a la vez, p. ej. al
+        # cambiar de perfil de riesgo): min_confidence, min_rr, max_open_positions,
+        # atr_*, etc. Mismo mecanismo que set_agent_params (apply_params).
+        for agent in self.agents:
+            try:
+                overrides = get_agent_param_overrides(agent.symbol, agent.params.model)
+                if overrides:
+                    agent.apply_params(agent.params.model_copy(update=overrides))
+            except Exception as e:
+                print(f"  [{agent.name}] reload de params falló: {e}")
 
     def coordinator_overview(self) -> dict:
         """Estado del coordinador para el dashboard (/api/coordinator). La mesa
@@ -1806,14 +1827,19 @@ class AgentOrchestrator:
             "max_total_exposure_pct": self.risk_book.max_total_exposure_pct,
             "max_symbol_allocation_pct": self.risk_book.max_symbol_allocation_pct,
             "max_net_direction_pct": self.risk_book.max_net_direction_pct,
+            "max_pyramid_direction_pct": self.risk_book.max_pyramid_direction_pct,
             "reversal_drawdown_pct": self.risk_book.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.risk_book.max_symbol_loss_pct,
             "min_hold_seconds": self.risk_book.min_hold_seconds,
+            # Perfil de riesgo activo (selector del dashboard). "moderate" si no
+            # se ha fijado ninguno.
+            "risk_profile": os.getenv("RISK_PROFILE", "moderate").strip() or "moderate",
             "last_coordination": self.last_coordination,
             "last_coordination_at": self.last_coordination_at,
             "last_junta_at": self.last_junta_at,
             "last_report_at": self.last_report_at,
             "rotation_seconds": self.rotation_seconds,
+            "at_max_analysis_interval": self.at_max_analysis_interval,
             "news_poll_seconds": self.news_poll_seconds,
             "junta_interval_seconds": self.junta_interval_seconds,
             "report_interval_seconds": self.report_interval_seconds,

@@ -278,6 +278,81 @@ def coordinator_decide():
     return jsonify(result), 200
 
 
+# Perfiles de riesgo: cada nivel es un set coherente de claves .env que el
+# selector del dashboard aplica de una vez (mesa + agentes). "moderate" = el
+# comportamiento por defecto. Los frenos de pérdida (MAX_DAILY_LOSS_PCT,
+# MAX_SYMBOL_LOSS_PCT) se dejan fuera a propósito: no se aflojan al subir el
+# apetito. Los valores se escriben en .env (persistentes) y se aplican en
+# caliente vía reload_runtime_config; las claves <PARAM>_DEFAULT mueven a TODOS
+# los agentes a la vez (core/config.get_agent_param_overrides).
+RISK_PROFILES: dict[str, dict[str, str]] = {
+    "conservative": {
+        "MAX_TOTAL_EXPOSURE_PCT": "0.30", "MAX_SYMBOL_ALLOCATION_PCT": "0.20",
+        "MAX_NET_DIRECTION_PCT": "0.40", "MAX_PYRAMID_DIRECTION_PCT": "0.40",
+        "REVERSAL_DRAWDOWN_PCT": "0.025", "MIN_HOLD_SECONDS": "600",
+        "COORDINATOR_TP_RR_MAX": "3.0",
+        "MIN_CONFIDENCE_DEFAULT": "0.70", "MIN_RR_DEFAULT": "1.6",
+        "MAX_OPEN_POSITIONS_DEFAULT": "2", "AT_MAX_ANALYSIS_INTERVAL": "900",
+    },
+    "moderate": {
+        "MAX_TOTAL_EXPOSURE_PCT": "0.50", "MAX_SYMBOL_ALLOCATION_PCT": "0.40",
+        "MAX_NET_DIRECTION_PCT": "0.60", "MAX_PYRAMID_DIRECTION_PCT": "0.60",
+        "REVERSAL_DRAWDOWN_PCT": "0.015", "MIN_HOLD_SECONDS": "300",
+        "COORDINATOR_TP_RR_MAX": "4.0",
+        "MIN_CONFIDENCE_DEFAULT": "0.60", "MIN_RR_DEFAULT": "1.3",
+        "MAX_OPEN_POSITIONS_DEFAULT": "3", "AT_MAX_ANALYSIS_INTERVAL": "600",
+    },
+    "aggressive": {
+        "MAX_TOTAL_EXPOSURE_PCT": "0.75", "MAX_SYMBOL_ALLOCATION_PCT": "0.60",
+        "MAX_NET_DIRECTION_PCT": "0.90", "MAX_PYRAMID_DIRECTION_PCT": "1.20",
+        "REVERSAL_DRAWDOWN_PCT": "0.010", "MIN_HOLD_SECONDS": "180",
+        "COORDINATOR_TP_RR_MAX": "6.0",
+        "MIN_CONFIDENCE_DEFAULT": "0.55", "MIN_RR_DEFAULT": "1.1",
+        "MAX_OPEN_POSITIONS_DEFAULT": "5", "AT_MAX_ANALYSIS_INTERVAL": "300",
+    },
+    "extreme": {
+        "MAX_TOTAL_EXPOSURE_PCT": "0.90", "MAX_SYMBOL_ALLOCATION_PCT": "0.80",
+        "MAX_NET_DIRECTION_PCT": "1.20", "MAX_PYRAMID_DIRECTION_PCT": "1.80",
+        "REVERSAL_DRAWDOWN_PCT": "0.008", "MIN_HOLD_SECONDS": "120",
+        "COORDINATOR_TP_RR_MAX": "8.0",
+        "MIN_CONFIDENCE_DEFAULT": "0.50", "MIN_RR_DEFAULT": "1.0",
+        "MAX_OPEN_POSITIONS_DEFAULT": "7", "AT_MAX_ANALYSIS_INTERVAL": "180",
+    },
+}
+
+
+@app.route("/api/risk-profile", methods=["POST"])
+@require_token
+def set_risk_profile():
+    """Aplica un perfil de riesgo (conservative/moderate/aggressive/extreme) a la
+    mesa Y a los agentes en caliente, y lo persiste en .env. Body: {"profile": ...}.
+    Cambia de una vez los topes de cartera, la piramidación, los umbrales de los
+    agentes y la cadencia de reanálisis al máximo. Protegido por API_TOKEN."""
+    from core.settings_schema import write_env
+    body = request.get_json(silent=True) or {}
+    profile = str(body.get("profile", "")).strip().lower()
+    if profile not in RISK_PROFILES:
+        return jsonify({
+            "error": f"perfil desconocido: {profile!r}",
+            "valid": list(RISK_PROFILES.keys()),
+        }), 400
+    # Escribe el set de claves del perfil + marca el perfil activo.
+    serialized = dict(RISK_PROFILES[profile])
+    serialized["RISK_PROFILE"] = profile
+    changed = write_env(serialized)
+    if _orchestrator is not None and hasattr(_orchestrator, "reload_runtime_config"):
+        try:
+            _orchestrator.reload_runtime_config()
+        except Exception as e:  # noqa: BLE001 — nunca tumbar la API por esto
+            logger.warning("reload_runtime_config falló tras cambiar perfil: %s", e)
+    overview = (_orchestrator.coordinator_overview()
+                if _orchestrator is not None and hasattr(_orchestrator, "coordinator_overview")
+                else {})
+    payload = {"profile": profile, "changed": changed, "overview": overview}
+    socketio.emit("risk_profile_changed", payload)
+    return jsonify(payload), 200
+
+
 @app.route("/api/settings", methods=["GET"])
 @require_token
 def get_settings():

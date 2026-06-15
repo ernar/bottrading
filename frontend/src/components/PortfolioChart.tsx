@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 
 export interface EquityPoint {
   t: string
@@ -26,6 +26,8 @@ interface Props {
 export function PortfolioChart({ points, height = 220, rangeLabel, field = 'equity', title }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
+  // Índice del punto bajo el ratón (null = sin hover) para el tooltip/crosshair.
+  const [hover, setHover] = useState<number | null>(null)
   // id único por instancia para no colisionar los <defs> si hubiera varios.
   const gid = useRef(`pc-${Math.random().toString(36).slice(2)}`).current
 
@@ -110,6 +112,36 @@ export function PortfolioChart({ points, height = 220, rangeLabel, field = 'equi
     `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   // Money con signo delante del símbolo: +$50.00 / -$50.00.
   const signed = (n: number) => `${n >= 0 ? '+' : '-'}${fmt(Math.abs(n))}`
+  // Fecha legible de un punto para el tooltip ("now" = momento actual).
+  const fmtDate = (i: number) => {
+    const t = times[i]
+    if (!Number.isFinite(t)) return ''
+    return new Date(t).toLocaleString('es-ES', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    })
+  }
+
+  // Localiza el punto cuyo X en píxeles es el más cercano a la posición del
+  // ratón. Buscar por X (no por índice) respeta el eje temporal proporcional.
+  const onMove = (e: MouseEvent<SVGSVGElement>) => {
+    if (values.length < 2) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const mx = e.clientX - rect.left
+    let best = 0
+    let bestDist = Infinity
+    for (let i = 0; i < values.length; i++) {
+      const d = Math.abs(xy(i)[0] - mx)
+      if (d < bestDist) { bestDist = d; best = i }
+    }
+    setHover(best)
+  }
+
+  const hoverPt = hover != null && hover < values.length ? xy(hover) : null
+  // Mantiene el tooltip dentro del ancho del gráfico (se voltea cerca del borde).
+  const tipW = 150
+  const tipLeft = hoverPt
+    ? Math.min(Math.max(hoverPt[0] - tipW / 2, 4), Math.max(width - tipW - 4, 4))
+    : 0
 
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
@@ -128,13 +160,19 @@ export function PortfolioChart({ points, height = 220, rangeLabel, field = 'equi
         </div>
       </div>
 
-      <div ref={wrapRef} className="w-full" style={{ height }}>
+      <div ref={wrapRef} className="w-full relative" style={{ height }}>
         {values.length < 2 ? (
           <div className="h-full flex items-center justify-center text-gray-600 text-sm">
             Acumulando datos de la cartera…
           </div>
         ) : (
-          <svg width={width} height={height} className="block">
+          <svg
+            width={width}
+            height={height}
+            className="block"
+            onMouseMove={onMove}
+            onMouseLeave={() => setHover(null)}
+          >
             <defs>
               {/* Resplandor: difumina una copia del trazo bajo el trazo nítido. */}
               <filter id={`${gid}-glow`} x="-20%" y="-50%" width="140%" height="200%">
@@ -160,7 +198,27 @@ export function PortfolioChart({ points, height = 220, rangeLabel, field = 'equi
               strokeLinecap="round"
               filter={`url(#${gid}-glow)`}
             />
+            {hoverPt && (
+              <g>
+                {/* Línea vertical de cruce + punto resaltado en el dato. */}
+                <line
+                  x1={hoverPt[0]} y1={padTop} x2={hoverPt[0]} y2={height}
+                  stroke="#64748b" strokeWidth={1} strokeDasharray="3 3"
+                />
+                <circle cx={hoverPt[0]} cy={hoverPt[1]} r={4} fill={stroke}
+                  stroke="#0b0f17" strokeWidth={2} />
+              </g>
+            )}
           </svg>
+        )}
+        {hoverPt && hover != null && (
+          <div
+            className="pointer-events-none absolute z-10 rounded-md border border-gray-700 bg-gray-900/95 px-2 py-1 text-xs shadow-lg"
+            style={{ left: tipLeft, top: 6, width: tipW }}
+          >
+            <div className="text-gray-400">{fmtDate(hover)}</div>
+            <div className="font-semibold text-white">{fmt(values[hover])}</div>
+          </div>
         )}
       </div>
     </div>

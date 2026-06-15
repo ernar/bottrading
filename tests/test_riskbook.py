@@ -4,18 +4,23 @@ from agents.coordinator import RiskBook, CoordinatorAgent
 
 
 def _rb(can_close=True, max_total=0.5, max_symbol=0.4, max_net=0.6,
-        reversal=0.015, symbol_loss=0.0, min_hold=0.0, llm_can_close=True) -> RiskBook:
+        max_pyramid=None, reversal=0.015, symbol_loss=0.0, min_hold=0.0,
+        llm_can_close=True) -> RiskBook:
     # min_hold por defecto 0 (gracia off) y llm_can_close=True (gestión
     # discrecional permitida) para no alterar los tests existentes; el default
     # real de producción es llm_can_close=False (solo fuerza mayor).
-    return RiskBook({"max_total_exposure_pct": max_total,
-                     "max_symbol_allocation_pct": max_symbol,
-                     "can_close": can_close,
-                     "max_net_direction_pct": max_net,
-                     "reversal_drawdown_pct": reversal,
-                     "max_symbol_loss_pct": symbol_loss,
-                     "min_hold_seconds": min_hold,
-                     "llm_can_close": llm_can_close})
+    # max_pyramid None => igual a max_net (sin piramidación extra), como el default.
+    cfg = {"max_total_exposure_pct": max_total,
+           "max_symbol_allocation_pct": max_symbol,
+           "can_close": can_close,
+           "max_net_direction_pct": max_net,
+           "reversal_drawdown_pct": reversal,
+           "max_symbol_loss_pct": symbol_loss,
+           "min_hold_seconds": min_hold,
+           "llm_can_close": llm_can_close}
+    if max_pyramid is not None:
+        cfg["max_pyramid_direction_pct"] = max_pyramid
+    return RiskBook(cfg)
 
 
 def _snapshot(total_exposure=0.0, in_cooldown=False, max_total=0.5,
@@ -187,6 +192,43 @@ def test_clamp_veta_apilamiento_en_direccion_saturada():
     rb = _rb(max_net=0.6)
     snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
         net_direction="LONG", net_exposure_pct=0.65, open_positions=3)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "BUY", "trend": "bullish"}}
+    out = rb.clamp([_decision(alloc=0.2)], snap, signals)
+    assert out[0]["approve"] is False
+    assert "no apilar" in out[0]["clamp"]
+
+
+def test_clamp_permite_piramidar_ganador_con_tendencia_a_favor():
+    # Neto LONG saturado (0.65 >= max_net 0.6) PERO en ganancia y la tendencia del
+    # especialista confirma LONG: se tolera apilar hasta max_pyramid (1.2).
+    rb = _rb(max_net=0.6, max_pyramid=1.2)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.65, open_positions=2,
+        floating_pnl=300.0)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "BUY", "trend": "bullish"}}
+    out = rb.clamp([_decision(alloc=0.2)], snap, signals)
+    assert out[0]["approve"] is True
+    assert "piramidando ganador" in out[0]["clamp"]
+
+
+def test_clamp_no_piramida_perdedor_aunque_tendencia_a_favor():
+    # Mismo escenario pero en PÉRDIDA flotante: no se piramida, sigue vetado.
+    rb = _rb(max_net=0.6, max_pyramid=1.2)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.65, open_positions=2,
+        floating_pnl=-100.0)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "BUY", "trend": "bullish"}}
+    out = rb.clamp([_decision(alloc=0.2)], snap, signals)
+    assert out[0]["approve"] is False
+    assert "no apilar" in out[0]["clamp"]
+
+
+def test_clamp_no_piramida_por_encima_del_tope_pyramid():
+    # En ganancia y a favor, pero el neto ya supera max_pyramid: vetado.
+    rb = _rb(max_net=0.6, max_pyramid=0.8)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.85, open_positions=3,
+        floating_pnl=300.0)})
     signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "BUY", "trend": "bullish"}}
     out = rb.clamp([_decision(alloc=0.2)], snap, signals)
     assert out[0]["approve"] is False

@@ -29,6 +29,8 @@ SETTINGS_SCHEMA: list[dict] = [
      "help": "Fracción del equity asignable a un solo símbolo. 0.4 = 40%."},
     {"key": "MAX_NET_DIRECTION_PCT", "label": "Sesgo neto direccional máx.", "group": "Riesgo", "type": "float", "secret": False, "hot": True,
      "help": "Tope de exposición neta direccional por símbolo. Frena apilar en la dirección saturada."},
+    {"key": "MAX_PYRAMID_DIRECTION_PCT", "label": "Sesgo neto máx. al piramidar", "group": "Riesgo", "type": "float", "secret": False, "hot": True,
+     "help": "Tope superior del sesgo neto tolerado SOLO al piramidar ganadores (posición en ganancia + tendencia confirma). >= el sesgo neto máx."},
     {"key": "REVERSAL_DRAWDOWN_PCT", "label": "Umbral de reversión", "group": "Riesgo", "type": "float", "secret": False, "hot": True,
      "help": "Pérdida flotante que, con conflicto de tendencia, fuerza reduce/close. 0 = off."},
     {"key": "MAX_SYMBOL_LOSS_PCT", "label": "Hard-stop por símbolo", "group": "Riesgo", "type": "float", "secret": False, "hot": True,
@@ -50,6 +52,8 @@ SETTINGS_SCHEMA: list[dict] = [
     # --- Cadencias / ejecución (en caliente) ---
     {"key": "ROTATION_SECONDS", "label": "Rotación (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,
      "help": "Tick base del bucle: cada cuánto se analiza/coordina. 60 por defecto."},
+    {"key": "AT_MAX_ANALYSIS_INTERVAL", "label": "Reanálisis al máximo (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,
+     "help": "Con el símbolo en su máximo de posiciones, cada cuánto se reanaliza. 900 = 15 min."},
     {"key": "NEWS_POLL_SECONDS", "label": "Sonda de noticias (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,
      "help": "Cada cuánto se sondean noticias RED. 1800 = 30 min."},
     {"key": "JUNTA_INTERVAL_SECONDS", "label": "Junta global (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,
