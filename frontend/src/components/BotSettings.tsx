@@ -127,7 +127,7 @@ export function BotSettings() {
             </div>
           )}
 
-          <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 items-start">
             {groups.map(group => (
               <div key={group} className="bg-gray-800 rounded-lg border border-gray-700 p-5">
                 <h3 className="text-sm font-bold text-cyan-300 uppercase tracking-wide mb-3">{group}</h3>

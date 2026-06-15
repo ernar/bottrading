@@ -12,13 +12,18 @@ interface Props {
   // Texto del rango temporal activo (p. ej. "últimas 1h") para aclarar a qué
   // periodo se refiere el cambio mostrado.
   rangeLabel?: string
+  // Campo de la cartera a dibujar: equity (incluye P/L flotante) o balance
+  // (solo operaciones cerradas). Por defecto equity.
+  field?: 'equity' | 'balance'
+  // Etiqueta de la cabecera (por defecto, derivada del campo).
+  title?: string
 }
 
 // Gráfico de evolución de la cartera: línea verde luminosa sobre fondo oscuro,
 // estilo "terminal". SVG puro (sin librería) para controlar el efecto glow.
 // Mide su ancho con ResizeObserver y dibuja en píxeles para que el grosor del
 // trazo y el resplandor no se deformen al estirar el contenedor.
-export function PortfolioChart({ points, height = 220, rangeLabel }: Props) {
+export function PortfolioChart({ points, height = 220, rangeLabel, field = 'equity', title }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   // id único por instancia para no colisionar los <defs> si hubiera varios.
@@ -36,9 +41,13 @@ export function PortfolioChart({ points, height = 220, rangeLabel }: Props) {
   }, [])
 
   // Defensa: si la API devolviera algo que no es un array (backend viejo, error
-  // parseado como JSON…), no reventamos el render.
-  const data = Array.isArray(points) ? points : []
-  const values = data.map(p => p.equity)
+  // parseado como JSON…), no reventamos el render. Además, solo conservamos los
+  // puntos con el campo elegido finito (p. ej. el punto en vivo de balance puede
+  // faltar si aún no hay account_info).
+  const data = (Array.isArray(points) ? points : [])
+    .filter(p => Number.isFinite(Number(p[field])))
+  const values = data.map(p => Number(p[field]))
+  const heading = title ?? (field === 'balance' ? 'Balance' : 'Equity')
   const first = values[0] ?? 0
   const last = values[values.length - 1] ?? 0
   const change = last - first
@@ -106,7 +115,7 @@ export function PortfolioChart({ points, height = 220, rangeLabel }: Props) {
     <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
       <div className="flex items-center justify-between px-4 pt-3 text-xs sm:text-sm">
         <div className="flex items-baseline gap-2">
-          <span className="text-gray-400 uppercase tracking-wide">Equity</span>
+          <span className="text-gray-400 uppercase tracking-wide">{heading}</span>
           <span className="font-semibold text-white">{fmt(last)}</span>
         </div>
         <div className="flex items-baseline gap-2">

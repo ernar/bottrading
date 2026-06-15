@@ -112,6 +112,7 @@ export function DashboardPage({ state }: DashboardPageProps) {
   const positions = Object.values(state?.positions || {})
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
   const liveEquity = state?.account_info?.equity
+  const liveBalance = state?.account_info?.balance
 
   useEffect(() => {
     const load = () => {
@@ -146,9 +147,11 @@ export function DashboardPage({ state }: DashboardPageProps) {
   // el gráfico se mueva sin esperar al próximo refresco/registro del backend.
   // `safeEquity` protege ante respuestas que no sean un array.
   const safeEquity = Array.isArray(equity) ? equity : []
+  // El punto en vivo lleva equity Y balance, para que ambos gráficos (equity y
+  // balance) se muevan sin esperar al próximo registro del backend.
   const equitySeries: EquityPoint[] =
     liveEquity != null && safeEquity.length > 0 && safeEquity[safeEquity.length - 1].equity !== liveEquity
-      ? [...safeEquity, { t: 'now', equity: liveEquity }]
+      ? [...safeEquity, { t: 'now', equity: liveEquity, balance: liveBalance }]
       : safeEquity
 
   // P/L flotante: misma fuente que el Header (equity - balance) para que ambos
@@ -191,7 +194,10 @@ export function DashboardPage({ state }: DashboardPageProps) {
             })}
           </div>
         </div>
-        <PortfolioChart points={equitySeries} rangeLabel={range.desc} />
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <PortfolioChart points={equitySeries} rangeLabel={range.desc} field="equity" />
+          <PortfolioChart points={equitySeries} rangeLabel={range.desc} field="balance" />
+        </div>
       </section>
 
       <section>

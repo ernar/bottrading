@@ -70,7 +70,8 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="p-4 sm:p-8 max-w-2xl">
+    <div className="p-4 sm:p-8">
+      <div className="max-w-2xl">
       <h2 className="text-xl font-bold mb-1">Ajustes de conexión</h2>
       <p className="text-sm text-gray-400 mb-6">
         URL del backend (Flask + WebSocket) al que se conecta este dashboard. Se guarda en
@@ -166,6 +167,7 @@ export function SettingsPage() {
             <span className="text-gray-300">{ENV_API_URL}</span>
           </div>
         </div>
+      </div>
       </div>
 
       <BotSettings />

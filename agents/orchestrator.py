@@ -252,6 +252,10 @@ class AgentOrchestrator:
         # dashboard. Se loguea como mucho cada equity_log_seconds (default 60s).
         self.equity_log_seconds = self.schedule_cfg.get("equity_log_seconds", 60)
         self._last_equity_log = 0.0  # 0 = registrar en la primera rotación
+        # Heartbeat de cuenta: refresca equity/balance y lo emite por WebSocket
+        # cada pocos segundos, INDEPENDIENTE del ciclo pesado (que tarda ≥rotación
+        # + el análisis LLM). Así el P/L flotante del dashboard se mueve en vivo.
+        self.account_poll_seconds = float(os.getenv("ACCOUNT_POLL_SECONDS", "5") or 5)
         # Análisis en paralelo: lanza el análisis (LLM) de los agentes a la vez en
         # la fase de recolección. Solo aporta si el backend LLM atiende peticiones
         # concurrentes (nube, u Ollama con NUM_PARALLEL). Los accesos al EA se
@@ -284,9 +288,39 @@ class AgentOrchestrator:
         """True si ya transcurrió `interval` segundos desde `last` (0 = nunca)."""
         return interval > 0 and (now - last) >= interval
 
+    def _broadcast_account(self, account_info: dict):
+        """Emite la cuenta (equity/balance/…) por WebSocket para que el dashboard
+        actualice el P/L flotante en vivo. Import perezoso para evitar el ciclo
+        con api.server; nunca debe tumbar el bot."""
+        try:
+            from api.server import broadcast_account_update
+            broadcast_account_update(account_info)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _account_heartbeat(self):
+        """Bucle daemon: refresca la cuenta y la emite cada account_poll_seconds,
+        independiente del ciclo pesado (rotación + análisis LLM), para que el P/L
+        flotante del dashboard se mueva de forma fluida. Sigue emitiendo aunque el
+        bot esté en pausa (las posiciones abiertas siguen fluctuando)."""
+        if self.account_poll_seconds <= 0:
+            return
+        while True:
+            time.sleep(self.account_poll_seconds)
+            try:
+                info = self.client.get_account_info()
+                if info:
+                    bot_state.update_account(info)
+                    self._broadcast_account(info)
+            except Exception:  # noqa: BLE001 — un fallo puntual no debe matar el hilo
+                pass
+
     def run_forever(self, poll_seconds: int = 60):
         bot_state.set_bot_running(True)
         self.rotation_seconds = poll_seconds
+        # Heartbeat de cuenta en hilo daemon: P/L flotante en vivo en el dashboard.
+        threading.Thread(target=self._account_heartbeat, daemon=True,
+                         name="account-heartbeat").start()
         # Arranque: la mesa revisa la cuenta y la disponibilidad de agentes
         # antes de la primera rotación.
         self._startup_review()
@@ -296,6 +330,7 @@ class AgentOrchestrator:
                 account_info = self.client.get_account_info()
                 if account_info:
                     bot_state.update_account(account_info)
+                    self._broadcast_account(account_info)
                     self._check_daily_loss_guard(account_info)
                     self._log_equity_snapshot(account_info)
 
