@@ -384,6 +384,10 @@ class AgentOrchestrator:
             exp = snap.get("total_exposure_pct", 0)
             tope = snap.get("max_total_exposure_pct", 0)
             print(console.kv("Equity", console.money(snap.get("equity", 0))))
+            # Apalancamiento de la cuenta (1:N) reportado por el broker.
+            leverage = (self.client.get_account_info() or {}).get("leverage")
+            if leverage:
+                print(console.kv("Apalancamiento", f"1:{int(leverage)}"))
             print(console.kv("Exposición total",
                              f"{exp:.1%} {console.dim(f'/ tope {tope:.0%}')}"))
             print(console.kv("Posiciones abiertas", snap.get("open_positions_total", 0)))

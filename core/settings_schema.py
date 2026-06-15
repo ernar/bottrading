@@ -73,6 +73,14 @@ SETTINGS_SCHEMA: list[dict] = [
     {"key": "SMTP_USE_TLS", "label": "STARTTLS", "group": "Email (SMTP)", "type": "bool", "secret": False, "hot": True, "help": "Cifra tras conectar."},
     {"key": "REPORT_EMAIL_TO", "label": "Destinatario del reporte", "group": "Email (SMTP)", "type": "str", "secret": False, "hot": True, "help": "Correo que recibe el informe."},
 
+    # --- Asistente (responsable de la organización) ---
+    {"key": "GEMINI_API_KEY", "label": "Token Gemini (API key)", "group": "Asistente", "type": "str", "secret": True, "hot": True,
+     "help": "Clave de Google Gemini. La usa el asistente del dashboard (y los agentes Gemini). Se guarda solo si escribes una nueva."},
+    {"key": "ASSISTANT_PROVIDER", "label": "Proveedor LLM asistente", "group": "Asistente", "type": "str", "secret": False, "hot": True,
+     "help": "gemini / openai / ollama. Por defecto gemini."},
+    {"key": "ASSISTANT_MODEL", "label": "Modelo del asistente", "group": "Asistente", "type": "str", "secret": False, "hot": True,
+     "help": "Modelo conversacional del asistente. Por defecto gemini-3.5-flash."},
+
     # --- Noticias ---
     {"key": "NEWS_ENABLED", "label": "Noticias activas", "group": "Noticias", "type": "bool", "secret": False, "hot": False,
      "help": "Calendario económico + titulares en el prompt. Requiere reinicio."},

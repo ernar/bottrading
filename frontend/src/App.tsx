@@ -10,6 +10,7 @@ import { PositionsPage } from './pages/Positions'
 import { HistoryPage } from './pages/History'
 import { AgentsPage } from './pages/Agents'
 import { CoordinatorPage } from './pages/Coordinator'
+import { AssistantPage } from './pages/Assistant'
 import { SettingsPage } from './pages/Settings'
 
 function App() {
@@ -25,6 +26,7 @@ function App() {
           <Routes>
             <Route path="/" element={<DashboardPage state={state} />} />
             <Route path="/coordinator" element={<CoordinatorPage liveCoordination={coordination} />} />
+            <Route path="/assistant" element={<AssistantPage />} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/signals" element={<SignalsPage state={state} />} />
             <Route path="/positions" element={<PositionsPage state={state} />} />

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { Coordination, CoordinatorDecision, CoordinatorOverview } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 
@@ -269,7 +270,46 @@ function FlowDiagram({
           Aún no hay flujo: se dibujará tras la primera coordinación.
         </div>
       )}
+
+      {/* El responsable (asistente LLM) observa todo el flujo y responde al usuario. */}
+      <AssistantNode overview={overview} />
     </section>
+  )
+}
+
+// Nodo del "responsable de la organización": el asistente conversacional que
+// supervisa todas las fases (lee cuenta, mesa y agentes vía API) y rinde cuentas
+// al usuario. No ejecuta: solo informa. Enlaza a su chat.
+function AssistantNode({ overview }: { overview: CoordinatorOverview | null }) {
+  return (
+    <div className="mt-4">
+      {/* Conector visual hacia arriba (supervisa la tubería) */}
+      <div className="flex justify-center">
+        <span className="text-gray-600 text-lg leading-none">⌃</span>
+      </div>
+      <Link
+        to="/assistant"
+        className="block rounded-lg p-4 border border-purple-700/60 bg-purple-950/20 hover:border-purple-500 transition"
+      >
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="text-2xl">🧑‍💼</span>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-purple-300">Responsable de la mesa (asistente)</div>
+              <div className="text-xs text-gray-400">
+                Supervisa cuenta, mesa y agentes en vivo · responde tus preguntas · no opera
+              </div>
+            </div>
+          </div>
+          <span className="text-xs text-purple-300 whitespace-nowrap">Abrir chat →</span>
+        </div>
+        {overview?.provider && (
+          <div className="text-[10px] text-gray-500 mt-2">
+            consulta el mismo libro que el director · pregúntale “¿cómo vamos?”
+          </div>
+        )}
+      </Link>
+    </div>
   )
 }
 

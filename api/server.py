@@ -26,6 +26,7 @@ socketio = SocketIO(
 
 _mt_client = None
 _orchestrator = None
+_assistant = None
 connected_clients = set()
 
 logging.basicConfig(level=logging.INFO)
@@ -281,6 +282,87 @@ def update_settings():
         "restart_required": needs_restart,
         "applied_hot": applied_hot,
     }), 200
+
+
+def _get_assistant():
+    """Instancia perezosa del asistente "responsable de la organización".
+
+    Se crea bajo demanda (la GEMINI_API_KEY y ASSISTANT_MODEL se leen en runtime,
+    después de cargar el .env) y se reconfigura con el provider/modelo del entorno.
+    El contexto en vivo se arma con bot_state + los overviews del orquestador."""
+    global _assistant
+    if _assistant is None:
+        from core.assistant import OrgAssistant, build_live_context
+
+        def context_builder() -> str:
+            state = bot_state.get_state()
+            coord = (_orchestrator.coordinator_overview()
+                     if _orchestrator is not None and hasattr(_orchestrator, "coordinator_overview")
+                     else {})
+            agents = (_orchestrator.agents_overview()
+                      if _orchestrator is not None and hasattr(_orchestrator, "agents_overview")
+                      else {})
+            return build_live_context(state, coord, agents)
+
+        _assistant = OrgAssistant(
+            provider=os.getenv("ASSISTANT_PROVIDER", "gemini"),
+            model=os.getenv("ASSISTANT_MODEL", "gemini-3.5-flash"),
+        )
+        _assistant.set_context_builder(context_builder)
+    else:
+        # Reaplica provider/modelo por si cambiaron en Ajustes (en caliente).
+        _assistant.configure(
+            provider=os.getenv("ASSISTANT_PROVIDER", "gemini"),
+            model=os.getenv("ASSISTANT_MODEL", "gemini-3.5-flash"),
+        )
+    return _assistant
+
+
+@app.route("/api/assistant/info", methods=["GET"])
+def assistant_info():
+    """Estado del asistente: provider/modelo y si la clave LLM está configurada."""
+    provider = os.getenv("ASSISTANT_PROVIDER", "gemini").lower()
+    model = os.getenv("ASSISTANT_MODEL", "gemini-3.5-flash")
+    key_map = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+    if provider == "ollama":
+        available = True
+    else:
+        available = bool(os.getenv(key_map.get(provider, ""), "").strip())
+    return jsonify({"provider": provider, "model": model, "available": available}), 200
+
+
+@app.route("/api/assistant/chat", methods=["POST"])
+def assistant_chat():
+    """Envía un mensaje al asistente y devuelve su respuesta.
+    Body: {"message": str, "session_id": str}. La memoria se guarda por sesión."""
+    body = request.get_json(silent=True) or {}
+    message = str(body.get("message", "")).strip()
+    session_id = str(body.get("session_id") or "default")
+    if not message:
+        return jsonify({"error": "message vacío"}), 400
+    try:
+        reply = _get_assistant().chat(session_id, message)
+    except Exception as e:  # noqa: BLE001 — nunca devolver 500 silencioso al chat
+        logger.error(f"assistant chat error: {e}")
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"reply": reply, "session_id": session_id}), 200
+
+
+@app.route("/api/assistant/history", methods=["GET"])
+def assistant_history():
+    """Historial de una sesión del asistente. ?session_id=..."""
+    session_id = str(request.args.get("session_id") or "default")
+    return jsonify({"session_id": session_id,
+                    "history": _get_assistant().history(session_id)}), 200
+
+
+@app.route("/api/assistant/reset", methods=["POST"])
+def assistant_reset():
+    """Olvida la conversación de una sesión."""
+    body = request.get_json(silent=True) or {}
+    session_id = str(body.get("session_id") or "default")
+    _get_assistant().reset(session_id)
+    return jsonify({"status": "ok", "session_id": session_id}), 200
 
 
 @app.route("/api/models", methods=["GET"])
