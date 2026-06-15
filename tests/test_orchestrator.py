@@ -1,6 +1,5 @@
 """Tests de la optimización por reglas (tune_params) y helpers de posiciones."""
 import time
-from datetime import date
 from types import SimpleNamespace
 
 from agents.base_agent import AgentParams
@@ -47,14 +46,16 @@ def test_pos_direction_normaliza_mt4():
     assert _pos_direction({"type": "1"}) == "SELL"
 
 
-# ----- Cooldown por pérdida diaria -----
+# ----- Cooldown por pérdida (ventana móvil) -----
 
 def _orch():
     # El __init__ no usa el cliente; basta con un placeholder para estos tests.
     orch = AgentOrchestrator([], client=None, platform="mt4")
     orch.max_daily_loss_pct = 0.05
-    orch._risk_day = date.today().isoformat()
-    orch._day_start_equity = 1000.0
+    orch.risk_loss_window_seconds = 6 * 3600
+    # Ventana ya abierta con equity base de referencia (no expirada).
+    orch._risk_window_start = time.monotonic()
+    orch._window_start_equity = 1000.0
     return orch
 
 
@@ -73,13 +74,19 @@ def test_sin_cooldown_si_perdida_bajo_limite():
     assert orch._risk_cooldown_active() is False
 
 
-def test_cooldown_se_rearma_en_nuevo_dia():
+def test_cooldown_se_rearma_al_expirar_la_ventana():
     orch = _orch()
-    orch._risk_cooldown_day = "2000-01-01"  # cooldown de un día pasado
-    orch._risk_day = "2000-01-01"
-    orch._check_daily_loss_guard({"equity": 940.0})  # nuevo día: solo fija baseline
+    # Activa el cooldown dentro de la ventana actual.
+    orch._check_daily_loss_guard({"equity": 940.0})  # -6% > 5%
+    assert orch._risk_cooldown_active() is True
+    # Simula que la ventana expiró (inicio muy en el pasado).
+    orch._risk_window_start = time.monotonic() - (orch.risk_loss_window_seconds + 1)
+    # Ya expirada: el cooldown se considera rearmado aunque no haya corrido el guard.
     assert orch._risk_cooldown_active() is False
-    assert orch._day_start_equity == 940.0
+    # Al correr el guard, fija una nueva base con el equity actual y limpia cooldown.
+    orch._check_daily_loss_guard({"equity": 940.0})
+    assert orch._risk_cooldown_active() is False
+    assert orch._window_start_equity == 940.0
 
 
 def test_throttled_espacia_analisis():

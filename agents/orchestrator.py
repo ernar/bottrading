@@ -12,7 +12,7 @@ import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import datetime
 
 from core import console
 from core.state import bot_state
@@ -254,12 +254,16 @@ class AgentOrchestrator:
         # serializan vía MT4Client._send_lock; la salida se vuelca por agente.
         self.parallel_analysis = (
             os.getenv("PARALLEL_ANALYSIS", "true").lower() in ("1", "true", "yes", "on"))
-        # Control de pérdida diaria (0 = desactivado). Al tocarlo se entra en
-        # cooldown (no se abren operaciones), no se detiene el bot.
+        # Control de pérdida por ventana móvil (0 = desactivado). Al tocar el
+        # límite dentro de la ventana se entra en cooldown (no se abren
+        # operaciones), no se detiene el bot. La ventana se rearma cada
+        # RISK_LOSS_WINDOW_SECONDS (6 h por defecto) fijando un nuevo equity base.
         self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
-        self._risk_day = None          # día (ISO) cuyo equity inicial guardamos
-        self._day_start_equity = None  # equity al primer ciclo del día
-        self._risk_cooldown_day = None  # día en el que se activó el cooldown
+        self.risk_loss_window_seconds = float(
+            os.getenv("RISK_LOSS_WINDOW_SECONDS", str(6 * 3600)) or (6 * 3600))
+        self._risk_window_start = None   # time.monotonic al inicio de la ventana
+        self._window_start_equity = None  # equity de referencia de la ventana
+        self._cooldown_active = False     # cooldown vigente en la ventana actual
         # Última instantánea de posiciones por símbolo {symbol: {ticket: snap}}:
         # base para detectar cierres y registrarlos en el historial.
         self._prev_positions: dict = {}
@@ -338,7 +342,7 @@ class AgentOrchestrator:
             try:
                 snap = self.risk_book.snapshot(
                     self.client, self.agents,
-                    day_start_equity=self._day_start_equity, in_cooldown=False)
+                    day_start_equity=self._window_start_equity, in_cooldown=False)
                 exp = snap.get("total_exposure_pct", 0)
                 tope = snap.get("max_total_exposure_pct", 0)
                 print(console.kv("Equity", console.money(snap.get("equity", 0))))
@@ -463,43 +467,53 @@ class AgentOrchestrator:
             pass
 
     def _check_daily_loss_guard(self, account_info: dict):
-        """Control de pérdida diaria por *cooldown* (no detiene el bot).
+        """Control de pérdida por *cooldown* en ventana móvil (no detiene el bot).
 
-        Fija el equity al primer ciclo de cada día y, si en ciclos posteriores
-        cae por debajo del límite configurado, activa el cooldown: el bot sigue
-        corriendo (actualiza estado, evalúa memoria y detecta cierres) pero deja
-        de abrir nuevas operaciones y espacia el análisis, a la espera de que las
-        posiciones abiertas se cierren. Se activa una vez por día y se rearma al
-        cambiar de día."""
+        Fija el equity de referencia al inicio de cada ventana de
+        `risk_loss_window_seconds` (6 h por defecto) y, si dentro de la ventana el
+        equity cae por debajo del límite configurado, activa el cooldown: el bot
+        sigue corriendo (actualiza estado, evalúa memoria y detecta cierres) pero
+        deja de abrir nuevas operaciones y espacia el análisis. Al expirar la
+        ventana se rearma con un nuevo equity base (cooldown desactivado)."""
         if not self.max_daily_loss_pct:
             return
         equity = account_info.get("equity") or 0
         if equity <= 0:
             return
 
-        today = date.today().isoformat()
-        if self._risk_day != today:
-            # Nuevo día: rearmar con el equity actual como referencia.
-            self._risk_day = today
-            self._day_start_equity = equity
-            self._risk_cooldown_day = None
+        now = time.monotonic()
+        # Primera vez o ventana expirada: rearmar con el equity actual de referencia.
+        if (self._risk_window_start is None
+                or (now - self._risk_window_start) >= self.risk_loss_window_seconds):
+            self._risk_window_start = now
+            self._window_start_equity = equity
+            self._cooldown_active = False
             return
 
-        baseline = self._day_start_equity or equity
+        baseline = self._window_start_equity or equity
         drawdown = (baseline - equity) / baseline
-        if drawdown >= self.max_daily_loss_pct and self._risk_cooldown_day != today:
-            self._risk_cooldown_day = today
+        if drawdown >= self.max_daily_loss_pct and not self._cooldown_active:
+            self._cooldown_active = True
+            ventana_h = self.risk_loss_window_seconds / 3600
             print("\n" + console.err("!" * console.WIDTH))
             print("  " + console.err(console.bold(
-                f"PÉRDIDA DIARIA: {drawdown:.1%} >= límite {self.max_daily_loss_pct:.1%}")))
-            print(console.kv("Equity día", f"{baseline:.2f} → {equity:.2f}"))
+                f"PÉRDIDA EN {ventana_h:.0f}H: {drawdown:.1%} >= límite {self.max_daily_loss_pct:.1%}")))
+            print(console.kv("Equity ventana", f"{baseline:.2f} → {equity:.2f}"))
             print("  " + console.warn("COOLDOWN: no se abren nuevas operaciones; análisis espaciado."))
-            print(console.dim("  El bot sigue activo esperando el cierre de las posiciones abiertas."))
+            print(console.dim(f"  El bot sigue activo; la ventana se rearma en ~{ventana_h:.0f} h."))
             print(console.err("!" * console.WIDTH))
 
     def _risk_cooldown_active(self) -> bool:
-        """True si hoy se tocó el límite de pérdida diaria (cooldown vigente)."""
-        return self._risk_cooldown_day == date.today().isoformat()
+        """True si se tocó el límite dentro de la ventana actual (cooldown vigente).
+
+        Si la ventana ya expiró se considera rearmado (False) aunque el guard aún
+        no haya corrido para fijar la nueva base."""
+        if not self._cooldown_active:
+            return False
+        if (self._risk_window_start is not None
+                and (time.monotonic() - self._risk_window_start) >= self.risk_loss_window_seconds):
+            return False
+        return True
 
     def _throttled(self, symbol: str, interval: float) -> bool:
         """True si aún no han pasado `interval` segundos desde el último análisis
@@ -911,7 +925,7 @@ class AgentOrchestrator:
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
             self.client, self.agents,
-            day_start_equity=self._day_start_equity, in_cooldown=in_cooldown)
+            day_start_equity=self._window_start_equity, in_cooldown=in_cooldown)
 
         has_positions = snapshot.get("open_positions_total", 0) > 0
         if not signals and not (has_positions and self.risk_book.can_close):
@@ -1143,7 +1157,7 @@ class AgentOrchestrator:
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
             self.client, self.agents,
-            day_start_equity=self._day_start_equity, in_cooldown=in_cooldown)
+            day_start_equity=self._window_start_equity, in_cooldown=in_cooldown)
         result = self.coordinator.decide(
             snapshot, signals, self.agents_overview(),
             news_context=self._coordinator_news())
@@ -1164,7 +1178,7 @@ class AgentOrchestrator:
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
             self.client, self.agents,
-            day_start_equity=self._day_start_equity, in_cooldown=in_cooldown)
+            day_start_equity=self._window_start_equity, in_cooldown=in_cooldown)
 
         print("\n" + console.header("JUNTA DE LA MESA · revisión global del libro", char="#"))
         self.last_junta_at = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1200,7 +1214,7 @@ class AgentOrchestrator:
             try:
                 snapshot = self.risk_book.snapshot(
                     self.client, self.agents,
-                    day_start_equity=self._day_start_equity,
+                    day_start_equity=self._window_start_equity,
                     in_cooldown=self._risk_cooldown_active())
             except Exception:  # noqa: BLE001 — el reporte nunca debe tumbar el bot
                 snapshot = None

@@ -443,8 +443,15 @@ Reglas:
   position_action sobre las posiciones ABIERTAS de ese símbolo: "hold" (no tocar), "reduce"
   (recortar exposición), "close" (cerrar todo) o "hedge" (cubrir abriendo en sentido contrario
   para neutralizar el riesgo SIN cerrar).
-- Reparte el capital, no lo concentres todo en un símbolo. No apruebes entradas que disparen la
-  exposición total por encima de lo razonable.
+- APETITO POR DEFECTO: una señal accionable (buy/sell) que te llega YA pasó los filtros de
+  confianza y riesgo/beneficio del especialista; representa una ventaja real. Tu postura por
+  defecto ante ella es APROBAR. No la rechaces por cautela genérica: solo di no si hay una razón
+  concreta de CARTERA para ello (la exposición total ya está cerca de su tope, el símbolo ya está
+  en su asignación máxima, hay cooldown por pérdida diaria, o entrar apilaría más en una dirección
+  neta ya saturada / en conflicto con la tendencia). Si no concurre ninguna de esas, aprueba.
+- Reparte el capital, no lo concentres todo en un símbolo, pero tener margen libre disponible es
+  una oportunidad desaprovechada: usa una allocation_pct acorde a la confianza de la señal en vez
+  de asignar de menos por defecto.
 - Prioriza señales de mayor confianza y mejor relación riesgo/beneficio, y los agentes con mejor
   rendimiento reciente.
 - CONCENTRACIÓN DIRECCIONAL: vigila el "sesgo abierto" (neto LONG/SHORT) de cada símbolo. NO
