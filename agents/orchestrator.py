@@ -641,18 +641,21 @@ class AgentOrchestrator:
         else:
             print(f"  {console.ok('✅ Sin posiciones abiertas')} en {symbol}.")
 
-    def _gather_signals_parallel(self, force_symbols: set) -> dict:
-        """Recolecta las señales de todos los agentes EN PARALELO.
+    def _gather_signals_parallel(self, force_symbols: set, agents: list = None) -> dict:
+        """Recolecta las señales de los agentes EN PARALELO.
 
         Lanza `_gather_signal` de cada agente en su propio hilo (la parte lenta,
         la llamada al LLM, se solapa). Los accesos al EA se serializan en
         `MT4Client._send` (canal único). La salida de cada agente se captura en un
         buffer aislado y se vuelca en orden al terminar, para no entremezclar los
-        reportes. Devuelve ``{symbol: signal}`` igual que la ruta secuencial."""
+        reportes. `agents` limita la recolección a esos especialistas (los
+        activos); por defecto todos. Devuelve ``{symbol: signal}`` igual que la
+        ruta secuencial."""
+        agents = self.agents if agents is None else agents
         real_out = sys.stdout
         router = (real_out if isinstance(real_out, _ThreadRoutedStdout)
                   else _ThreadRoutedStdout(real_out))
-        buffers = {a.name: io.StringIO() for a in self.agents}
+        buffers = {a.name: io.StringIO() for a in agents}
         results: dict = {}
 
         def work(agent):
@@ -675,17 +678,17 @@ class AgentOrchestrator:
         # que se note que la recolección está en marcha. El spinner corre en su
         # propio hilo, NO registrado en el router, así que escribe a real_out; se
         # detiene antes de volcar los buffers para no pisar su '\r'.
-        n = len(self.agents)
+        n = len(agents)
         try:
             with _Spinner(f"  Analizando {n} símbolos en paralelo"):
                 with ThreadPoolExecutor(max_workers=n,
                                         thread_name_prefix="analyze") as ex:
-                    collected = list(ex.map(work, self.agents))
+                    collected = list(ex.map(work, agents))
         finally:
             sys.stdout = real_out
 
         # Vuelca los reportes en el orden de los agentes (lectura estable).
-        for agent in self.agents:
+        for agent in agents:
             out = buffers[agent.name].getvalue()
             if out:
                 real_out.write(out)
@@ -1000,15 +1003,23 @@ class AgentOrchestrator:
 
         `force_symbols` (noticia RED) fuerza el análisis de esos símbolos aunque
         estén throttled; la coordinación y el clamp se aplican igual a todos."""
-        # Fase 1/3: recolectar las señales de todos los especialistas.
-        parallel = self.parallel_analysis and len(self.agents) > 1
+        # Fase 1/3: recolectar las señales de los especialistas ACTIVOS. Los
+        # agentes desactivados desde el dashboard se omiten: no se analizan ni
+        # proponen entradas (sus posiciones abiertas las sigue gobernando la mesa
+        # a partir del snapshot, que considera toda la cartera).
+        active = [a for a in self.agents if getattr(a, "enabled", True)]
+        disabled = [a for a in self.agents if not getattr(a, "enabled", True)]
+        if disabled:
+            print(console.dim("  Agentes desactivados (omitidos): "
+                              + ", ".join(f"{a.name} [{a.symbol}]" for a in disabled)))
+        parallel = self.parallel_analysis and len(active) > 1
         modo = console.dim(" (en paralelo)") if parallel else ""
         print(console.dim("  [1/3] Recolección de señales") + modo)
         if parallel:
-            signals = self._gather_signals_parallel(force_symbols)
+            signals = self._gather_signals_parallel(force_symbols, active)
         else:
             signals = {}
-            for agent in self.agents:
+            for agent in active:
                 sig = self._gather_signal(agent, force=agent.symbol in force_symbols)
                 if sig:
                     signals[agent.symbol] = sig
@@ -1516,6 +1527,18 @@ class AgentOrchestrator:
         print(f"  [{name}] modelo cambiado a {provider.upper()}/{model}")
         return {"name": name, "provider": provider, "model": model}
 
+    def set_agent_enabled(self, name: str, enabled: bool) -> dict:
+        """Activa/desactiva un agente en caliente. Desactivado, el orquestador lo
+        omite en la recolección de las siguientes rotaciones (deja de analizar y
+        de proponer entradas). Lanza KeyError si el agente no existe."""
+        agent = next((a for a in self.agents if a.name == name), None)
+        if agent is None:
+            raise KeyError(name)
+        agent.enabled = bool(enabled)
+        estado = "activado" if agent.enabled else "desactivado"
+        print(f"  [{name}] {estado} para las siguientes rotaciones.")
+        return {"name": name, "symbol": agent.symbol, "enabled": agent.enabled}
+
     # ----- Exposición para el dashboard -----
 
     def agents_overview(self) -> dict:
@@ -1530,6 +1553,9 @@ class AgentOrchestrator:
                 "description": agent.description,
                 "provider": p.provider,
                 "model": p.model,
+                # False = desactivado desde el dashboard: el orquestador lo omite
+                # en la recolección (no analiza ni propone entradas).
+                "enabled": getattr(agent, "enabled", True),
                 # False = mercado cerrado (fin de semana / fuera de sesión): el
                 # agente figura como no disponible y no analiza hasta que reabra.
                 "market_open": self.client.is_market_open(agent.symbol),

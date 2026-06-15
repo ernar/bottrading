@@ -83,6 +83,11 @@ class SymbolAgent:
         self.params = params
         self.description = description
         self.persona = persona
+        # Si False, el orquestador omite a este agente en la fase de recolección:
+        # deja de analizar y de proponer entradas en las siguientes rotaciones
+        # (las posiciones ya abiertas las sigue gobernando la mesa). Conmutable
+        # en caliente desde el dashboard.
+        self.enabled = True
 
         self.config = BotConfig(
             model=params.model,

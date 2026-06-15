@@ -21,6 +21,22 @@ export function PositionsPage({ state }: PositionsPageProps) {
     }
   }
 
+  const handleCloseAll = async () => {
+    const count = Object.keys(positions).length
+    if (confirm(`Close ALL ${count} open position(s)? This cannot be undone.`)) {
+      try {
+        const res = await api.closeAllPositions()
+        console.log(`Closed ${res?.closed ?? 0} position(s)`, res)
+        if (res?.errors?.length) {
+          alert(`Closed ${res.closed}, but ${res.errors.length} failed. Check console.`)
+        }
+      } catch (error) {
+        console.error('Failed to close all positions:', error)
+        alert('Failed to close all positions')
+      }
+    }
+  }
+
   if (Object.keys(positions).length === 0) {
     return (
       <div className="p-4 sm:p-8">
@@ -34,7 +50,15 @@ export function PositionsPage({ state }: PositionsPageProps) {
 
   return (
     <div className="p-8">
-      <h2 className="text-xl font-bold mb-4">Open Positions</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold">Open Positions</h2>
+        <button
+          onClick={handleCloseAll}
+          className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white text-sm font-bold"
+        >
+          CLOSE ALL
+        </button>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-left text-gray-300">
           <thead className="bg-gray-800 text-white">

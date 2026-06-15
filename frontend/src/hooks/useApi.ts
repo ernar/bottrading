@@ -52,6 +52,11 @@ export function useApi() {
     return data
   }
 
+  const closeAllPositions = async (): Promise<any> => {
+    const { data } = await api.post('/api/positions/close-all')
+    return data
+  }
+
   return {
     getSignals,
     getPositions,
@@ -60,6 +65,7 @@ export function useApi() {
     getState,
     startBot,
     stopBot,
-    closePosition
+    closePosition,
+    closeAllPositions
   }
 }

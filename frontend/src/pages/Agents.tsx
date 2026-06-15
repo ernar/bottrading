@@ -7,7 +7,7 @@ const API_URL = getApiUrl()
 // Columnas ordenables de la tabla de agentes. `get` extrae el valor para
 // ordenar (número o texto); `align` controla la alineación de la celda.
 type SortKey =
-  | 'name' | 'symbol' | 'model' | 'market_open'
+  | 'name' | 'symbol' | 'model' | 'enabled' | 'market_open'
   | 'signals' | 'trades' | 'holds'
   | 'win_rate' | 'sl_hit_rate' | 'tp_hit_rate' | 'avg_move_pct'
   | 'min_confidence' | 'min_rr' | 'atr_sl_mult' | 'lot_size'
@@ -16,6 +16,7 @@ const COLUMNS: { key: SortKey; label: string; align: 'left' | 'right'; get: (a: 
   { key: 'name', label: 'Agente', align: 'left', get: a => a.name },
   { key: 'symbol', label: 'Símbolo', align: 'left', get: a => a.symbol },
   { key: 'model', label: 'Modelo', align: 'left', get: a => `${a.provider}/${a.model}` },
+  { key: 'enabled', label: 'Activo', align: 'left', get: a => (a.enabled === false ? 0 : 1) },
   { key: 'market_open', label: 'Mercado', align: 'left', get: a => (a.market_open === false ? 0 : 1) },
   { key: 'signals', label: 'Señales', align: 'right', get: a => a.stats.signals },
   { key: 'trades', label: 'Trades', align: 'right', get: a => a.stats.trades },
@@ -60,6 +61,19 @@ export function AgentsPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
       body: JSON.stringify({ provider, model }),
+    })
+      .then(r => r.json())
+      .then(() => load())
+      .catch(() => {})
+      .finally(() => setBusy(false))
+  }
+
+  const toggleEnabled = (name: string, enabled: boolean) => {
+    setBusy(true)
+    fetch(`${API_URL}/api/agents/${name}/enabled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
+      body: JSON.stringify({ enabled }),
     })
       .then(r => r.json())
       .then(() => load())
@@ -174,6 +188,22 @@ export function AgentsPage() {
                       disabled={busy}
                       onChange={(p, m) => changeModel(a.name, p, m)}
                     />
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <button
+                      onClick={() => toggleEnabled(a.name, a.enabled === false)}
+                      disabled={busy}
+                      title={a.enabled === false
+                        ? 'Activar: el agente analizará en las siguientes rotaciones'
+                        : 'Desactivar: el agente dejará de analizar y proponer entradas'}
+                      className={`text-xs px-2 py-0.5 rounded font-semibold disabled:opacity-50 ${
+                        a.enabled === false
+                          ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          : 'bg-green-700 text-green-100 hover:bg-green-600'
+                      }`}
+                    >
+                      {a.enabled === false ? 'OFF' : 'ON'}
+                    </button>
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     {a.market_open === false ? (

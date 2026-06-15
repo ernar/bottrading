@@ -430,6 +430,23 @@ def set_agent_model(name):
     return jsonify({"status": "ok", **result}), 200
 
 
+@app.route("/api/agents/<name>/enabled", methods=["POST"])
+@require_token
+def set_agent_enabled(name):
+    """Activa/desactiva un agente para las siguientes rotaciones.
+    Body: {"enabled": true|false}."""
+    if _orchestrator is None:
+        return jsonify({"error": "orchestrator not running"}), 503
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get("enabled", True))
+    try:
+        result = _orchestrator.set_agent_enabled(name, enabled)
+    except KeyError:
+        return jsonify({"error": f"agente '{name}' no encontrado"}), 404
+    socketio.emit("agent_enabled_changed", result)
+    return jsonify({"status": "ok", **result}), 200
+
+
 @app.route("/api/agents/optimize", methods=["POST"])
 @require_token
 def optimize_agents():
@@ -440,6 +457,44 @@ def optimize_agents():
     apply = bool((request.get_json(silent=True) or {}).get("apply", False))
     report = _orchestrator.optimize(apply=apply)
     return jsonify({"applied": apply, "report": report}), 200
+
+
+@app.route("/api/positions/close-all", methods=["POST"])
+@require_token
+def close_all_positions():
+    """Cierra TODAS las posiciones abiertas de la cuenta. Recorre las posiciones
+    vivas en el broker y cierra cada una (varias del mismo símbolo incluidas).
+    Devuelve el recuento de cerradas y los símbolos con error."""
+    if _mt_client is None:
+        return jsonify({"error": "MT client not connected"}), 503
+    try:
+        positions = _mt_client.get_positions() or []
+    except Exception as e:
+        logger.error(f"Error listing positions for close-all: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    closed, errors = 0, []
+    # Una llamada a close_position(symbol) cierra UNA posición del símbolo; con
+    # varias del mismo símbolo se llama tantas veces como posiciones haya.
+    from collections import Counter
+    counts = Counter(str(p.get("symbol")) for p in positions if p.get("symbol"))
+    for symbol, n in counts.items():
+        for _ in range(n):
+            try:
+                result = _mt_client.close_position(symbol)
+            except Exception as e:  # noqa: BLE001
+                errors.append({"symbol": symbol, "error": str(e)})
+                break
+            if result is None:  # ya no quedan posiciones del símbolo
+                break
+            if not result.get("success"):
+                errors.append({"symbol": symbol,
+                               "error": result.get("error") or result.get("comment") or "close failed"})
+                break
+            bot_state.remove_position(symbol)
+            closed += 1
+            socketio.emit("position_closed", {"symbol": symbol})
+    return jsonify({"status": "ok", "closed": closed, "errors": errors}), 200
 
 
 @app.route("/api/positions/<symbol>/close", methods=["POST"])

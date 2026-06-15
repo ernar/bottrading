@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { BotState } from '../types/bot'
 import { StatusBadge } from './StatusBadge'
 import { getApiUrl, getApiHeaders } from '../config'
@@ -40,6 +40,16 @@ function BotToggleButton({ running }: { running: boolean }) {
 }
 
 export function Header({ state, connected }: HeaderProps) {
+  // Momento de la última actualización RECIBIDA, medido con el reloj del
+  // navegador (no con el timestamp del backend, que puede traer desfase de zona
+  // horaria y solo cambia en el state_update completo). `state` cambia de
+  // identidad con cada evento WebSocket (account_update cada ~5s, señales,
+  // posiciones…), así que esto avanza en vivo.
+  const [lastSeen, setLastSeen] = useState<Date | null>(null)
+  useEffect(() => {
+    if (state) setLastSeen(new Date())
+  }, [state])
+
   if (!state || !state.account_info) {
     return (
       <header className="bg-gray-900 text-white p-4 border-b border-gray-700">
@@ -66,9 +76,9 @@ export function Header({ state, connected }: HeaderProps) {
         <div className="flex items-center gap-3">
           <img src="/logo.png" alt="GamerFurious Trading Bot" className="h-11 w-auto" />
           <h1 className="text-xl sm:text-2xl font-bold">{platform} Trading Bot</h1>
-          {state.last_update && (
+          {lastSeen && (
             <span className="text-xs text-gray-500 hidden sm:inline">
-              actualizado {new Date(state.last_update).toLocaleTimeString()}
+              actualizado {lastSeen.toLocaleTimeString()}
             </span>
           )}
         </div>
