@@ -5,7 +5,7 @@ Bot de trading que integra **MetaTrader 4** con un **LLM** (Ollama local por def
 ## Arranque
 
 - `python main.py` — arranca el bot **y** el API server (puerto 5000) en un hilo interno del mismo proceso. NO arranques el API por separado: el estado se comparte por proceso.
-- `start.bat` — lanza `main.py` + el dashboard React (`http://localhost:3000`).
+- `start.bat` — lanza solo `main.py` (bot + API en :5000). El dashboard React corre en otro entorno y se conecta por API; no lo arranca el `.bat`.
 - Frontend: `cd frontend && npm install`, luego `npm run dev`.
 - Credenciales y config en `.env` (MT4_LOGIN/PASSWORD/HOST/PORT, MODEL, SYMBOLS, NEWS_ENABLED). `.env` está en `.gitignore` y contiene credenciales reales — nunca lo subas ni lo imprimas. Plantilla sin secretos en `.env.example`.
 - Variables de seguridad/riesgo en `.env`: `API_HOST` (default `127.0.0.1`; usar `0.0.0.0` solo con `API_TOKEN`), `API_TOKEN` (protege las rutas POST que mutan estado), `MAX_DAILY_LOSS_PCT` (cooldown de pérdida diaria: deja de abrir operaciones y espacia el análisis sin detener el bot; 0 = desactivado).
