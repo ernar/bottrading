@@ -29,6 +29,10 @@ from core.db import (  # noqa: E402
 
 LOGS = "logs"
 ARCHIVE = os.path.join(LOGS, "archive")
+# Plataforma por defecto para los CSV sueltos en la raíz de logs/ (sin columna
+# `platform` ni subcarpeta). Configurable por si la producción no es MT4.
+DEFAULT_PLATFORM = os.environ.get("MIGRATE_PLATFORM", "MT4")
+_CSV_FILES = ("signals.csv", "trades.csv", "closed_trades.csv", "equity.csv")
 
 
 def _f(value):
@@ -66,23 +70,33 @@ def _read_csv(path):
         return []
 
 
-def _platforms():
-    """Subcarpetas de logs/ que parecen plataformas (contienen signals.csv, etc.)."""
+def _has_csv(d):
+    return any(os.path.exists(os.path.join(d, f)) for f in _CSV_FILES)
+
+
+def _sources():
+    """Orígenes de CSV como (directorio, etiqueta_plataforma).
+
+    Soporta dos disposiciones:
+      * CSV sueltos en la raíz ``logs/`` (la disposición actual) → plataforma
+        ``DEFAULT_PLATFORM`` (las filas pueden traer su propia columna ``platform``).
+      * Subcarpetas ``logs/<plataforma>/`` (disposición histórica).
+    """
     if not os.path.isdir(LOGS):
         return []
-    found = []
-    for name in os.listdir(LOGS):
+    sources = []
+    if _has_csv(LOGS):
+        sources.append((LOGS, DEFAULT_PLATFORM))
+    for name in sorted(os.listdir(LOGS)):
         d = os.path.join(LOGS, name)
-        if os.path.isdir(d) and name not in ("agents", "archive"):
-            if any(os.path.exists(os.path.join(d, f)) for f in (
-                    "signals.csv", "trades.csv", "closed_trades.csv", "equity.csv")):
-                found.append(name)
-    return found
+        if os.path.isdir(d) and name not in ("agents", "archive") and _has_csv(d):
+            sources.append((d, name))
+    return sources
 
 
-def migrate_signals(session, platform):
+def migrate_signals(session, csv_dir, platform):
     n = 0
-    for r in _read_csv(os.path.join(LOGS, platform, "signals.csv")):
+    for r in _read_csv(os.path.join(csv_dir, "signals.csv")):
         session.add(Signal(
             timestamp=_ts(r.get("timestamp")),
             platform=(r.get("platform") or platform).upper(),
@@ -98,9 +112,9 @@ def migrate_signals(session, platform):
     return n
 
 
-def migrate_trades(session, platform):
+def migrate_trades(session, csv_dir, platform):
     n = 0
-    for r in _read_csv(os.path.join(LOGS, platform, "trades.csv")):
+    for r in _read_csv(os.path.join(csv_dir, "trades.csv")):
         session.add(Trade(
             timestamp=_ts(r.get("timestamp")),
             platform=(r.get("platform") or platform).upper(),
@@ -114,9 +128,9 @@ def migrate_trades(session, platform):
     return n
 
 
-def migrate_closed_trades(session, platform):
+def migrate_closed_trades(session, csv_dir, platform):
     n = 0
-    for r in _read_csv(os.path.join(LOGS, platform, "closed_trades.csv")):
+    for r in _read_csv(os.path.join(csv_dir, "closed_trades.csv")):
         dur = r.get("duration_seconds")
         try:
             dur = int(float(dur)) if dur not in (None, "") else None
@@ -135,9 +149,9 @@ def migrate_closed_trades(session, platform):
     return n
 
 
-def migrate_equity(session, platform):
+def migrate_equity(session, csv_dir, platform):
     n = 0
-    for r in _read_csv(os.path.join(LOGS, platform, "equity.csv")):
+    for r in _read_csv(os.path.join(csv_dir, "equity.csv")):
         session.add(EquityPoint(
             timestamp=_ts(r.get("timestamp")),
             platform=(r.get("platform") or platform).upper(),
@@ -178,12 +192,14 @@ def _migrate_memory_file(session, path, scope):
 
 def migrate_memory(session):
     n = _migrate_memory_file(session, os.path.join(LOGS, "memory.json"), "global")
-    agents_dir = os.path.join(LOGS, "agents")
-    if os.path.isdir(agents_dir):
-        for name in os.listdir(agents_dir):
+    # Memoria por agente: en logs/agents/ (histórico) o suelta en logs/ (plana).
+    for base in (os.path.join(LOGS, "agents"), LOGS):
+        if not os.path.isdir(base):
+            continue
+        for name in os.listdir(base):
             if name.endswith("_memory.json"):
                 scope = name[:-len("_memory.json")]
-                n += _migrate_memory_file(session, os.path.join(agents_dir, name), scope)
+                n += _migrate_memory_file(session, os.path.join(base, name), scope)
     return n
 
 
@@ -217,17 +233,22 @@ def _archive(paths):
 def main():
     init_db()
     archived = []
+    sources = _sources()
+    if not sources:
+        print("[aviso] no se encontraron CSV (signals/trades/closed_trades/equity) "
+              f"ni en {LOGS}/ ni en sus subcarpetas de plataforma.")
     with session_scope() as session:
-        for platform in _platforms():
+        for csv_dir, platform in sources:
             counts = {
-                "signals": migrate_signals(session, platform),
-                "trades": migrate_trades(session, platform),
-                "closed_trades": migrate_closed_trades(session, platform),
-                "equity": migrate_equity(session, platform),
+                "signals": migrate_signals(session, csv_dir, platform),
+                "trades": migrate_trades(session, csv_dir, platform),
+                "closed_trades": migrate_closed_trades(session, csv_dir, platform),
+                "equity": migrate_equity(session, csv_dir, platform),
             }
-            print(f"[{platform}] " + ", ".join(f"{k}={v}" for k, v in counts.items()))
-            for fname in ("signals.csv", "trades.csv", "closed_trades.csv", "equity.csv"):
-                archived.append(os.path.join(LOGS, platform, fname))
+            label = platform if csv_dir != LOGS else f"{platform} (raíz)"
+            print(f"[{label}] " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+            for fname in _CSV_FILES:
+                archived.append(os.path.join(csv_dir, fname))
 
         mem = migrate_memory(session)
         fs = migrate_first_seen(session)
@@ -235,11 +256,12 @@ def main():
 
     # Archivar solo tras un commit correcto (session_scope hizo commit al salir).
     archived.append(os.path.join(LOGS, "memory.json"))
-    agents_dir = os.path.join(LOGS, "agents")
-    if os.path.isdir(agents_dir):
-        for name in os.listdir(agents_dir):
+    for base in (os.path.join(LOGS, "agents"), LOGS):
+        if not os.path.isdir(base):
+            continue
+        for name in os.listdir(base):
             if name.endswith("_memory.json") or name == "riskbook_first_seen.json":
-                archived.append(os.path.join(agents_dir, name))
+                archived.append(os.path.join(base, name))
     _archive(archived)
     print(f"\nMigración completa. Originales archivados en {ARCHIVE}/")
 
