@@ -17,6 +17,9 @@ class SymbolInfo:
         self.volume_min = float(data.get("lot_min", 0.01))
         self.volume_max = float(data.get("lot_max", 100.0))
         self.volume_step = float(data.get("lot_step", 0.01))
+        # Margen (moneda de la cuenta) por 1 lote. EA >= versión con
+        # MODE_MARGINREQUIRED; 0.0 si el EA es antiguo (entonces se estima).
+        self.margin_required = float(data.get("margin_required", 0.0))
         # El broker pone MODE_TRADEALLOWED a 0 con el mercado cerrado. Si el EA
         # es antiguo y no lo reporta, asumimos abierto (1) para no romper nada.
         self.trade_allowed = bool(int(float(data.get("trade_allowed", 1))))

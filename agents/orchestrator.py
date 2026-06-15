@@ -821,6 +821,56 @@ class AgentOrchestrator:
         lot = round(steps * vstep, 10)
         return max(vmin, lot)
 
+    def _contract_size(self, symbol: str) -> float:
+        """Tamaño de contrato del símbolo (MT4: `contract_size`). Fallback 1.0
+        (cripto). Se usa para estimar el margen cuando el EA no lo reporta."""
+        info = self.client.get_symbol_info(symbol)
+        for attr in ("trade_contract_size", "contract_size"):
+            v = getattr(info, attr, None)
+            if v:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return 1.0
+
+    def _fit_volume_to_margin(self, symbol: str, volume: float,
+                              order_type: str, tick) -> float:
+        """Acota el volumen al margen libre para evitar el error 134 (fondos
+        insuficientes): el bróker rechaza la orden entera si el margen no alcanza.
+
+        Usa el margen EXACTO por lote del bróker (`margin_required`, vía EA con
+        MODE_MARGINREQUIRED) si está disponible; si no, lo estima como
+        nocional/leverage. Deja un colchón del 5% (spread/comisión/fluctuación) y
+        redondea hacia abajo al step. Devuelve 0.0 si ni el lote mínimo cabe;
+        si no hay dato fiable de margen, devuelve el volumen sin tocar (que
+        decida el bróker)."""
+        account = self.client.get_account_info() or {}
+        free_margin = float(account.get("free_margin") or 0.0)
+        if free_margin <= 0:
+            return volume
+        sym = self.client.get_symbol_info(symbol)
+        vmin = getattr(sym, "volume_min", 0.01) or 0.01
+        vstep = getattr(sym, "volume_step", 0.01) or 0.01
+
+        margin_per_lot = float(getattr(sym, "margin_required", 0.0) or 0.0)
+        if margin_per_lot <= 0:
+            # Estimación: margen ≈ nocional / leverage, con el precio del lado de entrada.
+            price = 0.0
+            if tick:
+                price = tick.ask if str(order_type).upper() == "BUY" else tick.bid
+            leverage = float(account.get("leverage") or 0) or 1.0
+            margin_per_lot = (price * self._contract_size(symbol) / leverage) if price > 0 else 0.0
+        if margin_per_lot <= 0:
+            return volume
+
+        budget = free_margin * 0.95
+        steps = math.floor((budget / margin_per_lot) / vstep + 1e-9)
+        max_lots = round(steps * vstep, 10)
+        if max_lots < vmin:
+            return 0.0
+        return min(volume, max_lots)
+
     def _open_from_signal(self, agent, signal, scale: float = 1.0) -> bool:
         """Valida y ejecuta una entrada a partir de la señal. `scale` (0..1)
         reduce el lote base según la asignación del coordinador. Devuelve True
@@ -839,6 +889,16 @@ class AgentOrchestrator:
                               spread_points=spread_points, total_open_positions=total_open):
             print("  " + console.warn("⚠ Señal no validada para ejecución."))
             return False
+
+        # Ajuste por margen libre: evita el error 134 (fondos insuficientes)
+        # recortando el lote a lo que el margen permite, o saltando la entrada.
+        fitted = self._fit_volume_to_margin(symbol, volume, signal["action"], tick)
+        if fitted <= 0:
+            print("  " + console.warn("⚠ Margen libre insuficiente ni para el lote mínimo; se omite la entrada."))
+            return False
+        if fitted < volume:
+            print(console.dim(f"  Lote ajustado por margen libre: {volume} → {fitted}"))
+            volume = fitted
 
         result = self.client.place_order(
             symbol=symbol,

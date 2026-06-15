@@ -220,7 +220,7 @@ Devuelve solo el JSON con el formato especificado."""
             return reject(f"máximo de posiciones abiertas ({open_count}/{self.config.max_open_positions})")
         if (spread_points is not None and self.config.max_spread_filter
                 and spread_points > self.config.max_spread_filter):
-            return reject(f"spread {spread_points:.0f} pts > máximo {self.config.max_spread_filter:.0f}")
+            return reject(f"spread {spread_points:.1f} pts > máximo {self.config.max_spread_filter:.1f}")
 
         # Nota: Permitimos múltiples posiciones en la misma dirección.
         # El límite total está controlado por max_open_positions.

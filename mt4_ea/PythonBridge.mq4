@@ -138,8 +138,11 @@ string GetSymbolInfo(string symbol)
 
    // MODE_TRADEALLOWED: el broker lo pone a 0 cuando el mercado del simbolo
    // esta cerrado (fin de semana, fuera de sesion). Inmune a la zona horaria.
+   // MODE_MARGINREQUIRED: margen (en la moneda de la cuenta) que exige 1 lote.
+   // Permite al bot ajustar el volumen al margen libre antes de mandar la orden
+   // y evitar el error 134 (fondos insuficientes).
    return StringFormat(
-      "OK|symbol=%s|point=%.10f|digits=%d|spread=%.1f|tick_value=%.5f|lot_min=%.2f|lot_max=%.2f|lot_step=%.2f|trade_allowed=%d",
+      "OK|symbol=%s|point=%.10f|digits=%d|spread=%.1f|tick_value=%.5f|lot_min=%.2f|lot_max=%.2f|lot_step=%.2f|trade_allowed=%d|margin_required=%.5f",
       symbol,
       MarketInfo(symbol, MODE_POINT),
       (int)MarketInfo(symbol, MODE_DIGITS),
@@ -148,7 +151,8 @@ string GetSymbolInfo(string symbol)
       MarketInfo(symbol, MODE_MINLOT),
       MarketInfo(symbol, MODE_MAXLOT),
       MarketInfo(symbol, MODE_LOTSTEP),
-      (int)MarketInfo(symbol, MODE_TRADEALLOWED)
+      (int)MarketInfo(symbol, MODE_TRADEALLOWED),
+      MarketInfo(symbol, MODE_MARGINREQUIRED)
    );
 }
 
