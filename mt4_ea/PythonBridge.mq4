@@ -98,7 +98,8 @@ string HandleCommand(string cmd)
    if(op == "POSITIONS")  return GetPositions(count >= 2 ? parts[1] : "");
    if(op == "ORDERS")     return GetOrders();
    if(op == "PLACE_ORDER" && count >= 5)  return PlaceOrder(parts);
-   if(op == "CLOSE_POSITION" && count >= 2) return ClosePosition(parts[1]);
+   if(op == "CLOSE_POSITION" && count >= 2) return ClosePosition(parts);
+   if(op == "MODIFY_POSITION" && count >= 2) return ModifyPosition(parts);
 
    return "ERROR|unknown command: " + op;
 }
@@ -291,20 +292,69 @@ string PlaceOrder(string &parts[])
 }
 
 //+------------------------------------------------------------------+
-string ClosePosition(string symbol)
+// CLOSE_POSITION|symbol[|volume[|ticket]]
+//   - Sin extras: cierra la primera posicion del simbolo (completo, como antes).
+//   - Con volume>0: cierra ESE volumen (parcial). MT4 deja el remanente en un
+//     ticket nuevo. Con ticket>0 se cierra ESA posicion concreta; si no, la
+//     primera del simbolo.
+string ClosePosition(string &parts[])
 {
+   string symbol = parts[1];
+   double req_volume = (ArraySize(parts) > 2) ? StringToDouble(parts[2]) : 0;
+   int    req_ticket = (ArraySize(parts) > 3) ? (int)StringToInteger(parts[3]) : 0;
+
    for(int i = OrdersTotal() - 1; i >= 0; i--) {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(OrderSymbol() != symbol || OrderType() > 1) continue;
+      if(OrderType() > 1) continue;
+      if(req_ticket > 0) {
+         if(OrderTicket() != req_ticket) continue;
+      } else {
+         if(OrderSymbol() != symbol) continue;
+      }
 
+      string sym = OrderSymbol();
       double close_price = (OrderType() == OP_BUY)
-         ? MarketInfo(symbol, MODE_BID)
-         : MarketInfo(symbol, MODE_ASK);
+         ? MarketInfo(sym, MODE_BID)
+         : MarketInfo(sym, MODE_ASK);
 
-      bool ok = OrderClose(OrderTicket(), OrderLots(), close_price, 3, clrNONE);
+      // Volumen a cerrar: el pedido (acotado al del ticket) o todo el lote.
+      double lots = OrderLots();
+      double vol = (req_volume > 0) ? MathMin(req_volume, lots) : lots;
+
+      bool ok = OrderClose(OrderTicket(), vol, close_price, 3, clrNONE);
       if(!ok)
          return StringFormat("ERROR|OrderClose failed, error=%d", GetLastError());
-      return StringFormat("OK|closed ticket=%d", OrderTicket());
+      return StringFormat("OK|closed ticket=%d|volume=%.2f", OrderTicket(), vol);
    }
    return "ERROR|no open position for " + symbol;
+}
+
+//+------------------------------------------------------------------+
+// MODIFY_POSITION|ticket|sl|tp  -> mueve SL/TP de una posicion abierta.
+// sl/tp en 0 dejan el valor actual sin cambios (no se puede borrar a 0 aqui).
+string ModifyPosition(string &parts[])
+{
+   int    ticket = (int)StringToInteger(parts[1]);
+   double sl     = (ArraySize(parts) > 2) ? StringToDouble(parts[2]) : 0;
+   double tp     = (ArraySize(parts) > 3) ? StringToDouble(parts[3]) : 0;
+
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+      return StringFormat("ERROR|order not found ticket=%d", ticket);
+   if(OrderType() > 1)
+      return StringFormat("ERROR|ticket %d no es posicion de mercado", ticket);
+
+   string sym = OrderSymbol();
+   int digits = (int)MarketInfo(sym, MODE_DIGITS);
+   // 0 = mantener el valor actual (no se permite borrar el nivel desde aqui).
+   double new_sl = (sl > 0) ? NormalizeDouble(sl, digits) : OrderStopLoss();
+   double new_tp = (tp > 0) ? NormalizeDouble(tp, digits) : OrderTakeProfit();
+
+   // Sin cambios reales: evitar el error 1 (nada que modificar).
+   if(new_sl == OrderStopLoss() && new_tp == OrderTakeProfit())
+      return StringFormat("OK|modified ticket=%d (sin cambios)", ticket);
+
+   bool ok = OrderModify(ticket, OrderOpenPrice(), new_sl, new_tp, 0, clrNONE);
+   if(!ok)
+      return StringFormat("ERROR|OrderModify failed, error=%d", GetLastError());
+   return StringFormat("OK|modified ticket=%d|sl=%.10f|tp=%.10f", ticket, new_sl, new_tp);
 }

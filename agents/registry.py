@@ -158,6 +158,13 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=50.0,  # el spread de BTC en puntos es alto
+            # Rotación rápida: asegura a breakeven y sigue; toma parcial a mitad de
+            # camino al TP. Cripto volátil: trailing algo más holgado.
+            use_trailing_stop=True,
+            trailing_breakeven_atr_mult=1.2,
+            trailing_step_atr_mult=0.8,
+            partial_profit_trigger_pct=0.5,
+            partial_profit_pct=0.5,
         ),
     ),
     "wti-agent": AgentBlueprint(
@@ -176,6 +183,11 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=10.0,  # el spread del crudo se ensancha en baja liquidez
+            use_trailing_stop=True,
+            trailing_breakeven_atr_mult=1.2,
+            trailing_step_atr_mult=0.8,
+            partial_profit_trigger_pct=0.5,
+            partial_profit_pct=0.5,
         ),
     ),
     "eurusd-agent": AgentBlueprint(
@@ -194,6 +206,11 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=2.0,  # forex mayor: spread muy ajustado
+            use_trailing_stop=True,
+            trailing_breakeven_atr_mult=1.0,
+            trailing_step_atr_mult=0.5,
+            partial_profit_trigger_pct=0.5,
+            partial_profit_pct=0.5,
         ),
     ),
     "eth-agent": AgentBlueprint(
@@ -212,6 +229,11 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=50.0,  # el spread de cripto en puntos es alto
+            use_trailing_stop=True,
+            trailing_breakeven_atr_mult=1.2,
+            trailing_step_atr_mult=0.8,
+            partial_profit_trigger_pct=0.5,
+            partial_profit_pct=0.5,
         ),
     ),
     "gold-agent": AgentBlueprint(
@@ -230,6 +252,11 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=8.0,  # el oro tiene spread moderado en puntos
+            use_trailing_stop=True,
+            trailing_breakeven_atr_mult=1.0,
+            trailing_step_atr_mult=0.5,
+            partial_profit_trigger_pct=0.5,
+            partial_profit_pct=0.5,
         ),
     ),
     "sp500-agent": AgentBlueprint(
@@ -248,6 +275,11 @@ AGENT_BLUEPRINTS: dict[str, AgentBlueprint] = {
             risk_per_trade=0.02,
             max_open_positions=3,
             max_spread_filter=15.0,  # el spread del índice en puntos es amplio
+            use_trailing_stop=True,
+            trailing_breakeven_atr_mult=1.0,
+            trailing_step_atr_mult=0.5,
+            partial_profit_trigger_pct=0.5,
+            partial_profit_pct=0.5,
         ),
     ),
 }

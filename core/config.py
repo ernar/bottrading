@@ -196,6 +196,15 @@ def get_coordinator_config() -> dict:
       joven que esto, la guardia de reversión se pausa y un reduce/close que
       proponga el LLM se aplaza a hold (se le da tiempo a evolucionar). Solo el
       hard-stop catastrófico (MAX_SYMBOL_LOSS_PCT) rompe la gracia. 0 = off.
+      La antigüedad se registra en la DB (tabla risk_first_seen) y se recarga al
+      arrancar: la gracia SOBREVIVE a los reinicios de la terminal.
+
+    Objetivo de beneficio (TP) gobernado por la mesa:
+    - COORDINATOR_TP_RR_MIN (float, default 1.0) y COORDINATOR_TP_RR_MAX (float,
+      default 4.0): límites dentro de los que la mesa puede fijar el R:R objetivo
+      (tp_rr) de cada entrada. La mesa recorta (objetivo más cercano = rotación
+      más rápida) o amplía el TP del especialista; el RiskBook lo acota a este
+      rango. Sin tp_rr informado se respeta el TP del especialista.
     """
     return {
         "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
@@ -209,6 +218,14 @@ def get_coordinator_config() -> dict:
         "reversal_drawdown_pct": _env_float("REVERSAL_DRAWDOWN_PCT", 0.015),
         "max_symbol_loss_pct": _env_float("MAX_SYMBOL_LOSS_PCT", 0.0),
         "min_hold_seconds": _env_float("MIN_HOLD_SECONDS", 300.0),
+        # Rango del R:R objetivo (tp_rr) que la mesa puede fijar por entrada.
+        "tp_rr_min": _env_float("COORDINATOR_TP_RR_MIN", 1.0),
+        "tp_rr_max": _env_float("COORDINATOR_TP_RR_MAX", 4.0),
+        # Registro persistente de antigüedad de posiciones (período de gracia):
+        # {ticket: epoch del primer avistamiento}, guardado en la DB (tabla
+        # risk_first_seen). Se recarga al arrancar para que la gracia NO se
+        # reinicie a cero en cada reinicio de la terminal.
+        "persist_first_seen": True,
     }
 
 

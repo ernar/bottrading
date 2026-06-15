@@ -186,7 +186,7 @@ Devuelve solo el JSON con el formato especificado."""
 
     def validate_trade(self, signal: dict, positions: list = None, tick=None,
                        spread_points: float = None, total_open_positions: int = None,
-                       enforce_max_positions: bool = True) -> bool:
+                       enforce_max_positions: bool = True, min_rr: float = None) -> bool:
         """Valida señal antes de ejecutar. Devuelve False con el motivo impreso en debug.
 
         `positions` son las del símbolo (para no duplicar dirección). `spread_points`
@@ -197,7 +197,13 @@ Devuelve solo el JSON con el formato especificado."""
         `enforce_max_positions`: si False, NO se aplica el límite global de número de
         posiciones (`max_open_positions`). Lo usa la ruta coordinada para delegar esa
         decisión a la mesa (que ya gobierna la exposición real vía RiskBook): así la
-        mesa puede abrir más posiciones si lo considera necesario."""
+        mesa puede abrir más posiciones si lo considera necesario.
+
+        `min_rr`: umbral de R:R a exigir en ESTA validación. Si es None se usa el de
+        la instancia (`self.min_rr`). La ruta coordinada lo pasa cuando la mesa fija
+        un R:R objetivo (tp_rr) más corto que el del especialista: el TP lo decide
+        deliberadamente la mesa, así que la entrada se valida contra ese R:R."""
+        effective_min_rr = self.min_rr if min_rr is None else min_rr
         def reject(reason: str) -> bool:
             if self.config.debug_mode:
                 print(f"  [Validación] Rechazada: {reason}")
@@ -249,8 +255,8 @@ Devuelve solo el JSON con el formato especificado."""
                 return reject(f"niveles incoherentes para SELL (TP={tp}, entry={entry}, SL={sl})")
             risk = abs(entry - sl)
             reward = abs(tp - entry)
-            if risk and reward / risk < self.min_rr:
-                return reject(f"R:R 1:{reward / risk:.2f} por debajo del mínimo 1:{self.min_rr}")
+            if risk and reward / risk < effective_min_rr:
+                return reject(f"R:R 1:{reward / risk:.2f} por debajo del mínimo 1:{effective_min_rr}")
 
         return True
 

@@ -4,17 +4,18 @@ Registra cada señal con el precio del momento; en ciclos posteriores
 evalúa si el precio se movió a favor o en contra (o tocó SL/TP) y genera
 un resumen de rendimiento por símbolo que se inyecta en el prompt para
 que el modelo tenga feedback de sus señales recientes.
+
+Persistencia en SQLite (tabla ``signal_memory`` vía ``core/db.py``). Antes era
+un JSON por agente; ahora cada instancia opera sobre un ``scope`` (el nombre del
+agente o "global") y comparte la misma tabla.
 """
-import csv
-import json
-import os
-import threading
 from datetime import datetime
 from typing import Optional
 
-MEMORY_PATH = "logs/memory.json"
-# Cierres persistentes (plataforma por defecto mt4; ver core/logger.py).
-CLOSED_TRADES_CSV = "logs/mt4/closed_trades.csv"
+from sqlalchemy import select
+
+from core.db import ClosedTrade, SignalMemoryRecord, get_session, session_scope
+
 MAX_RECORDS_PER_SYMBOL = 30
 MIN_EVAL_AGE_SECONDS = 30 * 60        # primera evaluación a partir de 30 min
 MAX_EVAL_AGE_SECONDS = 24 * 60 * 60   # tras 24h se cierra como terminal aunque no toque SL/TP
@@ -22,96 +23,62 @@ MAX_EVAL_AGE_SECONDS = 24 * 60 * 60   # tras 24h se cierra como terminal aunque 
 
 class SignalMemory:
 
-    def __init__(self, path: str = MEMORY_PATH):
-        self._path = path
-        self._lock = threading.Lock()
-        self._closed_trades: list = self._load_closed_trades()
-        self._data: dict = self._load()
+    def __init__(self, scope: str = "global"):
+        self._scope = scope
 
-    def _load_closed_trades(self) -> list:
-        """Carga trades cerrados desde CSV persistente para vincular PnL real."""
-        if not os.path.exists(CLOSED_TRADES_CSV):
-            return []
-        try:
-            with open(CLOSED_TRADES_CSV, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                return list(reader)
-        except (csv.Error, OSError):
-            return []
+    # ----- Helpers internos -----
 
-    def _sync_pnl_real(self):
-        """Sincroniza pnl_real de las señales existentes con los cierres en CSV."""
-        if not self._closed_trades:
-            return
-        with self._lock:
-            for symbol, records in self._data.items():
-                for rec in records:
-                    trade_id = rec.get("trade_id", "")
-                    if not trade_id or rec.get("pnl_real") is not None:
-                        continue
-                    for ct in self._closed_trades:
-                        if (ct.get("symbol") == symbol and
-                            ct.get("action", "").upper() == rec.get("action", "").upper()):
-                            try:
-                                entry = float(ct.get("entry_price", 0))
-                                rec_entry = rec.get("price", 0)
-                                if abs(entry - rec_entry) < 1e-10:
-                                    rec["pnl_real"] = float(ct.get("pnl", 0))
-                                    rec["outcome"] = "ganador" if rec["pnl_real"] > 0 else "perdedor"
-                                    rec["final"] = True
-                                    break
-                            except (ValueError, TypeError):
-                                pass
-
-    def _load(self) -> dict:
-        if os.path.exists(self._path):
-            try:
-                with open(self._path, encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
-        return {}
-
-    def _save(self):
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
-        tmp = self._path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, self._path)
-
-    def record_signal(self, symbol: str, signal: dict, price: float):
-        """Guarda una señal junto al precio de mercado del momento.
-        
-        Si la señal tiene trade_id y ya existe un cierre en CSV, se carga
-        el PnL real inmediatamente."""
-        if not price:
-            return
-        with self._lock:
-            records = self._data.setdefault(symbol, [])
-            records.append({
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-                "action": signal.get("action", "HOLD"),
-                "confidence": signal.get("confidence", 0),
-                "price": price,
-                "stop_loss": signal.get("stop_loss") or None,
-                "take_profit": signal.get("take_profit") or None,
-                "trade_id": signal.get("trade_id", ""),
-                "pnl_real": None,   # se rellena si hay cierre en CSV
-                "outcome": None,    # provisional (favorable/adverso) hasta ser terminal
-                "move_pct": None,
-                "final": False,     # terminal: tocó SL/TP o superó MAX_EVAL_AGE_SECONDS
-            })
-            del records[:-MAX_RECORDS_PER_SYMBOL]
-            self._save()
+    def _records(self, session, symbol: str):
+        """Registros del scope+símbolo ordenados por tiempo (asc)."""
+        return session.scalars(
+            select(SignalMemoryRecord)
+            .where(SignalMemoryRecord.scope == self._scope,
+                   SignalMemoryRecord.symbol == symbol)
+            .order_by(SignalMemoryRecord.timestamp.asc(), SignalMemoryRecord.id.asc())
+        ).all()
 
     @staticmethod
-    def _is_final(rec: dict) -> bool:
-        """¿El resultado de la señal es definitivo? Para registros antiguos sin
-        el campo 'final', se considera definitivo si ya tenían un outcome."""
-        final = rec.get("final")
-        if final is None:
-            return rec.get("outcome") is not None
-        return bool(final)
+    def _is_final(rec) -> bool:
+        """¿El resultado de la señal es definitivo? En la DB ``final`` siempre
+        está presente (los registros antiguos se normalizan en la migración)."""
+        return bool(rec.final)
+
+    def record_signal(self, symbol: str, signal: dict, price: float):
+        """Guarda una señal junto al precio de mercado del momento y poda los
+        registros más antiguos para mantener MAX_RECORDS_PER_SYMBOL por símbolo."""
+        if not price:
+            return
+        with session_scope() as session:
+            session.add(SignalMemoryRecord(
+                scope=self._scope,
+                symbol=symbol,
+                timestamp=datetime.now(),
+                action=signal.get("action", "HOLD"),
+                confidence=signal.get("confidence", 0) or 0,
+                price=price,
+                stop_loss=signal.get("stop_loss") or None,
+                take_profit=signal.get("take_profit") or None,
+                trade_id=signal.get("trade_id", "") or "",
+                pnl_real=None,
+                outcome=None,
+                move_pct=None,
+                final=False,
+            ))
+            session.flush()
+            # Poda: conserva solo los MAX_RECORDS_PER_SYMBOL más recientes.
+            ids = session.scalars(
+                select(SignalMemoryRecord.id)
+                .where(SignalMemoryRecord.scope == self._scope,
+                       SignalMemoryRecord.symbol == symbol)
+                .order_by(SignalMemoryRecord.timestamp.desc(),
+                          SignalMemoryRecord.id.desc())
+                .offset(MAX_RECORDS_PER_SYMBOL)
+            ).all()
+            if ids:
+                for rec in session.scalars(
+                    select(SignalMemoryRecord).where(SignalMemoryRecord.id.in_(ids))
+                ).all():
+                    session.delete(rec)
 
     def evaluate_pending(self, symbol: str, current_price: float):
         """Reevalúa señales BUY/SELL no terminales contra el precio actual.
@@ -123,22 +90,18 @@ class SignalMemory:
         if not current_price:
             return
         now = datetime.now()
-        changed = False
-        with self._lock:
-            for rec in self._data.get(symbol, []):
-                if rec["action"] not in ("BUY", "SELL") or self._is_final(rec):
+        with session_scope() as session:
+            for rec in self._records(session, symbol):
+                if rec.action not in ("BUY", "SELL") or self._is_final(rec):
                     continue
-                try:
-                    age = (now - datetime.fromisoformat(rec["timestamp"])).total_seconds()
-                except ValueError:
-                    continue
+                age = (now - rec.timestamp).total_seconds()
                 if age < MIN_EVAL_AGE_SECONDS:
                     continue
-                entry = rec["price"]
-                direction = 1 if rec["action"] == "BUY" else -1
+                entry = rec.price
+                direction = 1 if rec.action == "BUY" else -1
                 move_pct = direction * (current_price - entry) / entry * 100
 
-                sl, tp = rec.get("stop_loss"), rec.get("take_profit")
+                sl, tp = rec.stop_loss, rec.take_profit
                 if tp and direction * (current_price - tp) >= 0:
                     outcome, final = "TP alcanzado", True
                 elif sl and direction * (sl - current_price) >= 0:
@@ -148,60 +111,80 @@ class SignalMemory:
                     final = age >= MAX_EVAL_AGE_SECONDS
 
                 new_move = round(move_pct, 3)
-                if (rec.get("outcome") != outcome or rec.get("move_pct") != new_move
-                        or rec.get("final") != final):
-                    rec["outcome"] = outcome
-                    rec["move_pct"] = new_move
-                    rec["final"] = final
-                    changed = True
-            if changed:
-                self._save()
+                if (rec.outcome != outcome or rec.move_pct != new_move
+                        or rec.final != final):
+                    rec.outcome = outcome
+                    rec.move_pct = new_move
+                    rec.final = final
 
     def get_summary(self, symbol: str, last_n: int = 5) -> str:
         """Resumen legible de las últimas señales evaluadas, para el prompt."""
-        with self._lock:
-            evaluated = [r for r in self._data.get(symbol, []) if r["outcome"] is not None]
+        session = get_session()
+        try:
+            evaluated = [r for r in self._records(session, symbol)
+                         if r.outcome is not None]
+        finally:
+            session.close()
         if not evaluated:
             return ""
         recent = evaluated[-last_n:]
-        wins = sum(1 for r in recent if r["outcome"] in ("favorable", "TP alcanzado"))
+        wins = sum(1 for r in recent if r.outcome in ("favorable", "TP alcanzado"))
         lines = [f"Aciertos recientes: {wins}/{len(recent)}"]
         for r in recent:
-            ts = r["timestamp"][5:16].replace("T", " ")
+            ts = r.timestamp.strftime("%m-%d %H:%M")
             lines.append(
-                f"- {ts} {r['action']} @ {r['price']} (conf {r['confidence']:.0%}) "
-                f"-> {r['outcome']} ({r['move_pct']:+.2f}%)"
+                f"- {ts} {r.action} @ {r.price} (conf {r.confidence:.0%}) "
+                f"-> {r.outcome} ({(r.move_pct or 0):+.2f}%)"
             )
         return "\n".join(lines)
 
     def get_last_signal(self, symbol: str) -> Optional[dict]:
-        with self._lock:
-            records = self._data.get(symbol, [])
-            return dict(records[-1]) if records else None
+        session = get_session()
+        try:
+            records = self._records(session, symbol)
+            if not records:
+                return None
+            r = records[-1]
+            return {
+                "timestamp": r.timestamp.isoformat(timespec="seconds"),
+                "action": r.action,
+                "confidence": r.confidence,
+                "price": r.price,
+                "stop_loss": r.stop_loss,
+                "take_profit": r.take_profit,
+                "trade_id": r.trade_id,
+                "pnl_real": r.pnl_real,
+                "outcome": r.outcome,
+                "move_pct": r.move_pct,
+                "final": r.final,
+            }
+        finally:
+            session.close()
 
     def get_performance(self, symbol: str, last_n: int = 10) -> dict:
         """Métricas de rendimiento sobre las últimas señales evaluadas.
 
-        Base cuantitativa para que el orquestador decida cómo ajustar los
-        parámetros de un agente. Solo cuenta señales BUY/SELL con resultado
-        terminal (SL/TP tocado o ventana de evaluación expirada), no las que aún
-        están abiertas con un outcome provisional.
-        """
-        with self._lock:
+        Solo cuenta señales BUY/SELL con resultado terminal (SL/TP tocado o
+        ventana de evaluación expirada), no las que aún están abiertas con un
+        outcome provisional."""
+        session = get_session()
+        try:
             evaluated = [
-                r for r in self._data.get(symbol, [])
-                if r["action"] in ("BUY", "SELL") and self._is_final(r)
+                r for r in self._records(session, symbol)
+                if r.action in ("BUY", "SELL") and self._is_final(r)
             ]
+        finally:
+            session.close()
         recent = evaluated[-last_n:]
         total = len(recent)
         if total == 0:
             return {"samples": 0, "win_rate": 0.0, "sl_hit_rate": 0.0,
                     "tp_hit_rate": 0.0, "avg_move_pct": 0.0}
 
-        wins = sum(1 for r in recent if r["outcome"] in ("favorable", "TP alcanzado"))
-        sl_hits = sum(1 for r in recent if r["outcome"] == "SL tocado")
-        tp_hits = sum(1 for r in recent if r["outcome"] == "TP alcanzado")
-        moves = [r["move_pct"] for r in recent if r.get("move_pct") is not None]
+        wins = sum(1 for r in recent if r.outcome in ("favorable", "TP alcanzado"))
+        sl_hits = sum(1 for r in recent if r.outcome == "SL tocado")
+        tp_hits = sum(1 for r in recent if r.outcome == "TP alcanzado")
+        moves = [r.move_pct for r in recent if r.move_pct is not None]
 
         return {
             "samples": total,
@@ -210,3 +193,29 @@ class SignalMemory:
             "tp_hit_rate": round(tp_hits / total, 3),
             "avg_move_pct": round(sum(moves) / len(moves), 3) if moves else 0.0,
         }
+
+    def _sync_pnl_real(self):
+        """Sincroniza pnl_real de las señales del scope con los cierres en DB
+        (mismo símbolo+acción y entrada ≈ precio registrado)."""
+        with session_scope() as session:
+            pending = session.scalars(
+                select(SignalMemoryRecord).where(
+                    SignalMemoryRecord.scope == self._scope,
+                    SignalMemoryRecord.pnl_real.is_(None),
+                    SignalMemoryRecord.trade_id != "",
+                )
+            ).all()
+            for rec in pending:
+                ct = session.scalars(
+                    select(ClosedTrade).where(
+                        ClosedTrade.symbol == rec.symbol,
+                        ClosedTrade.action == rec.action,
+                    )
+                ).all()
+                for c in ct:
+                    if c.entry_price is not None and rec.price is not None \
+                            and abs(c.entry_price - rec.price) < 1e-10:
+                        rec.pnl_real = float(c.pnl or 0)
+                        rec.outcome = "ganador" if rec.pnl_real > 0 else "perdedor"
+                        rec.final = True
+                        break

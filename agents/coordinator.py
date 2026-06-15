@@ -41,17 +41,59 @@ class RiskBook:
         self.max_net_direction_pct = float(config.get("max_net_direction_pct", 0.6))
         self.reversal_drawdown_pct = float(config.get("reversal_drawdown_pct", 0.015))
         self.max_symbol_loss_pct = float(config.get("max_symbol_loss_pct", 0.0))
+        # Rango del R:R objetivo (tp_rr) que la mesa puede fijar por entrada para
+        # recortar/ampliar el TP del especialista (gobierna la duración objetivo
+        # de la operación). Se acota en clamp().
+        self.tp_rr_min = float(config.get("tp_rr_min", 1.0))
+        self.tp_rr_max = float(config.get("tp_rr_max", 4.0))
         # Período de gracia para posiciones recién abiertas (segundos). Mientras la
         # posición más joven de un símbolo no lo supere, las guardias deterministas
         # de reversión y los cierres/reducciones que proponga el LLM se aplazan
         # (se le da tiempo a evolucionar); solo el hard-stop catastrófico lo rompe.
         self.min_hold_seconds = float(config.get("min_hold_seconds", 300.0))
-        # Edad de las posiciones MEDIDA POR LA MESA: {ticket: monotonic_ts del
-        # primer avistamiento}. Usar tiempo monótono local (no el open_time del
-        # bróker) evita depender del desfase de zona horaria del servidor MT.
-        # Tras un reinicio, las posiciones preexistentes se ven "recién abiertas"
-        # y gozan de gracia durante min_hold_seconds (sesgo conservador a propósito).
-        self._first_seen: dict = {}
+        # Edad de las posiciones MEDIDA POR LA MESA: {ticket: epoch (time.time())
+        # del primer avistamiento}. Usar nuestro propio reloj de pared local (no el
+        # open_time del bróker) evita depender del desfase de zona horaria del
+        # servidor MT, y —a diferencia de time.monotonic()— es PERSISTIBLE: se
+        # guarda en la DB (tabla risk_first_seen) y se recarga al arrancar, de modo
+        # que el período de gracia SOBREVIVE a los reinicios de la terminal (una
+        # posición vista hace 2 h sigue contando 2 h tras reiniciar). Solo en el
+        # primer arranque en frío (sin registro) las posiciones preexistentes se
+        # ven "recién abiertas" y gozan de gracia una vez (sesgo conservador).
+        self._persist_first_seen = bool(config.get("persist_first_seen", False))
+        self._first_seen: dict = self._load_first_seen()
+
+    # ----- Persistencia del registro de antigüedad (período de gracia) -----
+
+    def _load_first_seen(self) -> dict:
+        """Recarga el registro {ticket: epoch} de la DB si la persistencia está
+        activada. Fail-safe: ante cualquier error devuelve un registro vacío."""
+        if not self._persist_first_seen:
+            return {}
+        try:
+            from core.db import RiskFirstSeen, get_session
+            session = get_session()
+            try:
+                rows = session.query(RiskFirstSeen).all()
+                return {str(r.ticket): float(r.first_seen) for r in rows}
+            finally:
+                session.close()
+        except Exception:
+            return {}
+
+    def _save_first_seen(self):
+        """Vuelca el registro a la DB. No-op si la persistencia está desactivada
+        (p. ej. en tests que solo usan el registro en memoria)."""
+        if not self._persist_first_seen:
+            return
+        try:
+            from core.db import RiskFirstSeen, session_scope
+            with session_scope() as session:
+                session.query(RiskFirstSeen).delete()
+                for ticket, seen in self._first_seen.items():
+                    session.add(RiskFirstSeen(ticket=str(ticket), first_seen=float(seen)))
+        except Exception:
+            pass
 
     # ----- Helpers de dirección (estáticos, reutilizados por el prompt) -----
 
@@ -122,7 +164,10 @@ class RiskBook:
         hedging = bool(account.get("hedging", False))
 
         all_positions = client.get_positions() or []
-        now_mono = time.monotonic()
+        # Reloj de pared local: persistible (ver _first_seen) para que la gracia
+        # sobreviva a reinicios. now - first_seen = antigüedad vista por la mesa.
+        now_wall = time.time()
+        first_seen_before = dict(self._first_seen)
         current_tickets: set = set()
         per_symbol: dict = {}
         for p in all_positions:
@@ -147,7 +192,7 @@ class RiskBook:
             if ticket is not None:
                 tk = str(ticket)
                 current_tickets.add(tk)
-                age = now_mono - self._first_seen.setdefault(tk, now_mono)
+                age = now_wall - self._first_seen.setdefault(tk, now_wall)
                 if d["newest_age"] is None or age < d["newest_age"]:
                     d["newest_age"] = age
                 if d["oldest_age"] is None or age > d["oldest_age"]:
@@ -164,6 +209,10 @@ class RiskBook:
         # Poda: olvida la edad de los tickets que ya no están abiertos.
         self._first_seen = {t: s for t, s in self._first_seen.items()
                             if t in current_tickets}
+        # Persiste solo si el registro cambió (alta de ticket nuevo o poda), para
+        # que el período de gracia sobreviva al próximo reinicio.
+        if self._first_seen != first_seen_before:
+            self._save_first_seen()
 
         total_exposure_pct = (used_margin / equity) if equity > 0 else 0.0
         daily_pnl_pct = None
@@ -293,6 +342,7 @@ class RiskBook:
             action = str(d.get("position_action", "hold") or "hold").lower()
             alloc = float(d.get("allocation_pct") or 0.0)
             manage_direction = d.get("manage_direction")
+            tp_rr = float(d.get("tp_rr") or 0.0)
 
             sym_info = symbols.get(sym, {})
             net_direction = sym_info.get("net_direction", "FLAT")
@@ -318,6 +368,15 @@ class RiskBook:
             if alloc > self.max_symbol_allocation_pct:
                 notes.append(f"asignación {alloc:.0%}->{self.max_symbol_allocation_pct:.0%} (tope símbolo)")
                 alloc = self.max_symbol_allocation_pct
+
+            # 1b) R:R objetivo (tp_rr): si la mesa lo informó (>0), acotarlo al
+            # rango configurado. 0 => no ajustar (se respeta el TP del especialista).
+            if tp_rr > 0:
+                clamped_rr = min(max(tp_rr, self.tp_rr_min), self.tp_rr_max)
+                if clamped_rr != tp_rr:
+                    notes.append(f"tp_rr 1:{tp_rr:.2f}->1:{clamped_rr:.2f} "
+                                 f"(rango {self.tp_rr_min:.1f}-{self.tp_rr_max:.1f})")
+                tp_rr = clamped_rr
 
             # --- Guardias deterministas sobre las posiciones abiertas ---
             forced = False
@@ -423,6 +482,7 @@ class RiskBook:
             d["approve"] = approve
             d["allocation_pct"] = round(alloc, 4)
             d["position_action"] = action
+            d["tp_rr"] = round(tp_rr, 2) if tp_rr > 0 else 0.0
             if manage_direction:
                 d["manage_direction"] = manage_direction
             d["clamp"] = "; ".join(notes)
@@ -442,7 +502,13 @@ Reglas:
   priority (1 = más prioritario), allocation_pct (fracción del equity a asignar, entre 0 y 1) y
   position_action sobre las posiciones ABIERTAS de ese símbolo: "hold" (no tocar), "reduce"
   (recortar exposición), "close" (cerrar todo) o "hedge" (cubrir abriendo en sentido contrario
-  para neutralizar el riesgo SIN cerrar).
+  para neutralizar el riesgo SIN cerrar). Opcionalmente, tp_rr.
+- OBJETIVO DE BENEFICIO (tp_rr): para una entrada que apruebas puedes fijar tp_rr = la relación
+  riesgo/beneficio OBJETIVO de la operación. Recorta (objetivo más cercano = la operación se
+  cierra antes, ROTACIÓN MÁS RÁPIDA) o amplía el TP que propuso el especialista, manteniendo su
+  Stop Loss. Si buscas rotar rápido y la tendencia es de corto recorrido, usa valores bajos
+  (~1.0–1.5); si hay un movimiento amplio y claro a favor, súbelo. Si lo dejas vacío (o 0) se
+  respeta el TP del especialista. El SL NO se toca; tp_rr solo mueve el objetivo de beneficio.
 - APETITO POR DEFECTO: una señal accionable (buy/sell) que te llega YA pasó los filtros de
   confianza y riesgo/beneficio del especialista; representa una ventaja real. Tu postura por
   defecto ante ella es APROBAR. No la rechaces por cautela genérica: solo di no si hay una razón
@@ -480,10 +546,11 @@ Responde SOLO con JSON válido, sin texto adicional:
   "rationale": "razón global breve de tus decisiones de cartera",
   "decisions": [
     {"symbol": "BTCUSD", "approve": true, "priority": 1, "allocation_pct": 0.25,
-     "position_action": "hold", "reason": "explicación breve"}
+     "position_action": "hold", "tp_rr": 1.5, "reason": "explicación breve"}
   ]
 }
-position_action admite: "hold" | "reduce" | "close" | "hedge"."""
+position_action admite: "hold" | "reduce" | "close" | "hedge". tp_rr es opcional (omítelo o 0
+para respetar el TP del especialista)."""
 
 
 class CoordinatorAgent:
@@ -675,6 +742,9 @@ class CoordinatorAgent:
                 "priority": self._to_int(d.get("priority"), 99),
                 "allocation_pct": self._to_float(d.get("allocation_pct"), 0.0),
                 "position_action": str(d.get("position_action", "hold") or "hold").lower(),
+                # R:R objetivo opcional para recortar/ampliar el TP del especialista.
+                # 0/ausente => no ajustar (se respeta el TP del especialista).
+                "tp_rr": self._to_float(d.get("tp_rr"), 0.0),
                 "reason": str(d.get("reason", "")),
             })
         return str(data.get("rationale", "")), decisions

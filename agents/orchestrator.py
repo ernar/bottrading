@@ -275,6 +275,11 @@ class AgentOrchestrator:
         # Última instantánea de posiciones por símbolo {symbol: {ticket: snap}}:
         # base para detectar cierres y registrarlos en el historial.
         self._prev_positions: dict = {}
+        # Posiciones a las que ya se les tomó beneficio parcial. La clave NO es el
+        # ticket (MT4 reasigna ticket al remanente tras un cierre parcial) sino
+        # symbol|dirección|entry, estable para el "linaje" de la posición, para no
+        # volver a parcializar el remanente. Se poda con las posiciones vivas.
+        self._partial_taken: set = set()
         # Momento del último análisis por símbolo, para espaciarlo al estar en
         # el máximo de posiciones abiertas.
         self._last_analysis_at: dict = {}
@@ -424,6 +429,9 @@ class AgentOrchestrator:
         print("\n" + console.rule(
             f"Rotación #{self._rotation_count} · {time.strftime('%H:%M:%S')}{forced_tag}",
             style=console.info))
+        # Gestión dinámica de posiciones abiertas (trailing stop / cierre parcial),
+        # determinista y previa al análisis: asegura beneficio en lo ya abierto.
+        self._manage_position_lifecycle()
         self._run_coordinated_cycle(force_symbols=forced_symbols)
 
     def _poll_red_news(self) -> set:
@@ -883,13 +891,39 @@ class AgentOrchestrator:
             return 0.0
         return min(volume, max_lots)
 
+    def _apply_tp_rr(self, agent, signal: dict, tp_rr: float) -> bool:
+        """Recalcula el `take_profit` de la señal al R:R objetivo `tp_rr` que fija
+        la mesa, conservando entry/stop_loss (la distancia de riesgo del
+        especialista). Mantiene el lado correcto del nivel (BUY: TP>entry;
+        SELL: TP<entry). No toca el SL. Devuelve True si ajustó el TP.
+
+        Con `tp_rr` <= 0 o niveles incompletos no hace nada (se respeta el TP del
+        especialista)."""
+        if not tp_rr or tp_rr <= 0:
+            return False
+        entry = signal.get("entry") or 0
+        sl = signal.get("stop_loss") or 0
+        if entry <= 0 or sl <= 0:
+            return False
+        risk = abs(entry - sl)
+        if risk <= 0:
+            return False
+        sign = 1 if signal["action"] == "BUY" else -1
+        sym_info = self.client.get_symbol_info(agent.symbol)
+        digits = getattr(sym_info, "digits", 5) if sym_info else 5
+        signal["take_profit"] = round(entry + sign * tp_rr * risk, digits)
+        return True
+
     def _open_from_signal(self, agent, signal, scale: float = 1.0,
-                          enforce_max_positions: bool = True) -> bool:
+                          enforce_max_positions: bool = True,
+                          min_rr_override: float = None) -> bool:
         """Valida y ejecuta una entrada a partir de la señal. `scale` (0..1)
         reduce el lote base según la asignación del coordinador. `enforce_max_positions`
         en False (ruta coordinada) delega el límite global de número de posiciones a
         la mesa, que ya gobierna la exposición real (RiskBook) y puede abrir más si lo
-        considera necesario. Devuelve True si la orden se ejecutó."""
+        considera necesario. `min_rr_override` (ruta coordinada) exige ese R:R en la
+        validación cuando la mesa fijó un TP objetivo (tp_rr) más corto que el del
+        especialista. Devuelve True si la orden se ejecutó."""
         symbol = agent.symbol
         base_volume = agent.resolve_volume(self.client, signal)
         volume = base_volume if scale >= 1.0 else self._scale_volume(symbol, base_volume, scale)
@@ -902,7 +936,8 @@ class AgentOrchestrator:
         total_open = len(self.client.get_positions() or [])
         if not agent.validate(signal, positions, tick=tick,
                               spread_points=spread_points, total_open_positions=total_open,
-                              enforce_max_positions=enforce_max_positions):
+                              enforce_max_positions=enforce_max_positions,
+                              min_rr=min_rr_override):
             print("  " + console.warn("⚠ Señal no validada para ejecución."))
             return False
 
@@ -1044,11 +1079,22 @@ class AgentOrchestrator:
             reason = decision.get("reason", "")
             if reason:
                 print(console.dim(f"     {reason}"))
+            # Objetivo de beneficio de la mesa: recorta/amplía el TP del especialista
+            # ANTES de imprimir las métricas (para que reflejen el TP real ejecutado).
+            tp_rr = decision.get("tp_rr") or 0.0
+            if tp_rr > 0:
+                old_tp = signal.get("take_profit")
+                if self._apply_tp_rr(agent, signal, tp_rr):
+                    print(console.dim(f"     TP mesa: {old_tp} → {signal['take_profit']} "
+                                      f"(R:R objetivo 1:{tp_rr:.2f})"))
             self._print_signal_details(agent, signal)
             # La mesa ya aprobó: el límite global de número de posiciones lo decide
             # ella (gobierna la exposición real vía RiskBook), no el filtro per-agente.
+            # Si la mesa fijó un tp_rr, la entrada se valida contra ese R:R (el TP
+            # más corto es decisión deliberada de la mesa, no del especialista).
             self._open_from_signal(agent, signal, scale=self._alloc_to_scale(alloc),
-                                   enforce_max_positions=False)
+                                   enforce_max_positions=False,
+                                   min_rr_override=(tp_rr if tp_rr > 0 else None))
         else:
             motivo = decision.get("clamp") or decision.get("reason", "decisión del coordinador")
             print(f"  {console.err('✗ [Mesa] Entrada VETADA')} en {symbol}: {console.dim(motivo)}")
@@ -1128,6 +1174,119 @@ class AgentOrchestrator:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
             print("    " + console.err(f"✗ No se pudo cubrir: {err}"))
 
+    # ----- Gestión dinámica de posición (trailing stop / cierre parcial) -----
+
+    def _lifecycle_agents(self) -> list:
+        """Agentes con trailing stop o cierre parcial activado."""
+        return [a for a in self.agents
+                if a.params.use_trailing_stop or a.params.partial_profit_trigger_pct > 0]
+
+    @staticmethod
+    def _improves_sl(direction: str, new_sl: float, cur_sl: float) -> bool:
+        """True si `new_sl` protege más que el SL actual (más alto en BUY, más bajo
+        en SELL). Sin SL actual (0) cualquier nivel válido mejora. Nunca afloja."""
+        if new_sl <= 0:
+            return False
+        if not cur_sl or cur_sl <= 0:
+            return True
+        return new_sl > cur_sl if direction == "BUY" else new_sl < cur_sl
+
+    def _manage_position_lifecycle(self):
+        """Pasa determinista por las posiciones abiertas de los agentes con gestión
+        dinámica: asegura beneficio a breakeven y sigue el precio (trailing stop) y
+        toma beneficio parcial al alcanzar la fracción objetivo del camino al TP.
+
+        No usa el LLM. Toda la I/O al EA pasa por `_send` (serializado). Limitación
+        conocida: un cierre parcial en MT4 reasigna el ticket del remanente; se
+        sigue por clave symbol|dirección|entry (estable) para no re-parcializar."""
+        agents = self._lifecycle_agents()
+        if not agents:
+            return
+        current_keys: set = set()
+        header_printed = False
+        for agent in agents:
+            symbol = agent.symbol
+            p = agent.params
+            positions = self.client.get_positions(symbol) or []
+            if not positions:
+                continue
+            tick = self.client.get_tick(symbol)
+            if not tick:
+                continue
+            atr = self.client.get_atr(symbol)
+            sym_info = self.client.get_symbol_info(symbol)
+            digits = getattr(sym_info, "digits", 5) if sym_info else 5
+            vmin = getattr(sym_info, "volume_min", 0.01) or 0.01
+            vstep = getattr(sym_info, "volume_step", 0.01) or 0.01
+
+            for pos in positions:
+                ticket = _pos_get(pos, "ticket")
+                direction = _pos_direction(pos)
+                if ticket is None or direction not in ("BUY", "SELL"):
+                    continue
+                entry = _pos_to_float(_pos_get(pos, "open_price", "price_open"))
+                cur_sl = _pos_to_float(_pos_get(pos, "sl", "stop_loss"))
+                cur_tp = _pos_to_float(_pos_get(pos, "tp", "take_profit"))
+                volume = _pos_to_float(_pos_get(pos, "volume"))
+                if entry <= 0 or volume <= 0:
+                    continue
+                sign = 1 if direction == "BUY" else -1
+                # Precio al que se cerraría la posición (BUY→bid, SELL→ask).
+                price = tick.bid if direction == "BUY" else tick.ask
+                favor = sign * (price - entry)  # beneficio flotante en precio
+                lineage = f"{symbol}|{direction}|{round(entry, digits)}"
+                current_keys.add(lineage)
+
+                def _ensure_header():
+                    nonlocal header_printed
+                    if not header_printed:
+                        print("\n" + console.dim("  [Gestión] Trailing / parcial sobre posiciones abiertas"))
+                        header_printed = True
+
+                # ----- Cierre parcial (una vez por linaje) -----
+                if (p.partial_profit_trigger_pct > 0 and cur_tp and volume > vmin
+                        and lineage not in self._partial_taken):
+                    tp_dist = abs(cur_tp - entry)
+                    if tp_dist > 0 and (favor / tp_dist) >= p.partial_profit_trigger_pct:
+                        steps = math.floor((volume * p.partial_profit_pct) / vstep + 1e-9)
+                        part_vol = round(steps * vstep, 10)
+                        if vmin <= part_vol < volume:
+                            _ensure_header()
+                            progreso = favor / tp_dist
+                            print(f"  {console.accent('⊟ [Parcial]')} {symbol} #{ticket}: "
+                                  f"cierra {part_vol} de {volume} lotes "
+                                  f"({progreso:.0%} del camino al TP)")
+                            res = self.client.close_position(symbol, volume=part_vol, ticket=int(ticket))
+                            if res and res.get("success"):
+                                self._partial_taken.add(lineage)
+                                # El remanente queda en un ticket nuevo; su SL/TP se
+                                # gestiona por trailing en los ciclos siguientes.
+                                continue
+                            else:
+                                err = (res or {}).get("error") or "sin respuesta"
+                                print("    " + console.warn(f"no se pudo parcializar: {err}"))
+
+                # ----- Trailing stop -----
+                if p.use_trailing_stop and atr > 0:
+                    if favor >= p.trailing_breakeven_atr_mult * atr:
+                        trail_sl = price - sign * p.trailing_step_atr_mult * atr
+                        # Al menos breakeven (entry); por encima, sigue al precio.
+                        new_sl = max(entry, trail_sl) if direction == "BUY" else min(entry, trail_sl)
+                        new_sl = round(new_sl, digits)
+                        if self._improves_sl(direction, new_sl, cur_sl):
+                            _ensure_header()
+                            res = self.client.modify_position(
+                                symbol, int(ticket), stop_loss=new_sl, take_profit=cur_tp or None)
+                            if res and res.get("success"):
+                                print(f"  {console.ok('⤢ [Trailing]')} {symbol} #{ticket}: "
+                                      f"SL {cur_sl or '—'} → {new_sl}")
+                            else:
+                                err = (res or {}).get("error") or "sin respuesta"
+                                print("    " + console.warn(f"no se pudo mover el SL: {err}"))
+
+        # Poda: olvida los linajes que ya no tienen posición abierta.
+        self._partial_taken &= current_keys
+
     def _coordinator_news(self) -> str:
         """Resumen de noticias por símbolo para el coordinador (news_provider
         cachea, así que reutilizar es barato). Fail-safe: '' ante errores."""
@@ -1162,8 +1321,8 @@ class AgentOrchestrator:
             return
 
         sym_info = snapshot.get("symbols", {})
-        headers = ["Símbolo", "Señal", "Neto", "Veredicto", "Prio", "Asig", "Gestión", "Motivo/clamp"]
-        aligns = ["<", "<", "<", "<", ">", ">", "<", "<"]
+        headers = ["Símbolo", "Señal", "Neto", "Veredicto", "Prio", "Asig", "TP obj.", "Gestión", "Motivo/clamp"]
+        aligns = ["<", "<", "<", "<", ">", ">", ">", "<", "<"]
         rows = []
         for d in sorted(decisions, key=lambda x: x.get("priority", 99)):
             sym = d.get("symbol")
@@ -1177,6 +1336,8 @@ class AgentOrchestrator:
             pos_cell = f"{pos_action}{md}"
             pos_style = console.warn if pos_action in ("close", "reduce", "hedge") else console.dim
             motivo = d.get("clamp") or ""
+            tp_rr = d.get("tp_rr") or 0.0
+            tp_cell = f"1:{tp_rr:.2f}" if tp_rr > 0 else console.dim("—")
             rows.append([
                 sym,
                 (sig_action, console.side),
@@ -1184,6 +1345,7 @@ class AgentOrchestrator:
                 verdict,
                 str(d.get("priority", "")),
                 f"{d.get('allocation_pct', 0):.0%}",
+                tp_cell,
                 (pos_cell, pos_style),
                 (motivo, console.dim) if motivo else "",
             ])

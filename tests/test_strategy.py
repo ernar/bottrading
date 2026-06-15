@@ -40,6 +40,15 @@ def test_rechaza_rr_insuficiente():
     assert eng.validate_trade(sig, positions=[], tick=_tick()) is False
 
 
+def test_min_rr_override_acepta_rr_mas_corto():
+    # La mesa fija un TP más corto (tp_rr): el override de min_rr permite la
+    # entrada que el min_rr del especialista (1.5) rechazaría.
+    eng = _engine()
+    sig = _buy_signal(entry=100, sl=99, tp=101.0)  # R:R = 1.0 < 1.5
+    assert eng.validate_trade(sig, positions=[], tick=_tick()) is False
+    assert eng.validate_trade(sig, positions=[], tick=_tick(), min_rr=1.0) is True
+
+
 def test_rechaza_niveles_incoherentes_buy():
     eng = _engine()
     sig = _buy_signal(entry=100, sl=101, tp=102)  # SL por encima del entry en un BUY

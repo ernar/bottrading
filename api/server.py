@@ -3,10 +3,8 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import functools
 import logging
-import csv
-import json
 import os
-from datetime import date
+from datetime import date, datetime
 from core.state import bot_state
 from core.llm_config import available_providers
 
@@ -118,32 +116,65 @@ def notify_duplicate():
     return jsonify({"status": "notified"}), 200
 
 
-def _read_csv_rows(path: str, limit: int) -> list:
-    """Lee un CSV de logs de forma resiliente.
-
-    restkey='_extra' evita que campos sobrantes (CSV con esquema desalineado)
-    acaben bajo una clave None, lo que rompía jsonify al ordenar claves.
-    """
-    if not os.path.exists(path):
-        return []
-    with open(path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f, restkey="_extra")
-        rows = [{k: v for k, v in row.items() if k is not None} for row in reader]
-    return rows[-limit:]
+def _fmt_ts(dt) -> str:
+    """Formatea el timestamp igual que el CSV anterior, para no romper al front."""
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
 @app.route("/api/csv/signals", methods=["GET"])
 def get_csv_signals():
+    """Últimas señales (rutas /api/csv/* conservadas por compatibilidad con el
+    front; ahora consultan la DB en vez de leer signals.csv)."""
+    from core.db import Signal, get_session
     limit = int(request.args.get("limit", 15))
-    platform = request.args.get("platform", "mt4").lower()
-    return jsonify(_read_csv_rows(f"logs/{platform}/signals.csv", limit)), 200
+    platform = request.args.get("platform", "mt4").upper()
+    session = get_session()
+    try:
+        rows = (session.query(Signal)
+                .filter(Signal.platform == platform)
+                .order_by(Signal.timestamp.desc(), Signal.id.desc())
+                .limit(limit).all())
+    finally:
+        session.close()
+    rows.reverse()  # cronológico ascendente, como el CSV
+    out = [{
+        "timestamp": _fmt_ts(r.timestamp), "platform": r.platform, "agent": r.agent,
+        "symbol": r.symbol, "action": r.action,
+        "confidence": f"{r.confidence:.2f}" if r.confidence is not None else "",
+        "trend": r.trend, "risk_level": r.risk_level,
+        "entry": r.entry if r.entry is not None else "",
+        "stop_loss": r.stop_loss if r.stop_loss is not None else "",
+        "take_profit": r.take_profit if r.take_profit is not None else "",
+        "reason": r.reason, "trade_id": r.trade_id,
+        "executed": "true" if r.executed else "false",
+    } for r in rows]
+    return jsonify(out), 200
 
 
 @app.route("/api/csv/trades", methods=["GET"])
 def get_csv_trades():
+    from core.db import Trade, get_session
     limit = int(request.args.get("limit", 50))
-    platform = request.args.get("platform", "mt4").lower()
-    return jsonify(_read_csv_rows(f"logs/{platform}/trades.csv", limit)), 200
+    platform = request.args.get("platform", "mt4").upper()
+    session = get_session()
+    try:
+        rows = (session.query(Trade)
+                .filter(Trade.platform == platform)
+                .order_by(Trade.timestamp.desc(), Trade.id.desc())
+                .limit(limit).all())
+    finally:
+        session.close()
+    rows.reverse()
+    out = [{
+        "timestamp": _fmt_ts(r.timestamp), "platform": r.platform, "symbol": r.symbol,
+        "action": r.action,
+        "volume": r.volume if r.volume is not None else "",
+        "price": r.price if r.price is not None else "",
+        "stop_loss": r.stop_loss if r.stop_loss is not None else "",
+        "take_profit": r.take_profit if r.take_profit is not None else "",
+        "retcode": r.retcode, "order_id": r.order_id, "comment": r.comment,
+    } for r in rows]
+    return jsonify(out), 200
 
 
 @app.route("/api/equity", methods=["GET"])
@@ -159,9 +190,12 @@ def get_equity():
 
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
-    """Estadísticas agregadas de señales (CSV) y memoria de resultados."""
-    platform = request.args.get("platform", "mt4").lower()
-    today = date.today().isoformat()
+    """Estadísticas agregadas de señales y memoria de resultados (consultas SQL)."""
+    from sqlalchemy import func
+    from core.db import Signal, SignalMemoryRecord, Trade, get_session
+
+    platform = request.args.get("platform", "mt4").upper()
+    today_start = datetime.combine(date.today(), datetime.min.time())
 
     stats = {
         "signals_total": 0,
@@ -172,43 +206,36 @@ def get_stats():
         "memory": {"evaluated": 0, "wins": 0, "win_rate": None},
     }
 
-    path = f"logs/{platform}/signals.csv"
-    if os.path.exists(path):
-        with open(path, newline="", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
-        stats["signals_total"] = len(rows)
-        confidences = []
-        for r in rows:
-            action = r.get("action", "").upper()
-            if action in stats["by_action"]:
-                stats["by_action"][action] += 1
-            if r.get("timestamp", "").startswith(today):
-                stats["signals_today"] += 1
-            try:
-                confidences.append(float(r.get("confidence", 0)))
-            except ValueError:
-                pass
-        if confidences:
-            stats["avg_confidence"] = round(sum(confidences) / len(confidences), 3)
+    session = get_session()
+    try:
+        base = session.query(Signal).filter(Signal.platform == platform)
+        stats["signals_total"] = base.count()
+        stats["signals_today"] = base.filter(Signal.timestamp >= today_start).count()
+        for action, n in (session.query(Signal.action, func.count(Signal.id))
+                          .filter(Signal.platform == platform)
+                          .group_by(Signal.action).all()):
+            if (action or "").upper() in stats["by_action"]:
+                stats["by_action"][action.upper()] = n
+        avg = (session.query(func.avg(Signal.confidence))
+               .filter(Signal.platform == platform).scalar())
+        if avg is not None:
+            stats["avg_confidence"] = round(float(avg), 3)
 
-    trades_path = f"logs/{platform}/trades.csv"
-    if os.path.exists(trades_path):
-        with open(trades_path, newline="", encoding="utf-8") as f:
-            stats["trades_total"] = sum(1 for _ in csv.DictReader(f))
+        stats["trades_total"] = (session.query(Trade)
+                                 .filter(Trade.platform == platform).count())
 
-    memory_path = "logs/memory.json"
-    if os.path.exists(memory_path):
-        try:
-            with open(memory_path, encoding="utf-8") as f:
-                memory = json.load(f)
-            evaluated = [r for recs in memory.values() for r in recs if r.get("outcome")]
-            wins = sum(1 for r in evaluated if r["outcome"] in ("favorable", "TP alcanzado"))
-            stats["memory"]["evaluated"] = len(evaluated)
-            stats["memory"]["wins"] = wins
-            if evaluated:
-                stats["memory"]["win_rate"] = round(wins / len(evaluated), 3)
-        except (json.JSONDecodeError, OSError):
-            pass
+        # Win-rate agregado sobre toda la memoria de señales (todos los agentes).
+        evaluated = (session.query(SignalMemoryRecord)
+                     .filter(SignalMemoryRecord.outcome.isnot(None)).count())
+        wins = (session.query(SignalMemoryRecord)
+                .filter(SignalMemoryRecord.outcome.in_(("favorable", "TP alcanzado")))
+                .count())
+        stats["memory"]["evaluated"] = evaluated
+        stats["memory"]["wins"] = wins
+        if evaluated:
+            stats["memory"]["win_rate"] = round(wins / evaluated, 3)
+    finally:
+        session.close()
 
     return jsonify(stats), 200
 

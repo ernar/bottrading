@@ -7,7 +7,7 @@ un instrumento concreto:
 - proveedor + modelo LLM (por ahora el default de Ollama),
 - umbrales de riesgo propios (confianza mínima, R:R, múltiplos de ATR...),
 - persona: texto de especialización inyectado en el system prompt,
-- su propia memoria de señales aislada (logs/agents/<name>_memory.json).
+- su propia memoria de señales aislada (tabla signal_memory, scope=<name>).
 
 El agente sabe analizar su símbolo (analyze) y validar una señal (validate);
 la ejecución de órdenes la coordina el orquestador.
@@ -104,7 +104,7 @@ class SymbolAgent:
             temperature=params.temperature,
         )
         # Memoria aislada por agente: cada uno aprende de sus propias señales.
-        self.memory = SignalMemory(path=f"logs/agents/{name}_memory.json")
+        self.memory = SignalMemory(scope=name)
 
     # ----- Análisis -----
 
@@ -164,11 +164,11 @@ class SymbolAgent:
 
     def validate(self, signal: dict, positions: list = None, tick=None,
                  spread_points: float = None, total_open_positions: int = None,
-                 enforce_max_positions: bool = True) -> bool:
+                 enforce_max_positions: bool = True, min_rr: float = None) -> bool:
         return self.strategy.validate_trade(
             signal, positions, tick=tick, spread_points=spread_points,
             total_open_positions=total_open_positions,
-            enforce_max_positions=enforce_max_positions)
+            enforce_max_positions=enforce_max_positions, min_rr=min_rr)
 
     def resolve_volume(self, client, signal: dict) -> float:
         """Volumen a operar. Lote fijo (params.lot_size) salvo que el agente

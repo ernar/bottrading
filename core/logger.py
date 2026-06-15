@@ -1,111 +1,77 @@
-import csv
-import os
+"""Registro de señales, órdenes, cierres y equity en la base de datos.
+
+Antes esto se volcaba a CSV en ``logs/{platform}/``; ahora va a SQLite vía
+``core/db.py``. Las firmas públicas (``log_signal``, ``log_trade``,
+``log_equity``, ``log_closed_trade``, ``read_equity_series``) se mantienen
+estables para no propagar cambios a los llamantes (orquestador/coordinador).
+"""
 from datetime import datetime
+from typing import Optional
 
-SIGNALS_HEADERS = [
-    "timestamp", "platform", "agent", "symbol", "action", "confidence", "trend",
-    "risk_level", "entry", "stop_loss", "take_profit", "reason", "trade_id",
-    "executed",
-]
-
-TRADES_HEADERS = [
-    "timestamp", "platform", "symbol", "action", "volume", "price",
-    "stop_loss", "take_profit", "retcode", "order_id", "comment",
-]
-
-CLOSED_TRADES_HEADERS = [
-    "timestamp", "platform", "symbol", "action", "volume", "entry_price",
-    "exit_price", "pnl", "commission", "duration_seconds", "trade_id",
-    "close_reason",
-]
-
-EQUITY_HEADERS = ["timestamp", "platform", "balance", "equity", "free_margin"]
+from core.db import ClosedTrade, EquityPoint, Signal, Trade, session_scope
 
 
-def _signals_path(platform: str) -> str:
-    return f"logs/{platform}/signals.csv"
-
-
-def _trades_path(platform: str) -> str:
-    return f"logs/{platform}/trades.csv"
-
-
-def _closed_trades_path(platform: str) -> str:
-    return f"logs/{platform}/closed_trades.csv"
-
-
-def _equity_path(platform: str) -> str:
-    return f"logs/{platform}/equity.csv"
-
-
-def _ensure_file(path: str, headers: list):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    if os.path.exists(path):
-        # Si la cabecera existente no coincide con la actual (p.ej. se añadió
-        # la columna 'agent'), archiva el CSV viejo y crea uno nuevo: así no se
-        # mezclan esquemas y la API no peta al leer filas desalineadas.
-        with open(path, newline="", encoding="utf-8") as f:
-            existing = next(csv.reader(f), None)
-        if existing == headers:
-            return
-        os.replace(path, path + ".old")
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(headers)
+def _to_float(value) -> Optional[float]:
+    """Convierte a float tolerando cadenas vacías/ilegibles (-> None)."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def log_signal(signal: dict, platform: str = "mt4"):
-    path = _signals_path(platform)
-    _ensure_file(path, SIGNALS_HEADERS)
-    row = [
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        platform.upper(),
-        signal.get("agent", ""),
-        signal.get("symbol", ""),
-        signal.get("action", ""),
-        f"{signal.get('confidence', 0):.2f}",
-        signal.get("trend", ""),
-        signal.get("risk_level", ""),
-        signal.get("entry", ""),
-        signal.get("stop_loss", ""),
-        signal.get("take_profit", ""),
-        signal.get("reason", "").replace("\n", " "),
-        signal.get("trade_id", ""),
-        "true" if signal.get("executed") else "false",
-    ]
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(row)
+    with session_scope() as s:
+        s.add(Signal(
+            timestamp=datetime.now(),
+            platform=platform.upper(),
+            agent=signal.get("agent", ""),
+            symbol=signal.get("symbol", ""),
+            action=signal.get("action", ""),
+            confidence=_to_float(signal.get("confidence", 0)),
+            trend=signal.get("trend", ""),
+            risk_level=signal.get("risk_level", ""),
+            entry=_to_float(signal.get("entry")),
+            stop_loss=_to_float(signal.get("stop_loss")),
+            take_profit=_to_float(signal.get("take_profit")),
+            reason=(signal.get("reason", "") or "").replace("\n", " "),
+            trade_id=signal.get("trade_id", "") or "",
+            executed=bool(signal.get("executed")),
+        ))
 
 
 def log_trade(symbol: str, action: str, volume: float, price: float,
               stop_loss: float, take_profit: float, result: dict,
               platform: str = "mt4"):
-    path = _trades_path(platform)
-    _ensure_file(path, TRADES_HEADERS)
-    row = [
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        platform.upper(),
-        symbol, action, volume, price, stop_loss, take_profit,
-        result.get("retcode", ""),
-        result.get("order", ""),
-        result.get("comment", "").replace("\n", " "),
-    ]
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(row)
+    with session_scope() as s:
+        s.add(Trade(
+            timestamp=datetime.now(),
+            platform=platform.upper(),
+            symbol=symbol,
+            action=action,
+            volume=_to_float(volume),
+            price=_to_float(price),
+            stop_loss=_to_float(stop_loss),
+            take_profit=_to_float(take_profit),
+            retcode=str(result.get("retcode", "")),
+            order_id=str(result.get("order", "")),
+            comment=(result.get("comment", "") or "").replace("\n", " "),
+        ))
 
 
 def log_equity(balance: float, equity: float, free_margin: float = 0.0,
                platform: str = "mt4"):
     """Registra una instantánea de la cartera (balance/equity) para dibujar su
     evolución en el dashboard. El llamante decide la cadencia (throttle)."""
-    path = _equity_path(platform)
-    _ensure_file(path, EQUITY_HEADERS)
-    row = [
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        platform.upper(),
-        f"{balance:.2f}", f"{equity:.2f}", f"{free_margin:.2f}",
-    ]
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(row)
+    with session_scope() as s:
+        s.add(EquityPoint(
+            timestamp=datetime.now(),
+            platform=platform.upper(),
+            balance=_to_float(balance),
+            equity=_to_float(equity),
+            free_margin=_to_float(free_margin),
+        ))
 
 
 def read_equity_series(platform: str = "mt4", limit: int = 500,
@@ -118,31 +84,26 @@ def read_equity_series(platform: str = "mt4", limit: int = 500,
     ventana (p. ej. 3600 = última hora). El filtro temporal se aplica ANTES del
     submuestreo para conservar la resolución dentro del rango.
     """
-    path = _equity_path(platform)
-    if not os.path.exists(path):
-        return []
-    cutoff = None
-    if since_seconds and since_seconds > 0:
-        cutoff = datetime.now().timestamp() - since_seconds
-    points = []
-    with open(path, newline="", encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            try:
-                ts = r.get("timestamp", "")
-                if cutoff is not None:
-                    try:
-                        row_ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").timestamp()
-                    except ValueError:
-                        continue  # timestamp ilegible: fuera del filtro
-                    if row_ts < cutoff:
-                        continue
-                points.append({
-                    "t": ts,
-                    "balance": float(r.get("balance", 0) or 0),
-                    "equity": float(r.get("equity", 0) or 0),
-                })
-            except ValueError:
-                continue  # fila corrupta: se ignora
+    from core.db import get_session
+
+    session = get_session()
+    try:
+        q = session.query(EquityPoint).filter(
+            EquityPoint.platform == platform.upper()
+        )
+        if since_seconds and since_seconds > 0:
+            cutoff = datetime.now().timestamp() - since_seconds
+            q = q.filter(EquityPoint.timestamp >= datetime.fromtimestamp(cutoff))
+        rows = q.order_by(EquityPoint.timestamp.asc()).all()
+    finally:
+        session.close()
+
+    points = [{
+        "t": r.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        "balance": float(r.balance or 0),
+        "equity": float(r.equity or 0),
+    } for r in rows]
+
     if limit and len(points) > limit:
         # Submuestreo uniforme: paso = n/limit, manteniendo el último punto.
         step = len(points) / limit
@@ -156,16 +117,19 @@ def log_closed_trade(symbol: str, action: str, volume: float, entry_price: float
                      exit_price: float, pnl: float, commission: float = 0.0,
                      duration_seconds: int = None, trade_id: str = "",
                      close_reason: str = "", platform: str = "mt4"):
-    """Escribe un trade cerrado en CSV persistente para que el rendimiento
-    sobreviva al reinicio del bot."""
-    path = _closed_trades_path(platform)
-    _ensure_file(path, CLOSED_TRADES_HEADERS)
-    row = [
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        platform.upper(),
-        symbol, action, volume, entry_price,
-        exit_price, f"{pnl:.2f}", f"{commission:.2f}",
-        duration_seconds or "", trade_id, close_reason,
-    ]
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(row)
+    """Escribe un trade cerrado para que el rendimiento sobreviva al reinicio."""
+    with session_scope() as s:
+        s.add(ClosedTrade(
+            timestamp=datetime.now(),
+            platform=platform.upper(),
+            symbol=symbol,
+            action=action,
+            volume=_to_float(volume),
+            entry_price=_to_float(entry_price),
+            exit_price=_to_float(exit_price),
+            pnl=_to_float(pnl),
+            commission=_to_float(commission),
+            duration_seconds=int(duration_seconds) if duration_seconds else None,
+            trade_id=trade_id or "",
+            close_reason=close_reason or "",
+        ))

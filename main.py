@@ -163,6 +163,11 @@ def connect_platform(client: BaseMTClient) -> bool:
 
 
 def main():
+    # Base de datos (SQLite): crea el esquema antes de levantar orquestador y API,
+    # que comparten el mismo archivo (logs/bot.db por defecto, DB_PATH lo cambia).
+    from core.db import init_db
+    init_db()
+
     agents = select_agents()
 
     # LLM del coordinador (prompt de consola, va con el resto de la selección).

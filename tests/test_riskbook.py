@@ -48,9 +48,9 @@ def _sym(remaining_pct=0.4, net_direction="FLAT", net_exposure_pct=0.0,
     }
 
 
-def _decision(symbol="BTCUSD", approve=True, alloc=0.2, action="hold"):
+def _decision(symbol="BTCUSD", approve=True, alloc=0.2, action="hold", tp_rr=0.0):
     return {"symbol": symbol, "approve": approve, "priority": 1,
-            "allocation_pct": alloc, "position_action": action}
+            "allocation_pct": alloc, "position_action": action, "tp_rr": tp_rr}
 
 
 # ----- RiskBook.clamp: topes duros -----
@@ -103,6 +103,34 @@ def test_clamp_no_toca_decision_valida():
     assert out[0]["approve"] is True
     assert out[0]["allocation_pct"] == 0.2
     assert out[0]["clamp"] == ""
+
+
+# ----- R:R objetivo (tp_rr) gobernado por la mesa -----
+
+def test_clamp_tp_rr_dentro_de_rango_no_se_toca():
+    rb = _rb()  # tp_rr_min=1.0, tp_rr_max=4.0 por defecto
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    out = rb.clamp([_decision(tp_rr=1.5)], snap)
+    assert out[0]["tp_rr"] == 1.5
+    assert "tp_rr" not in out[0]["clamp"]
+
+
+def test_clamp_tp_rr_acota_por_arriba_y_por_abajo():
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    alto = rb.clamp([_decision(tp_rr=9.0)], snap)
+    assert alto[0]["tp_rr"] == 4.0
+    assert "tp_rr" in alto[0]["clamp"]
+    bajo = rb.clamp([_decision(tp_rr=0.3)], snap)
+    assert bajo[0]["tp_rr"] == 1.0
+    assert "tp_rr" in bajo[0]["clamp"]
+
+
+def test_clamp_tp_rr_ausente_queda_en_cero():
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    out = rb.clamp([_decision()], snap)  # tp_rr=0 (no ajustar)
+    assert out[0]["tp_rr"] == 0.0
 
 
 # ----- CoordinatorAgent: parseo y fallback -----
@@ -440,3 +468,43 @@ def test_snapshot_sin_posiciones_edad_none():
     client = _FakeClient(_account(), [])
     snap = rb.snapshot(client, [_FakeAgent("BTCUSD")])
     assert snap["symbols"]["BTCUSD"]["newest_position_age"] is None
+
+
+# ----- Persistencia del período de gracia (sobrevive a reinicios) -----
+
+def test_first_seen_persiste_y_sobrevive_a_reinicio():
+    # persist_first_seen=True: el registro se guarda en la DB (tabla
+    # risk_first_seen) y se recarga al "reiniciar" (nueva instancia).
+    cfg = {"min_hold_seconds": 300, "persist_first_seen": True}
+    positions = [
+        {"symbol": "BTCUSD", "ticket": 111, "direction": "BUY", "volume": 0.1,
+         "current_price": 50000, "profit": 0.0},
+    ]
+    client = _FakeClient(_account(), positions)
+
+    # Primer arranque: registra el ticket y lo vuelca a la DB.
+    rb1 = RiskBook(cfg)
+    rb1.snapshot(client, [_FakeAgent("BTCUSD")])
+    assert "111" in rb1._first_seen
+    # Antedata el avistamiento 100s para simular tiempo transcurrido.
+    rb1._first_seen["111"] -= 100
+    rb1._save_first_seen()
+
+    # "Reinicio": una instancia nueva recarga el registro de la DB.
+    rb2 = RiskBook(cfg)
+    assert "111" in rb2._first_seen  # NO se reinicia a cero
+    snap = rb2.snapshot(client, [_FakeAgent("BTCUSD")])
+    age = snap["symbols"]["BTCUSD"]["newest_position_age"]
+    assert age >= 100  # la edad se conserva tras el reinicio
+
+
+def test_first_seen_sin_persistencia_solo_en_memoria():
+    # Sin persist_first_seen el registro es solo en memoria (no toca la DB).
+    rb = RiskBook({"min_hold_seconds": 300})
+    client = _FakeClient(_account(), [
+        {"symbol": "BTCUSD", "ticket": 222, "direction": "BUY", "volume": 0.1,
+         "current_price": 50000, "profit": 0.0}])
+    rb.snapshot(client, [_FakeAgent("BTCUSD")])
+    assert "222" in rb._first_seen
+    # Una instancia nueva sin persistencia arranca vacía.
+    assert RiskBook({"min_hold_seconds": 300})._first_seen == {}

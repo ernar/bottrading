@@ -70,4 +70,11 @@ class BaseMTClient(ABC):
                     deviation: int = 10) -> Optional[dict]: ...
 
     @abstractmethod
-    def close_position(self, symbol: str, direction: str = None) -> Optional[dict]: ...
+    def close_position(self, symbol: str, direction: str = None,
+                       volume: float = None, ticket: int = None) -> Optional[dict]: ...
+
+    def modify_position(self, symbol: str, ticket: int, stop_loss: float = None,
+                        take_profit: float = None) -> Optional[dict]:
+        """Mueve el SL/TP de una posición abierta. Implementación opcional: las
+        subclases que no la soporten devuelven None (no-op)."""
+        return None

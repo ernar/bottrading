@@ -36,7 +36,10 @@
       "Bash(python -m py_compile core/strategy.py)",
       "Bash(python -m py_compile agents/registry.py)",
       "Bash(python -m py_compile agents/orchestrator.py clients/mt4_client.py clients/base_client.py agents/registry.py)",
-      "Bash(python -c \"from agents.registry import AGENT_BLUEPRINTS, build_agent; print\\(list\\(AGENT_BLUEPRINTS\\)\\); a=build_agent\\('eurusd-agent'\\); print\\(a.name, a.symbol, a.params.provider, a.params.model\\)\")"
+      "Bash(python -c \"from agents.registry import AGENT_BLUEPRINTS, build_agent; print\\(list\\(AGENT_BLUEPRINTS\\)\\); a=build_agent\\('eurusd-agent'\\); print\\(a.name, a.symbol, a.params.provider, a.params.model\\)\")",
+      "PowerShell(python -m pytest -q 2>&1)",
+      "Bash(python -m py_compile core/config.py agents/coordinator.py core/strategy.py agents/base_agent.py agents/orchestrator.py)",
+      "Bash(python -m py_compile agents/coordinator.py agents/orchestrator.py core/strategy.py agents/base_agent.py clients/mt4_client.py clients/base_client.py agents/registry.py core/config.py)"
     ],
     "additionalDirectories": [
       "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"

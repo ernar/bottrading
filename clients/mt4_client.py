@@ -434,11 +434,32 @@ class MT4Client(BaseMTClient):
         # timeout == estado desconocido: la orden PUEDE haberse ejecutado igualmente.
         return {"success": False, "error": resp, "timeout": "timeout" in resp}
 
-    def close_position(self, symbol: str, direction: str = None) -> Optional[dict]:
-        resp = self._send(f"CLOSE_POSITION|{symbol}", timeout=30.0)
+    def close_position(self, symbol: str, direction: str = None,
+                       volume: float = None, ticket: int = None) -> Optional[dict]:
+        """Cierra una posición del símbolo. Con `volume`/`ticket` realiza un cierre
+        PARCIAL del ticket indicado (MT4 deja el remanente en un ticket nuevo); sin
+        ellos, cierra la primera posición del símbolo completa (comportamiento
+        previo). `direction` lo ignora MT4 (best-effort vía el EA)."""
+        cmd = f"CLOSE_POSITION|{symbol}"
+        if volume or ticket:
+            # El EA acepta CLOSE_POSITION|symbol|volume|ticket (campos opcionales).
+            cmd += f"|{volume or 0}|{int(ticket or 0)}"
+        resp = self._send(cmd, timeout=30.0)
         if resp.startswith("OK|"):
             return {"success": True, "retcode": 0, "comment": resp[3:]}
         # Sin posición abierta: None para que el API devuelva 404.
         if "no open position" in resp:
             return None
+        return {"success": False, "error": resp, "timeout": "timeout" in resp}
+
+    def modify_position(self, symbol: str, ticket: int, stop_loss: float = None,
+                        take_profit: float = None) -> Optional[dict]:
+        """Mueve el SL/TP de una posición abierta vía el EA (OrderModify). Un nivel
+        en None/0 deja el actual sin cambios. Devuelve {success, ...} o None ante
+        error de selección. Usado por el trailing stop del orquestador."""
+        sl = stop_loss or 0
+        tp = take_profit or 0
+        resp = self._send(f"MODIFY_POSITION|{int(ticket)}|{sl}|{tp}", timeout=30.0)
+        if resp.startswith("OK|"):
+            return {"success": True, "retcode": 0, "comment": resp[3:]}
         return {"success": False, "error": resp, "timeout": "timeout" in resp}
