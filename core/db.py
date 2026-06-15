@@ -25,9 +25,25 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
+# Raíz del proyecto (carpeta que contiene core/, agents/, main.py…). Se usa para
+# anclar la ruta de la DB y que NO dependa del directorio de trabajo actual: si el
+# bot se arranca desde otra carpeta (acceso directo, tarea programada, ruta
+# absoluta a main.py), una ruta relativa crearía un bot.db NUEVO y vacío allí y la
+# tasa de éxito/histórico parecería "perderse". Anclándola siempre apunta al mismo
+# archivo.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def _db_path() -> str:
-    """Ruta del archivo SQLite (configurable vía DB_PATH; default logs/bot.db)."""
-    return os.getenv("DB_PATH", os.path.join("logs", "bot.db"))
+    """Ruta del archivo SQLite (configurable vía DB_PATH; default logs/bot.db).
+
+    El default y cualquier DB_PATH relativo se resuelven contra la raíz del
+    proyecto (no contra el CWD) para que el bot use SIEMPRE la misma base de datos
+    independientemente de desde dónde se lance. Un DB_PATH absoluto se respeta tal cual."""
+    configured = os.getenv("DB_PATH", os.path.join("logs", "bot.db"))
+    if os.path.isabs(configured):
+        return configured
+    return os.path.join(_PROJECT_ROOT, configured)
 
 
 class Base(DeclarativeBase):

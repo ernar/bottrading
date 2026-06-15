@@ -20,6 +20,13 @@ MAX_RECORDS_PER_SYMBOL = 30
 MIN_EVAL_AGE_SECONDS = 30 * 60        # primera evaluación a partir de 30 min
 MAX_EVAL_AGE_SECONDS = 24 * 60 * 60   # tras 24h se cierra como terminal aunque no toque SL/TP
 
+# Outcomes que cuentan como ACIERTO al calcular el win rate. Incluye "ganador":
+# cuando una señal se cruza con su operación real cerrada (_sync_pnl_real), su
+# outcome pasa de "favorable"/"TP alcanzado" a "ganador" según el P/L real, así
+# que ha de contar igualmente como victoria (si no, el win rate se degradaba al
+# sincronizar). Se usa aquí y en el agregado del dashboard (api/server.py).
+WIN_OUTCOMES = ("favorable", "TP alcanzado", "ganador")
+
 
 class SignalMemory:
 
@@ -128,7 +135,7 @@ class SignalMemory:
         if not evaluated:
             return ""
         recent = evaluated[-last_n:]
-        wins = sum(1 for r in recent if r.outcome in ("favorable", "TP alcanzado"))
+        wins = sum(1 for r in recent if r.outcome in WIN_OUTCOMES)
         lines = [f"Aciertos recientes: {wins}/{len(recent)}"]
         for r in recent:
             ts = r.timestamp.strftime("%m-%d %H:%M")
@@ -181,7 +188,7 @@ class SignalMemory:
             return {"samples": 0, "win_rate": 0.0, "sl_hit_rate": 0.0,
                     "tp_hit_rate": 0.0, "avg_move_pct": 0.0}
 
-        wins = sum(1 for r in recent if r.outcome in ("favorable", "TP alcanzado"))
+        wins = sum(1 for r in recent if r.outcome in WIN_OUTCOMES)
         sl_hits = sum(1 for r in recent if r.outcome == "SL tocado")
         tp_hits = sum(1 for r in recent if r.outcome == "TP alcanzado")
         moves = [r.move_pct for r in recent if r.move_pct is not None]

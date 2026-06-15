@@ -199,6 +199,7 @@ def get_stats():
     """Estadísticas agregadas de señales y memoria de resultados (consultas SQL)."""
     from sqlalchemy import func
     from core.db import Signal, SignalMemoryRecord, Trade, get_session
+    from core.memory import WIN_OUTCOMES
 
     platform = request.args.get("platform", "mt4").upper()
     today_start = datetime.combine(date.today(), datetime.min.time())
@@ -234,7 +235,7 @@ def get_stats():
         evaluated = (session.query(SignalMemoryRecord)
                      .filter(SignalMemoryRecord.outcome.isnot(None)).count())
         wins = (session.query(SignalMemoryRecord)
-                .filter(SignalMemoryRecord.outcome.in_(("favorable", "TP alcanzado")))
+                .filter(SignalMemoryRecord.outcome.in_(WIN_OUTCOMES))
                 .count())
         stats["memory"]["evaluated"] = evaluated
         stats["memory"]["wins"] = wins

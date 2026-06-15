@@ -43,6 +43,14 @@ AT_MAX_ANALYSIS_INTERVAL = 15 * 60
 # contexto/memoria mientras espera a que las posiciones abiertas se cierren.
 RISK_COOLDOWN_ANALYSIS_INTERVAL = 15 * 60
 
+# Cuando el broker rechaza una orden con error 133 (TRADE_DISABLED: el símbolo no
+# acepta aperturas — sesión cerrada, "close only", rollover del contrato…), el bot
+# deja de analizar ese símbolo durante este tiempo. Evita malgastar llamadas al LLM
+# y llenar el log de 133 reintentando cada rotación. Se limpia al reactivar el
+# agente desde el dashboard. MODE_TRADEALLOWED no siempre refleja este estado, por
+# eso el back-off se dispara con el rechazo real del broker.
+TRADE_DISABLED_BACKOFF_SECONDS = 30 * 60
+
 
 def _clamp(value: float, key: str) -> float:
     lo, hi = PARAM_BOUNDS[key]
@@ -283,6 +291,14 @@ class AgentOrchestrator:
         # Momento del último análisis por símbolo, para espaciarlo al estar en
         # el máximo de posiciones abiertas.
         self._last_analysis_at: dict = {}
+        # Símbolo -> deadline (time.monotonic) hasta el que NO se analiza por
+        # haber recibido un error 133 (TRADE_DISABLED) del broker al abrir orden.
+        self._trade_disabled_until: dict = {}
+        # Símbolos a forzar en la PRÓXIMA rotación (reactivados/añadidos desde el
+        # dashboard): se analizan saltándose el throttle/cooldown/back-off, igual
+        # que una noticia RED. Lo alimenta el hilo del API; lo consume el del loop.
+        self._pending_force: set = set()
+        self._pending_force_lock = threading.Lock()
         # Nº de rotación (para la cabecera de cada ciclo en la terminal).
         self._rotation_count = 0
 
@@ -367,6 +383,13 @@ class AgentOrchestrator:
                 if self._due(self._last_news_poll, self.news_poll_seconds, now):
                     self._last_news_poll = now
                     forced_symbols = self._poll_red_news()
+
+                # Símbolos reactivados/añadidos desde el dashboard: se fuerzan en
+                # esta rotación para que se analicen ya, sin esperar al throttle.
+                with self._pending_force_lock:
+                    if self._pending_force:
+                        forced_symbols = forced_symbols | self._pending_force
+                        self._pending_force.clear()
 
                 # Rotación (cada tick): analizar y, si procede, coordinar/ejecutar.
                 self._run_rotation(forced_symbols)
@@ -556,6 +579,36 @@ class AgentOrchestrator:
         del símbolo (sirve para espaciar análisis en máximo de posiciones/cooldown)."""
         return (time.time() - self._last_analysis_at.get(symbol, 0)) < interval
 
+    @staticmethod
+    def _is_trade_disabled_error(result: dict) -> bool:
+        """True si el resultado de place_order es un rechazo 133 (TRADE_DISABLED).
+        El EA devuelve el error del broker como 'ERROR|OrderSend failed, error=133'."""
+        if not result or result.get("success"):
+            return False
+        err = str(result.get("error") or "")
+        return "error=133" in err
+
+    def _trade_disabled_remaining(self, symbol: str) -> float:
+        """Segundos restantes del back-off por error 133 del símbolo (0 si no hay)."""
+        deadline = self._trade_disabled_until.get(symbol)
+        if deadline is None:
+            return 0.0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            self._trade_disabled_until.pop(symbol, None)
+            return 0.0
+        return remaining
+
+    def _mark_trade_disabled(self, symbol: str) -> None:
+        """Aparca el símbolo tras un error 133: deja de analizarlo durante el
+        back-off para no malgastar LLM ni inundar el log reintentando."""
+        self._trade_disabled_until[symbol] = (
+            time.monotonic() + TRADE_DISABLED_BACKOFF_SECONDS)
+        print("  " + console.warn(
+            f"⏸ {symbol}: el broker rechazó la orden (133 TRADE_DISABLED). "
+            f"Símbolo aparcado {TRADE_DISABLED_BACKOFF_SECONDS // 60} min "
+            f"(reactívalo desde el dashboard para reintentar antes)."))
+
     def _spread_points(self, symbol: str, tick) -> float:
         """Spread actual en puntos, o None si no se puede calcular."""
         if not tick:
@@ -734,6 +787,16 @@ class AgentOrchestrator:
         # gastamos LLM. El símbolo figura como NO DISPONIBLE hasta que reabra.
         if not self.client.is_market_open(symbol):
             print("  " + console.warn(f"⏸ {symbol}: mercado cerrado — no disponible, análisis omitido."))
+            return None
+
+        # Back-off por error 133 (TRADE_DISABLED): el broker rechazó una orden
+        # reciente de este símbolo; no analizamos hasta que expire (o se reactive
+        # el agente). Una noticia RED (force) lo salta para re-evaluar.
+        remaining = self._trade_disabled_remaining(symbol)
+        if remaining > 0 and not force:
+            print("  " + console.warn(
+                f"⏸ {symbol}: aparcado por rechazo 133 del broker "
+                f"(reintento en {int(remaining // 60)} min)."))
             return None
 
         tick = self.client.get_tick(symbol)
@@ -1006,6 +1069,11 @@ class AgentOrchestrator:
             print("  " + console.warn("[!] TIMEOUT esperando al EA: la orden NO se confirmó."))
             print(console.dim("      La orden PUEDE haberse ejecutado igualmente. Revisa MT4"))
             print(console.dim("      antes de que el orquestador reintente en el próximo ciclo."))
+        elif self._is_trade_disabled_error(result):
+            # El broker no acepta aperturas en este símbolo: aparcarlo en vez de
+            # reintentar cada rotación (sesión cerrada / close-only / rollover).
+            print("  " + console.err(f"✗ Error al ejecutar orden: {result.get('error')}"))
+            self._mark_trade_disabled(symbol)
         else:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
             print("  " + console.err(f"✗ Error al ejecutar orden: {err}"))
@@ -1551,6 +1619,14 @@ class AgentOrchestrator:
         if agent is None:
             raise KeyError(name)
         agent.enabled = bool(enabled)
+        if agent.enabled:
+            # Reactivar limpia el back-off por 133: el usuario pide reintentar ya
+            # (p. ej. tras reabrir la sesión del símbolo o habilitarlo en el broker).
+            self._trade_disabled_until.pop(agent.symbol, None)
+            # Y se fuerza el análisis del símbolo en la próxima rotación (sin
+            # esperar a que expire un throttle de máximo de posiciones/cooldown).
+            with self._pending_force_lock:
+                self._pending_force.add(agent.symbol)
         estado = "activado" if agent.enabled else "desactivado"
         print(f"  [{name}] {estado} para las siguientes rotaciones.")
         return {"name": name, "symbol": agent.symbol, "enabled": agent.enabled}
@@ -1577,6 +1653,9 @@ class AgentOrchestrator:
         agent.enabled = True
         self.agents.append(agent)
         self.stats[agent.name] = {"signals": 0, "trades": 0, "holds": 0}
+        # Forzar su análisis en la próxima rotación (sin throttle inicial).
+        with self._pending_force_lock:
+            self._pending_force.add(agent.symbol)
         print(f"  [{name}] añadido en caliente [{agent.symbol}] "
               f"{agent.params.provider.upper()}/{agent.params.model}; "
               f"analizará desde la siguiente rotación.")
