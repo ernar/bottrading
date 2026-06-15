@@ -20,3 +20,44 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+/* Animación de apertura del panel de chat: surge desde la burbuja (abajo-dcha)
+   con un pequeño "pop" (fade + slide + scale). */
+@keyframes chat-pop {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-chat-pop {
+  animation: chat-pop 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: bottom right;
+}
+
+/* Cierre del panel de chat: se repliega hacia la burbuja (inverso del pop). */
+@keyframes chat-pop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+}
+
+.animate-chat-pop-out {
+  animation: chat-pop-out 0.18s ease-in forwards;
+  transform-origin: bottom right;
+}
+
+/* Barras del ecualizador del reproductor LO-FI (cuando suena la música). */
+@keyframes eq-bounce {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}

@@ -83,20 +83,39 @@ SIEMPRE en los datos en vivo que te paso en el bloque "ESTADO ACTUAL".
 
 Cómo trabajas:
 - Responde en español, en tono profesional pero cercano, como un gestor que rinde cuentas a su jefe.
-- Básate EXCLUSIVAMENTE en los datos del ESTADO ACTUAL y en lo que ya se ha hablado en la conversación. \
-NO inventes cifras, posiciones ni noticias. Si un dato no está, dilo con naturalidad ("ahora mismo no \
-tengo ese dato") y, si procede, sugiere dónde mirarlo en el dashboard.
-- Sé concreto: cita equity, P/L, exposición, posiciones, decisiones de la mesa, rendimiento de los \
-agentes... con sus números. Redondea de forma legible.
-- Si te preguntan "¿cómo vamos?", da un resumen ejecutivo: estado de la cuenta, riesgo/exposición, \
-qué está haciendo la mesa y cualquier alerta (cooldown, hard-stop, conflicto de reversión).
-- Explica el PORQUÉ de las decisiones de la mesa cuando te lo pregunten (apetito, topes de exposición, \
-guardias de reversión, período de gracia, etc.).
-- NO ejecutas órdenes ni cambias ajustes: si te lo piden, explica que tú solo informas y diriges la \
-estrategia, y que esas acciones se hacen desde las pestañas correspondientes del dashboard.
-- Sé breve por defecto; entra en detalle solo si te lo piden o si la situación lo requiere (p. ej. una \
-alerta de riesgo). Usa listas o viñetas cuando ayuden a la claridad.
+- SÉ MUY CONCISO. Por defecto responde en 1-3 frases o una lista corta (máx. 4 viñetas). Ve al grano: \
+da la cifra o la conclusión primero. Entra en detalle SOLO si el usuario lo pide explícitamente o si \
+hay una alerta de riesgo que lo justifique. Nada de preámbulos ni relleno.
+- Básate EXCLUSIVAMENTE en los datos del ESTADO ACTUAL y en lo que ya se ha hablado. NO inventes cifras, \
+posiciones ni noticias. Si un dato no está, dilo en una frase ("ahora mismo no tengo ese dato").
+- Sé concreto: cita equity, P/L, exposición, posiciones, decisiones de la mesa... con sus números, \
+redondeados de forma legible.
+- NO ejecutas órdenes ni cambias ajustes: si te lo piden, dilo en una frase y remite a la pestaña \
+correspondiente del dashboard.
+- AL FINAL de cada respuesta añade SIEMPRE una última línea, separada, con EXACTAMENTE este formato:
+  SUGERENCIAS: pregunta 1 | pregunta 2 | pregunta 3
+  Son 2-3 preguntas BREVES de seguimiento que el usuario podría querer hacerte a continuación, \
+relevantes al contexto. No las menciones ni numeres en el cuerpo de la respuesta; van solo en esa línea.
 """
+
+# Marcador con el que el modelo cierra su respuesta listando preguntas de
+# seguimiento. Se separan por "|" y se extraen para mostrarlas como chips.
+_SUGGESTION_MARKER = "SUGERENCIAS:"
+
+
+def _split_suggestions(text: str) -> tuple:
+    """Separa el cuerpo de la respuesta de la línea ``SUGERENCIAS: a | b | c``.
+
+    Devuelve ``(reply_limpio, [sugerencias])``. Si no hay marcador, la lista
+    sale vacía y el texto se devuelve tal cual."""
+    if not text or _SUGGESTION_MARKER not in text:
+        return (text or "").strip(), []
+    idx = text.rfind(_SUGGESTION_MARKER)
+    reply = text[:idx].strip()
+    raw = text[idx + len(_SUGGESTION_MARKER):].strip()
+    suggestions = [s.strip(" -•\t") for s in raw.split("|")]
+    suggestions = [s for s in suggestions if s][:3]
+    return reply, suggestions
 
 
 class OrgAssistant:
@@ -201,12 +220,14 @@ class OrgAssistant:
             parts.append("=== ESTADO ACTUAL (datos en vivo del bot) ===\n" + context)
         return "\n\n".join(parts)
 
-    def chat(self, session_id: str, message: str) -> str:
-        """Procesa un mensaje del usuario y devuelve la respuesta del asistente.
-        Guarda ambos en la memoria de la sesión."""
+    def chat(self, session_id: str, message: str) -> dict:
+        """Procesa un mensaje del usuario y devuelve ``{reply, suggestions}``.
+        Guarda el turno en la memoria de la sesión (el reply sin la línea de
+        sugerencias)."""
         message = (message or "").strip()
         if not message:
-            return "¿En qué puedo ayudarte? Pregúntame por el estado de la cuenta, las posiciones o la mesa."
+            return {"reply": "¿En qué puedo ayudarte? Pregúntame por la cuenta, las posiciones o la mesa.",
+                    "suggestions": []}
 
         sess = self._session(session_id)
         self._maybe_summarize(sess)
@@ -214,12 +235,14 @@ class OrgAssistant:
         system = self._build_system(sess)
         convo = sess["history"] + [{"role": "user", "content": message}]
         try:
-            reply = self._call_llm(system, convo)
+            raw = self._call_llm(system, convo)
         except Exception as e:  # noqa: BLE001 — fail-safe conversacional
-            return (f"Ahora mismo no puedo responder: el modelo ({self.provider}/{self.model}) "
-                    f"no está disponible ({e}). Revisa que la GEMINI_API_KEY esté configurada "
-                    f"en Ajustes.")
+            return {"reply": (f"Ahora mismo no puedo responder: el modelo ({self.provider}/{self.model}) "
+                              f"no está disponible ({e}). Revisa que la GEMINI_API_KEY esté configurada "
+                              f"en Ajustes."),
+                    "suggestions": []}
 
+        reply, suggestions = _split_suggestions(raw)
         if not reply:
             reply = "No he podido elaborar una respuesta. ¿Puedes reformular la pregunta?"
 
@@ -229,7 +252,7 @@ class OrgAssistant:
         if len(sess["history"]) > self.MAX_TURNS:
             sess["history"] = sess["history"][-self.MAX_TURNS:]
         sess["updated"] = time.time()
-        return reply
+        return {"reply": reply, "suggestions": suggestions}
 
 
 def build_live_context(state: dict, coordinator_overview: dict,

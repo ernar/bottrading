@@ -341,11 +341,13 @@ def assistant_chat():
     if not message:
         return jsonify({"error": "message vacío"}), 400
     try:
-        reply = _get_assistant().chat(session_id, message)
+        result = _get_assistant().chat(session_id, message)
     except Exception as e:  # noqa: BLE001 — nunca devolver 500 silencioso al chat
         logger.error(f"assistant chat error: {e}")
         return jsonify({"error": str(e)}), 500
-    return jsonify({"reply": reply, "session_id": session_id}), 200
+    return jsonify({"reply": result.get("reply", ""),
+                    "suggestions": result.get("suggestions", []),
+                    "session_id": session_id}), 200
 
 
 @app.route("/api/assistant/history", methods=["GET"])

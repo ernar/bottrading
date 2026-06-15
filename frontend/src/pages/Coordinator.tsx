@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { Coordination, CoordinatorDecision, CoordinatorOverview } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 
@@ -287,9 +286,10 @@ function AssistantNode({ overview }: { overview: CoordinatorOverview | null }) {
       <div className="flex justify-center">
         <span className="text-gray-600 text-lg leading-none">⌃</span>
       </div>
-      <Link
-        to="/assistant"
-        className="block rounded-lg p-4 border border-purple-700/60 bg-purple-950/20 hover:border-purple-500 transition"
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new Event('assistant:open'))}
+        className="w-full text-left rounded-lg p-4 border border-purple-700/60 bg-purple-950/20 hover:border-purple-500 transition"
       >
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
@@ -308,7 +308,7 @@ function AssistantNode({ overview }: { overview: CoordinatorOverview | null }) {
             consulta el mismo libro que el director · pregúntale “¿cómo vamos?”
           </div>
         )}
-      </Link>
+      </button>
     </div>
   )
 }

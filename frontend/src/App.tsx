@@ -10,7 +10,8 @@ import { PositionsPage } from './pages/Positions'
 import { HistoryPage } from './pages/History'
 import { AgentsPage } from './pages/Agents'
 import { CoordinatorPage } from './pages/Coordinator'
-import { AssistantPage } from './pages/Assistant'
+import { ChatWidget } from './components/ChatWidget'
+import { LofiPlayer } from './components/LofiPlayer'
 import { SettingsPage } from './pages/Settings'
 
 function App() {
@@ -26,7 +27,6 @@ function App() {
           <Routes>
             <Route path="/" element={<DashboardPage state={state} />} />
             <Route path="/coordinator" element={<CoordinatorPage liveCoordination={coordination} />} />
-            <Route path="/assistant" element={<AssistantPage />} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/signals" element={<SignalsPage state={state} />} />
             <Route path="/positions" element={<PositionsPage state={state} />} />
@@ -34,6 +34,10 @@ function App() {
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </ErrorBoundary>
+        {/* Asistente flotante (burbuja abajo a la derecha), disponible en todas las vistas. */}
+        <ChatWidget />
+        {/* Reproductor de música LO-FI (abajo a la izquierda); arranca al entrar. */}
+        <LofiPlayer />
       </div>
     </Router>
   )
