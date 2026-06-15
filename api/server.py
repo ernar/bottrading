@@ -121,10 +121,13 @@ def _fmt_ts(dt) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
-@app.route("/api/csv/signals", methods=["GET"])
+@app.route("/api/db/signals", methods=["GET"])
+@app.route("/api/csv/signals", methods=["GET"])  # alias antiguo (compatibilidad)
 def get_csv_signals():
-    """Últimas señales (rutas /api/csv/* conservadas por compatibilidad con el
-    front; ahora consultan la DB en vez de leer signals.csv)."""
+    """Histórico de señales persistidas desde la DB (SQLite). La ruta
+    /api/csv/signals se conserva como alias; ya no se lee ningún signals.csv.
+    (No confundir con /api/signals, que devuelve la última señal viva por símbolo
+    desde el estado en memoria.)"""
     from core.db import Signal, get_session
     limit = int(request.args.get("limit", 15))
     platform = request.args.get("platform", "mt4").upper()
@@ -151,8 +154,11 @@ def get_csv_signals():
     return jsonify(out), 200
 
 
-@app.route("/api/csv/trades", methods=["GET"])
+@app.route("/api/db/trades", methods=["GET"])
+@app.route("/api/csv/trades", methods=["GET"])  # alias antiguo (compatibilidad)
 def get_csv_trades():
+    """Histórico de órdenes persistidas desde la DB (SQLite). La ruta
+    /api/csv/trades se conserva como alias; ya no se lee ningún trades.csv."""
     from core.db import Trade, get_session
     limit = int(request.args.get("limit", 50))
     platform = request.args.get("platform", "mt4").upper()

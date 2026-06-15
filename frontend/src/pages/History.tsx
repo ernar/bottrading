@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { BotState, Trade } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 
-interface CsvTrade {
+interface StoredTrade {
   timestamp: string
   symbol: string
   action: string
@@ -20,16 +20,16 @@ interface HistoryPageProps {
 }
 
 export function HistoryPage({ state }: HistoryPageProps) {
-  const [csvTrades, setCsvTrades] = useState<CsvTrade[]>([])
+  const [storedTrades, setStoredTrades] = useState<StoredTrade[]>([])
   const sessionTrades = state?.closed_trades || []
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
   const API_URL = getApiUrl()
 
   useEffect(() => {
-    fetch(`${API_URL}/api/csv/trades?limit=50&platform=${platform}`, { headers: getApiHeaders() })
+    fetch(`${API_URL}/api/db/trades?limit=50&platform=${platform}`, { headers: getApiHeaders() })
       .then(r => r.json())
-      .then(setCsvTrades)
+      .then(setStoredTrades)
       .catch(() => {})
   }, [sessionTrades.length, platform])
 
@@ -92,10 +92,10 @@ export function HistoryPage({ state }: HistoryPageProps) {
       )}
 
       <section>
-        <h2 className="text-xl font-bold mb-4">Trade Log (last 50 from CSV)</h2>
-        {csvTrades.length === 0 ? (
+        <h2 className="text-xl font-bold mb-4">Trade Log (last 50)</h2>
+        {storedTrades.length === 0 ? (
           <div className="bg-gray-800 text-gray-400 p-8 rounded text-center">
-            No trades in CSV yet
+            No trades yet
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -114,7 +114,7 @@ export function HistoryPage({ state }: HistoryPageProps) {
                 </tr>
               </thead>
               <tbody>
-                {[...csvTrades].reverse().map((t, i) => (
+                {[...storedTrades].reverse().map((t, i) => (
                   <tr key={i} className="border-b border-gray-700 hover:bg-gray-800">
                     <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{t.timestamp}</td>
                     <td className="px-4 py-3 font-semibold">{t.symbol}</td>

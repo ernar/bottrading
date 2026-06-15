@@ -42,7 +42,8 @@
       "Bash(python -m py_compile agents/coordinator.py agents/orchestrator.py core/strategy.py agents/base_agent.py clients/mt4_client.py clients/base_client.py agents/registry.py core/config.py)",
       "PowerShell(python scripts/migrate_csv_to_db.py)",
       "PowerShell(python -c \"from core.db import init_db,get_session,Signal,Trade,ClosedTrade,EquityPoint,SignalMemoryRecord,RiskFirstSeen; init_db\\(\\); s=get_session\\(\\); [print\\(f'{t.__tablename__:16} {s.query\\(t\\).count\\(\\)}'\\) for t in \\(Signal,Trade,ClosedTrade,EquityPoint,SignalMemoryRecord,RiskFirstSeen\\)]; s.close\\(\\)\")",
-      "Bash(python -m py_compile scripts/migrate_csv_to_db.py)"
+      "Bash(python -m py_compile scripts/migrate_csv_to_db.py)",
+      "Bash(echo \"EXIT: $?\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"

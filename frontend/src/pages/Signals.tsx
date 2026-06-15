@@ -3,7 +3,7 @@ import { BotState, Signal } from '../types/bot'
 import { StatusBadge } from '../components/StatusBadge'
 import { getApiUrl, getApiHeaders } from '../config'
 
-interface CsvSignal {
+interface StoredSignal {
   timestamp: string
   agent: string
   symbol: string
@@ -22,16 +22,16 @@ interface SignalsPageProps {
 }
 
 export function SignalsPage({ state }: SignalsPageProps) {
-  const [csvSignals, setCsvSignals] = useState<CsvSignal[]>([])
+  const [storedSignals, setStoredSignals] = useState<StoredSignal[]>([])
   const liveSignals = Object.values(state?.signals || {})
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
   const API_URL = getApiUrl()
 
   useEffect(() => {
-    fetch(`${API_URL}/api/csv/signals?limit=15&platform=${platform}`, { headers: getApiHeaders() })
+    fetch(`${API_URL}/api/db/signals?limit=15&platform=${platform}`, { headers: getApiHeaders() })
       .then(r => r.json())
-      .then(setCsvSignals)
+      .then(setStoredSignals)
       .catch(() => {})
   }, [liveSignals.length, platform])
 
@@ -88,10 +88,10 @@ export function SignalsPage({ state }: SignalsPageProps) {
       )}
 
       <section>
-        <h2 className="text-xl font-bold mb-4">Signal History (last 15 from CSV)</h2>
-        {csvSignals.length === 0 ? (
+        <h2 className="text-xl font-bold mb-4">Signal History (last 15)</h2>
+        {storedSignals.length === 0 ? (
           <div className="bg-gray-800 text-gray-400 p-8 rounded text-center">
-            No signals in CSV yet
+            No signals yet
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -112,7 +112,7 @@ export function SignalsPage({ state }: SignalsPageProps) {
                 </tr>
               </thead>
               <tbody>
-                {[...csvSignals].reverse().map((s, i) => (
+                {[...storedSignals].reverse().map((s, i) => (
                   <tr key={i} className="border-b border-gray-700 hover:bg-gray-800">
                     <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{s.timestamp}</td>
                     <td className="px-4 py-3 text-xs text-cyan-300">{s.agent || '—'}</td>

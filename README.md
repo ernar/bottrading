@@ -27,7 +27,8 @@ mt4_ollama_bot/
 │   ├── state.py             # bot_state: singleton compartido entre main y api server
 │   ├── bot_state.py         # Definición del contenedor de estado thread-safe
 │   ├── trade_metrics.py     # Cálculo de SL/TP, tamaño de lote y métricas de trade
-│   ├── logger.py            # Logging de señales y trades a CSV
+│   ├── db.py                # Persistencia SQLite vía SQLAlchemy (logs/bot.db, WAL)
+│   ├── logger.py            # Logging de señales/trades/equity/cierres a la DB
 │   └── models.py            # Modelos Pydantic (BotConfig, Position, etc.)
 ├── clients/
 │   ├── base_client.py       # Interfaz común
@@ -39,17 +40,14 @@ mt4_ollama_bot/
 ├── requirements-dev.txt     # Dependencias de test (pytest)
 ├── conftest.py              # Hace que pytest encuentre los paquetes del proyecto
 ├── examples_config.py       # Demo de resolución de límites por símbolo/modelo
-├── start.bat                # Arranque en Windows (main.py + frontend)
+├── start.bat                # Arranque en Windows (solo main.py: bot + API en :5000)
 ├── .env                     # Credenciales + config (NO subir a git; gitignored)
 ├── .env.example             # Plantilla sin secretos
 ├── .env.example.advanced    # Plantilla con todos los parámetros por agente
+├── scripts/                 # Utilidades (migrate_csv_to_db.py: importa CSV/JSON antiguos a la DB)
 ├── logs/                    # Generado automáticamente (gitignored)
-│   ├── memory.json          # Memoria de señales y resultados evaluados
-│   ├── coordinator_decisions.csv  # Historial de decisiones de la mesa
-│   ├── agents/              # Memoria aislada por agente (<name>_memory.json)
-│   └── mt4/
-│       ├── signals.csv      # Historial de señales generadas
-│       └── trades.csv       # Historial de órdenes ejecutadas
+│   ├── bot.db               # Base de datos SQLite: señales, trades, equity, cierres y memoria
+│   └── archive/             # Respaldo de los CSV/JSON antiguos tras migrar
 └── frontend/                # Dashboard React + TypeScript + Tailwind (ver frontend/README.md)
 ```
 
@@ -202,11 +200,17 @@ python examples_config.py
 start.bat
 ```
 
-Esto lanza `main.py` (orquestador + API en el mismo proceso) y el dashboard React en `http://localhost:3000`.
+Esto lanza `main.py` (orquestador + API en el mismo proceso, puerto 5000). **El dashboard se
+ejecuta aparte** y se conecta por API; `start.bat` no lo arranca.
 
-Puedes también arrancar solo el bot:
+Equivale a arrancar el bot directamente:
 ```bash
 python main.py
+```
+
+El dashboard se levanta en su propio entorno:
+```bash
+cd frontend && npm install && npm run dev
 ```
 
 ## Flujo de ejecución
@@ -230,7 +234,7 @@ python main.py
      (default 0.90) se salta el límite de posiciones para reforzar.
    - Calcula el volumen: lote fijo, o por riesgo hasta el SL si `use_risk_sizing` está activo.
    - Ejecuta orden si pasa validación.
-   - Registra señal en `logs/` y en la memoria del agente (`logs/agents/<name>_memory.json`).
+   - Registra la señal en la DB (`logs/bot.db`) y en la memoria del agente (tabla `signal_memory`, scope por agente).
    - **Throttle**: con el símbolo en su máximo de posiciones, el análisis se espacia a 15 min
      (no se consulta al LLM cada ciclo si no se va a poder operar, salvo señal de conf ≥ 90%).
 5. **Cooldown por pérdida diaria**: si la pérdida del día supera `MAX_DAILY_LOSS_PCT`, el bot
@@ -270,8 +274,8 @@ GET  /api/agents                    Resumen de agentes: config, stats de sesión
 POST /api/agents/optimize           Lanza optimización (dry-run; {"apply": true} para aplicar en caliente)
 GET  /api/models                    Proveedores/modelos LLM disponibles (según claves del .env)
 POST /api/agents/{name}/model       Cambia el modelo de un agente en caliente ({"provider","model"})
-GET  /api/csv/signals               Últimas señales del CSV (?limit=&platform=)
-GET  /api/csv/trades                Últimos trades del CSV (?limit=&platform=)
+GET  /api/db/signals                Histórico de señales desde la DB (?limit=&platform=)
+GET  /api/db/trades                 Histórico de órdenes desde la DB (?limit=&platform=)
 POST /api/bot/start                 Iniciar bot
 POST /api/bot/stop                  Pausar bot
 POST /api/positions/{symbol}/close  Cerrar posición
@@ -280,6 +284,10 @@ POST /api/positions/{symbol}/close  Cerrar posición
 > Las rutas **POST que mutan estado** (`bot/start`, `bot/stop`, `positions/{symbol}/close`,
 > `agents/{name}/model`, `agents/optimize`) exigen la cabecera `X-API-Token` **si** `API_TOKEN`
 > está configurado en el `.env`. Sin `API_TOKEN` no se pide (uso puramente local).
+
+> `/api/signals` devuelve la **última señal viva por símbolo** (estado en memoria); `/api/db/signals`
+> devuelve el **histórico persistido** en la DB. Las rutas `/api/csv/*` se mantienen como **alias
+> obsoletos** de `/api/db/*` por compatibilidad (ya no existe ningún CSV: todo es SQLite).
 
 ## Parámetros de riesgo por defecto (`AgentParams`)
 
@@ -316,7 +324,8 @@ python -m pytest -q
 - Usar siempre cuenta **Demo** antes de real.
 - MT4 debe estar abierto durante la ejecución con el EA `PythonBridge.mq4` adjunto a un gráfico y el trading automático activado.
 - `qwen3:8b` requiere ~5 GB de RAM.
-- Los CSV en `logs/` y la memoria de cada agente persisten entre sesiones.
+- La base de datos `logs/bot.db` (SQLite) y la memoria de cada agente persisten entre sesiones.
+- ¿Vienes de una versión con CSV/JSON en `logs/`? Migra el histórico con `python scripts/migrate_csv_to_db.py` (archiva los originales en `logs/archive/`).
 
 ## Troubleshooting
 
