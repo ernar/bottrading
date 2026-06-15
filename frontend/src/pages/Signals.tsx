@@ -23,16 +23,23 @@ interface SignalsPageProps {
 
 export function SignalsPage({ state }: SignalsPageProps) {
   const [storedSignals, setStoredSignals] = useState<StoredSignal[]>([])
+  const [error, setError] = useState<string | null>(null)
   const liveSignals = Object.values(state?.signals || {})
   const platform = (state?.account_info?.platform || 'mt4').toLowerCase()
 
   const API_URL = getApiUrl()
 
   useEffect(() => {
-    fetch(`${API_URL}/api/db/signals?limit=15&platform=${platform}`, { headers: getApiHeaders() })
-      .then(r => r.json())
-      .then(setStoredSignals)
-      .catch(() => {})
+    const url = `${API_URL}/api/db/signals?limit=15&platform=${platform}`
+    fetch(url, { headers: getApiHeaders() })
+      .then(async r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status} en ${url}`)
+        const data = await r.json()
+        if (!Array.isArray(data)) throw new Error('respuesta inesperada del API (no es una lista)')
+        return data
+      })
+      .then(data => { setStoredSignals(data); setError(null) })
+      .catch(e => setError(e instanceof Error ? e.message : String(e)))
   }, [liveSignals.length, platform])
 
   const riskColor = (risk: string) => {
@@ -89,7 +96,16 @@ export function SignalsPage({ state }: SignalsPageProps) {
 
       <section>
         <h2 className="text-xl font-bold mb-4">Signal History (last 15)</h2>
-        {storedSignals.length === 0 ? (
+        {error ? (
+          <div className="bg-red-950 border border-red-800 text-red-200 p-4 rounded text-sm">
+            <div className="font-semibold">No se pudo cargar el histórico de señales.</div>
+            <div className="text-red-300/80 mt-1 break-all">{error}</div>
+            <div className="text-red-300/60 mt-2 text-xs">
+              Comprueba que el bot esté corriendo y sirviendo el código actual
+              (un proceso viejo en el puerto 5000 puede no tener la ruta <code>/api/db/signals</code>).
+            </div>
+          </div>
+        ) : storedSignals.length === 0 ? (
           <div className="bg-gray-800 text-gray-400 p-8 rounded text-center">
             No signals yet
           </div>
