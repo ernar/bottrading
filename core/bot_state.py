@@ -104,6 +104,18 @@ class BotState:
                 self.positions[self._pos_key(symbol, position)] = position
             self.last_update = datetime.now().isoformat()
 
+    def sync_all_positions(self, positions: list) -> None:
+        """Reemplaza TODAS las posiciones (de todos los símbolos) por la lista
+        actual del bróker, de forma atómica. Lo usa el heartbeat para que el
+        dashboard refleje en vivo los cierres por TP/SL y el P/L flotante, sin
+        esperar a la rotación (que sincroniza símbolo a símbolo)."""
+        with self._lock:
+            self.positions = {
+                self._pos_key(self._pos_field(p, "symbol"), p): p
+                for p in (positions or [])
+            }
+            self.last_update = datetime.now().isoformat()
+
     def update_position(self, symbol: str, position) -> None:
         with self._lock:
             self.positions[self._pos_key(symbol, position)] = position

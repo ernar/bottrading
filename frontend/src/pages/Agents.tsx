@@ -81,6 +81,19 @@ export function AgentsPage() {
       .finally(() => setBusy(false))
   }
 
+  const activateAgent = (name: string) => {
+    setBusy(true)
+    fetch(`${API_URL}/api/agents/${name}/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
+      body: JSON.stringify({}),
+    })
+      .then(r => r.json())
+      .then(() => load())
+      .catch(() => {})
+      .finally(() => setBusy(false))
+  }
+
   const runOptimization = (apply: boolean) => {
     setBusy(true)
     fetch(`${API_URL}/api/agents/optimize`, {
@@ -96,6 +109,7 @@ export function AgentsPage() {
 
   const pct = (n: number) => `${(n * 100).toFixed(0)}%`
   const agents = overview?.agents || []
+  const available = overview?.available || []
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -233,6 +247,42 @@ export function AgentsPage() {
           </table>
         </div>
       </section>
+
+      {available.length > 0 && (
+        <section>
+          <h2 className="text-xl font-bold mb-1">Agentes inactivos</h2>
+          <p className="text-xs text-gray-500 mb-4">
+            Del catálogo, no cargados al arrancar. Actívalos para que analicen y propongan
+            entradas desde la siguiente rotación.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {available.map(a => (
+              <div key={a.name} className="bg-gray-800 rounded-lg border border-gray-700 p-4 flex flex-col gap-2">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-bold text-cyan-300">{a.name}</span>
+                  <span className="font-mono text-xs text-gray-400">{a.symbol}</span>
+                </div>
+                <p className="text-xs text-gray-400 flex-1">{a.description}</p>
+                <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
+                  <span className="font-mono">{a.provider}/{a.model}</span>
+                  {a.market_open === false ? (
+                    <span className="px-2 py-0.5 rounded bg-amber-900 text-amber-200">Cerrado</span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded bg-green-900 text-green-200">Abierto</span>
+                  )}
+                </div>
+                <button
+                  onClick={() => activateAgent(a.name)}
+                  disabled={busy}
+                  className="mt-1 px-3 py-2 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 font-semibold"
+                >
+                  Activar
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="text-xl font-bold mb-2">Última optimización</h2>

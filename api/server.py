@@ -447,6 +447,31 @@ def set_agent_enabled(name):
     return jsonify({"status": "ok", **result}), 200
 
 
+@app.route("/api/agents/<name>/activate", methods=["POST"])
+@require_token
+def activate_agent(name):
+    """Carga en caliente un agente del catálogo no seleccionado al arrancar, para
+    que analice desde la siguiente rotación. Body opcional:
+    {"provider": "gemini", "model": "gemini-3.5-flash"} para sobreescribir el LLM."""
+    if _orchestrator is None:
+        return jsonify({"error": "orchestrator not running"}), 503
+    body = request.get_json(silent=True) or {}
+    provider, model = body.get("provider"), body.get("model")
+    # Si se especifica LLM, validarlo contra lo disponible.
+    if provider or model:
+        providers = available_providers()
+        if provider not in providers or model not in providers.get(provider, []):
+            return jsonify({"error": f"provider/modelo no disponible: {provider}/{model}"}), 400
+    try:
+        result = _orchestrator.add_agent(name, provider=provider, model=model)
+    except KeyError:
+        return jsonify({"error": f"agente '{name}' no existe en el catálogo"}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
+    socketio.emit("agent_added", result)
+    return jsonify({"status": "ok", **result}), 200
+
+
 @app.route("/api/agents/optimize", methods=["POST"])
 @require_token
 def optimize_agents():
@@ -544,6 +569,12 @@ def broadcast_position_update(symbol, position_dict):
 
 def broadcast_account_update(account_dict):
     socketio.emit("account_update", account_dict)
+
+
+def broadcast_state_update():
+    """Emite el estado completo (incluye las posiciones ya sincronizadas) para
+    que el dashboard refleje en vivo los cierres por TP/SL y el P/L flotante."""
+    socketio.emit("state_update", bot_state.get_state())
 
 
 def broadcast_trade_closed(trade_dict):

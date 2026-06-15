@@ -303,11 +303,21 @@ class AgentOrchestrator:
         except Exception:  # noqa: BLE001
             pass
 
+    def _broadcast_state(self):
+        """Emite el estado completo (posiciones incluidas) por WebSocket. Import
+        perezoso para evitar el ciclo con api.server; nunca debe tumbar el bot."""
+        try:
+            from api.server import broadcast_state_update
+            broadcast_state_update()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _account_heartbeat(self):
-        """Bucle daemon: refresca la cuenta y la emite cada account_poll_seconds,
-        independiente del ciclo pesado (rotación + análisis LLM), para que el P/L
-        flotante del dashboard se mueva de forma fluida. Sigue emitiendo aunque el
-        bot esté en pausa (las posiciones abiertas siguen fluctuando)."""
+        """Bucle daemon: refresca la cuenta Y las posiciones y las emite cada
+        account_poll_seconds, independiente del ciclo pesado (rotación + análisis
+        LLM), para que el P/L flotante y los cierres por TP/SL se reflejen en vivo
+        en el dashboard sin esperar a la siguiente rotación. Sigue emitiendo aunque
+        el bot esté en pausa (las posiciones abiertas siguen fluctuando)."""
         if self.account_poll_seconds <= 0:
             return
         while True:
@@ -317,6 +327,12 @@ class AgentOrchestrator:
                 if info:
                     bot_state.update_account(info)
                     self._broadcast_account(info)
+                # Sincroniza TODAS las posiciones del bróker: refleja en vivo los
+                # cierres por TP/SL y el precio/P&L actual. La detección de cierres
+                # para el historial sigue en la rotación (hilo único, sin carrera).
+                positions = self.client.get_positions()
+                bot_state.sync_all_positions(positions or [])
+                self._broadcast_state()
             except Exception:  # noqa: BLE001 — un fallo puntual no debe matar el hilo
                 pass
 
@@ -1539,6 +1555,35 @@ class AgentOrchestrator:
         print(f"  [{name}] {estado} para las siguientes rotaciones.")
         return {"name": name, "symbol": agent.symbol, "enabled": agent.enabled}
 
+    def add_agent(self, name: str, provider: str | None = None,
+                  model: str | None = None) -> dict:
+        """Carga en caliente un agente del catálogo que NO se seleccionó al
+        arrancar, para que participe desde la siguiente rotación. Lo instancia
+        con su blueprint (provider/modelo por defecto, o los indicados), lo añade
+        a la lista de agentes, inicializa sus contadores y lo deja activado.
+
+        Lanza KeyError si el nombre no existe en el catálogo y ValueError si el
+        agente ya está cargado."""
+        from agents.registry import AGENT_BLUEPRINTS, build_agent
+
+        if name not in AGENT_BLUEPRINTS:
+            raise KeyError(name)
+        if any(a.name == name for a in self.agents):
+            raise ValueError(f"el agente '{name}' ya está cargado")
+        # Replica el modo debug de los agentes existentes (todos se construyen
+        # igual al arrancar); por defecto True como en build_agent.
+        debug_mode = getattr(self.agents[0], "debug_mode", True) if self.agents else True
+        agent = build_agent(name, debug_mode=debug_mode, provider=provider, model=model)
+        agent.enabled = True
+        self.agents.append(agent)
+        self.stats[agent.name] = {"signals": 0, "trades": 0, "holds": 0}
+        print(f"  [{name}] añadido en caliente [{agent.symbol}] "
+              f"{agent.params.provider.upper()}/{agent.params.model}; "
+              f"analizará desde la siguiente rotación.")
+        return {"name": agent.name, "symbol": agent.symbol,
+                "provider": agent.params.provider, "model": agent.params.model,
+                "enabled": agent.enabled}
+
     # ----- Exposición para el dashboard -----
 
     def agents_overview(self) -> dict:
@@ -1569,8 +1614,25 @@ class AgentOrchestrator:
                 "stats": self.stats[agent.name],
                 "performance": agent.memory.get_performance(agent.symbol),
             })
+        # Agentes del catálogo que NO están cargados: se ofrecen para activarlos
+        # en caliente desde el dashboard (participarán en la siguiente rotación).
+        from agents.registry import list_agents
+        loaded = {a.name for a in self.agents}
+        available = []
+        for bp in list_agents():
+            if bp.name in loaded:
+                continue
+            available.append({
+                "name": bp.name,
+                "symbol": bp.symbol,
+                "description": bp.description,
+                "provider": bp.params.provider,
+                "model": bp.params.model,
+                "market_open": self.client.is_market_open(bp.symbol),
+            })
         return {
             "agents": agents,
+            "available": available,
             "optimize_every_cycles": self.optimize_every_cycles,
             "last_optimization": self.last_optimization,
             "last_optimization_at": self.last_optimization_at,

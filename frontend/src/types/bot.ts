@@ -86,8 +86,18 @@ export interface OptimizationEntry {
   applied: boolean
 }
 
+export interface AvailableAgent {
+  name: string
+  symbol: string
+  description: string
+  provider: string
+  model: string
+  market_open: boolean
+}
+
 export interface AgentsOverview {
   agents: AgentInfo[]
+  available?: AvailableAgent[]
   optimize_every_cycles: number
   last_optimization: OptimizationEntry[] | null
   last_optimization_at: string | null
