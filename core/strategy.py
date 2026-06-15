@@ -185,13 +185,19 @@ Devuelve solo el JSON con el formato especificado."""
         }
 
     def validate_trade(self, signal: dict, positions: list = None, tick=None,
-                       spread_points: float = None, total_open_positions: int = None) -> bool:
+                       spread_points: float = None, total_open_positions: int = None,
+                       enforce_max_positions: bool = True) -> bool:
         """Valida señal antes de ejecutar. Devuelve False con el motivo impreso en debug.
 
         `positions` son las del símbolo (para no duplicar dirección). `spread_points`
         es el spread actual en puntos (filtro de coste). `total_open_positions` es el
         nº de posiciones de TODA la cuenta (límite global); si no se pasa, se usa el
-        recuento del símbolo como aproximación."""
+        recuento del símbolo como aproximación.
+
+        `enforce_max_positions`: si False, NO se aplica el límite global de número de
+        posiciones (`max_open_positions`). Lo usa la ruta coordinada para delegar esa
+        decisión a la mesa (que ya gobierna la exposición real vía RiskBook): así la
+        mesa puede abrir más posiciones si lo considera necesario."""
         def reject(reason: str) -> bool:
             if self.config.debug_mode:
                 print(f"  [Validación] Rechazada: {reason}")
@@ -215,7 +221,7 @@ Devuelve solo el JSON con el formato especificado."""
                   f"{self.config.max_pos_override_confidence:.0%}: se salta el límite de posiciones")
 
         open_count = total_open_positions if total_open_positions is not None else len(positions or [])
-        if (not override and self.config.max_open_positions
+        if (enforce_max_positions and not override and self.config.max_open_positions
                 and open_count >= self.config.max_open_positions):
             return reject(f"máximo de posiciones abiertas ({open_count}/{self.config.max_open_positions})")
         if (spread_points is not None and self.config.max_spread_filter

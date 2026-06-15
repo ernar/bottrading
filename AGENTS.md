@@ -54,7 +54,7 @@ Copia `.env.example` a `.env` y rellena valores. Variables clave:
 - **Riesgo:** `MAX_DAILY_LOSS_PCT` (cooldown de pérdida diaria; 0 = off), y muchos parámetros por
   agente con precedencia **símbolo > modelo > default** (p. ej. `MAX_OPEN_POSITIONS_BTCUSD`,
   `MIN_CONFIDENCE_BTCUSD`). Lista completa en `.env.example` y `.env.example.advanced`.
-- **Coordinador:** `COORDINATOR_ENABLED` (default on), `MAX_TOTAL_EXPOSURE_PCT`,
+- **Coordinador** (siempre activo): `MAX_TOTAL_EXPOSURE_PCT`,
   `MAX_SYMBOL_ALLOCATION_PCT`, `MAX_NET_DIRECTION_PCT`, `REVERSAL_DRAWDOWN_PCT`,
   `MAX_SYMBOL_LOSS_PCT`, `MIN_HOLD_SECONDS` (default 300).
 - **Cadencias (segundos):** `ROTATION_SECONDS` (60), `NEWS_POLL_SECONDS` (1800),
@@ -133,7 +133,8 @@ opcional (`use_risk_sizing` + `calculate_lot_size`) y override por confianza alt
 
 ### Coordinador / "mesa de dirección" (`agents/coordinator.py`)
 
-Capa por encima de los especialistas (toggle `COORDINATOR_ENABLED`, default on). Dos partes:
+Capa por encima de los especialistas, **SIEMPRE activa** (todo el flujo es coordinado; no existe
+ruta clásica — `AgentOrchestrator` exige `coordinator` y `risk_book`). Dos partes:
 
 - **`RiskBook`** (determinista, "tesorería"): `snapshot()` calcula equity/exposición por símbolo
   (nocional `volume×precio×contract_size`) y total (`used_margin/equity`); `clamp()` impone topes
@@ -143,9 +144,9 @@ Capa por encima de los especialistas (toggle `COORDINATOR_ENABLED`, default on).
   `position_action` (hold/reduce/close/hedge). **Fail-safe**: si el LLM falla, cae a una decisión
   determinista.
 
-Con coordinador activo el ciclo es: **recolectar** (`_gather_signal`) → **coordinar**
+El ciclo es: **recolectar** (`_gather_signal`) → **coordinar**
 (`RiskBook.snapshot` → `decide` → `clamp`) → **ejecutar** por prioridad (`_execute_decision`).
-Sin coordinador usa la ruta clásica `_run_agent`. Estado en `coordinator_overview()` →
+Estado en `coordinator_overview()` →
 `GET /api/coordinator`; `POST /api/coordinator/decide` fuerza decisión **dry-run**; evento WS
 `coordinator_decision`. Frontend: pestaña **"Mesa"** (`frontend/src/pages/Coordinator.tsx`).
 

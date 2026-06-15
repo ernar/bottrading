@@ -211,8 +211,12 @@ class AgentOrchestrator:
         self.platform = platform
         # Cada cuántos ciclos auto-optimizar (0 = desactivado).
         self.optimize_every_cycles = optimize_every_cycles
-        # Coordinador (mesa de dirección). Si es None, el orquestador usa la
-        # ruta clásica por agente (comportamiento original, sin cartera global).
+        # Coordinador (mesa de dirección): SIEMPRE presente. Todo el flujo es
+        # coordinado — el RiskBook (topes duros) es la tesorería y el
+        # CoordinatorAgent (LLM, con fail-safe determinista) decide go/no-go.
+        if coordinator is None or risk_book is None:
+            raise ValueError("AgentOrchestrator requiere coordinator y risk_book: "
+                             "todo el flujo es coordinado (no hay ruta clásica).")
         self.coordinator = coordinator
         self.risk_book = risk_book
         # Contadores por agente: base para optimizar.
@@ -338,21 +342,20 @@ class AgentOrchestrator:
         disponibilidad de cada agente (símbolo presente en el broker) antes de
         la primera rotación."""
         print("\n" + console.header("ARRANQUE — REVISIÓN DE LA MESA", char="#"))
-        if self.risk_book is not None:
-            try:
-                snap = self.risk_book.snapshot(
-                    self.client, self.agents,
-                    day_start_equity=self._window_start_equity, in_cooldown=False)
-                exp = snap.get("total_exposure_pct", 0)
-                tope = snap.get("max_total_exposure_pct", 0)
-                print(console.kv("Equity", console.money(snap.get("equity", 0))))
-                print(console.kv("Exposición total",
-                                 f"{exp:.1%} {console.dim(f'/ tope {tope:.0%}')}"))
-                print(console.kv("Posiciones abiertas", snap.get("open_positions_total", 0)))
-                print(console.kv("Cobertura (hedge)",
-                                 console.ok("sí") if snap.get("hedging") else console.dim("no")))
-            except Exception as exc:  # noqa: BLE001 — el arranque nunca debe fallar
-                print(console.kv("Snapshot inicial", console.err(f"no disponible: {exc}")))
+        try:
+            snap = self.risk_book.snapshot(
+                self.client, self.agents,
+                day_start_equity=self._window_start_equity, in_cooldown=False)
+            exp = snap.get("total_exposure_pct", 0)
+            tope = snap.get("max_total_exposure_pct", 0)
+            print(console.kv("Equity", console.money(snap.get("equity", 0))))
+            print(console.kv("Exposición total",
+                             f"{exp:.1%} {console.dim(f'/ tope {tope:.0%}')}"))
+            print(console.kv("Posiciones abiertas", snap.get("open_positions_total", 0)))
+            print(console.kv("Cobertura (hedge)",
+                             console.ok("sí") if snap.get("hedging") else console.dim("no")))
+        except Exception as exc:  # noqa: BLE001 — el arranque nunca debe fallar
+            print(console.kv("Snapshot inicial", console.err(f"no disponible: {exc}")))
 
         available = set(self.client.get_symbols() or [])
         print(console.dim("  Disponibilidad de agentes:"))
@@ -366,53 +369,23 @@ class AgentOrchestrator:
                 estado = console.ok("disponible")
             print(f"    {console.dim('·')} {agent.name} [{console.info(agent.symbol)}]: {estado}")
 
-        mode = "mesa de dirección" if self.coordinator is not None else "clásico por agente"
-        print(console.kv("Modo", console.accent(mode)))
+        print(console.kv("Modo", console.accent("mesa de dirección")))
         print(console.dim(f"  Cadencias: rotación {self.rotation_seconds}s · "
                           f"noticias {self.news_poll_seconds // 60}min · "
                           f"junta {self.junta_interval_seconds // 60}min · "
                           f"reporte {self.report_interval_seconds // 60}min."))
 
     def _run_rotation(self, forced_symbols: set):
-        """Una rotación: con coordinador, ciclo coordinado; sin él, ruta clásica.
+        """Una rotación: ciclo coordinado (recolectar → coordinar → ejecutar).
         Los símbolos en `forced_symbols` (noticia RED) se analizan saltándose el
-        throttle, incluso si la cuenta está en su máximo global de posiciones."""
+        throttle."""
         self._rotation_count += 1
         forced_tag = (console.warn(f" · forzados: {', '.join(sorted(forced_symbols))}")
                       if forced_symbols else "")
         print("\n" + console.rule(
             f"Rotación #{self._rotation_count} · {time.strftime('%H:%M:%S')}{forced_tag}",
             style=console.info))
-
-        if self.coordinator is not None:
-            self._run_coordinated_cycle(force_symbols=forced_symbols)
-            return
-
-        # Ruta clásica: si estamos en el máximo global y no hay símbolos forzados
-        # por noticias, saltamos el análisis (ahorro de LLM) pero seguimos con
-        # junta/reporte/optimización del bucle.
-        all_positions = self.client.get_positions() or []
-        max_global = max((a.params.max_open_positions for a in self.agents), default=0)
-        at_global_max = bool(max_global) and len(all_positions) >= max_global
-        if at_global_max and not forced_symbols:
-            symbols_profit = {}
-            for p in all_positions:
-                sym = _pos_get(p, "symbol", default="?")
-                profit = _pos_to_float(_pos_get(p, "profit"))
-                symbols_profit[sym] = symbols_profit.get(sym, 0.0) + profit
-            total_profit = sum(symbols_profit.values())
-            print(f"\n  {console.warn('⏭️ Máximo global de posiciones')} "
-                  f"({max_global}) alcanzado.")
-            print(f"  💰 Profit no realizado total: {console.pnl(total_profit)}")
-            for sym, prof in sorted(symbols_profit.items()):
-                print(f"     {sym}: {console.pnl(prof)}")
-            return
-
-        for agent in self.agents:
-            forced = agent.symbol in forced_symbols
-            if at_global_max and not forced:
-                continue
-            self._run_agent(agent, force=forced)
+        self._run_coordinated_cycle(force_symbols=forced_symbols)
 
     def _poll_red_news(self) -> set:
         """Sondea noticias de alto impacto (RED) de los símbolos con agente.
@@ -757,7 +730,7 @@ class AgentOrchestrator:
         conf = signal.get("confidence", 0) or 0
         trend = signal.get("trend", "N/A")
         risk = signal.get("risk_level", "N/A")
-        label = "📨 reporte → mesa" if self.coordinator is not None else "📨 señal"
+        label = "📨 reporte → mesa"
         dot = console.dim("·")
         head = (f"  {console.accent(label)}: {console.side(action)} "
                 f"{dot} conf {conf:.0%} {dot} tendencia {trend} {dot} riesgo {risk}")
@@ -871,10 +844,13 @@ class AgentOrchestrator:
             return 0.0
         return min(volume, max_lots)
 
-    def _open_from_signal(self, agent, signal, scale: float = 1.0) -> bool:
+    def _open_from_signal(self, agent, signal, scale: float = 1.0,
+                          enforce_max_positions: bool = True) -> bool:
         """Valida y ejecuta una entrada a partir de la señal. `scale` (0..1)
-        reduce el lote base según la asignación del coordinador. Devuelve True
-        si la orden se ejecutó."""
+        reduce el lote base según la asignación del coordinador. `enforce_max_positions`
+        en False (ruta coordinada) delega el límite global de número de posiciones a
+        la mesa, que ya gobierna la exposición real (RiskBook) y puede abrir más si lo
+        considera necesario. Devuelve True si la orden se ejecutó."""
         symbol = agent.symbol
         base_volume = agent.resolve_volume(self.client, signal)
         volume = base_volume if scale >= 1.0 else self._scale_volume(symbol, base_volume, scale)
@@ -886,7 +862,8 @@ class AgentOrchestrator:
         spread_points = self._spread_points(symbol, tick)
         total_open = len(self.client.get_positions() or [])
         if not agent.validate(signal, positions, tick=tick,
-                              spread_points=spread_points, total_open_positions=total_open):
+                              spread_points=spread_points, total_open_positions=total_open,
+                              enforce_max_positions=enforce_max_positions):
             print("  " + console.warn("⚠ Señal no validada para ejecución."))
             return False
 
@@ -940,25 +917,6 @@ class AgentOrchestrator:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
             print("  " + console.err(f"✗ Error al ejecutar orden: {err}"))
         return False
-
-    def _run_agent(self, agent, force: bool = False):
-        """Ruta clásica (sin coordinador): un agente analiza y ejecuta su propia
-        señal de forma aislada. `force` (noticia RED) salta el throttle de
-        análisis."""
-        signal = self._gather_signal(agent, force=force)
-        if not signal:
-            return
-
-        if signal["action"] == "HOLD":
-            return
-        self._print_signal_details(agent, signal)
-        # En cooldown por pérdida diaria la señal queda registrada (memoria y
-        # contexto) pero NO se abre operación: esperamos al cierre de las abiertas.
-        if self._risk_cooldown_active():
-            print("  " + console.warn("Cooldown por pérdida diaria: señal registrada, "
-                                       "no se abre operación."))
-            return
-        self._open_from_signal(agent, signal)
 
     # ----- Ciclo coordinado (mesa de dirección) -----
 
@@ -1048,7 +1006,10 @@ class AgentOrchestrator:
             if reason:
                 print(console.dim(f"     {reason}"))
             self._print_signal_details(agent, signal)
-            self._open_from_signal(agent, signal, scale=self._alloc_to_scale(alloc))
+            # La mesa ya aprobó: el límite global de número de posiciones lo decide
+            # ella (gobierna la exposición real vía RiskBook), no el filtro per-agente.
+            self._open_from_signal(agent, signal, scale=self._alloc_to_scale(alloc),
+                                   enforce_max_positions=False)
         else:
             motivo = decision.get("clamp") or decision.get("reason", "decisión del coordinador")
             print(f"  {console.err('✗ [Mesa] Entrada VETADA')} en {symbol}: {console.dim(motivo)}")
@@ -1210,8 +1171,6 @@ class AgentOrchestrator:
         Usa las últimas señales conocidas de cada símbolo (bot_state), sin
         relanzar el análisis LLM de los especialistas, para que sea seguro
         llamarla desde el hilo del API. Almacena y emite el resultado."""
-        if self.coordinator is None or self.risk_book is None:
-            return {"enabled": False}
         state = bot_state.get_state()
         signals = dict(state.get("signals", {}) or {})
         in_cooldown = self._risk_cooldown_active()
@@ -1233,8 +1192,6 @@ class AgentOrchestrator:
         sobre las posiciones abiertas y gestiona (close/reduce/hedge) respetando
         `can_close`. No abre entradas nuevas (usaría señales potencialmente
         viejas): para eso está la rotación."""
-        if self.risk_book is None:
-            return
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
             self.client, self.agents,
@@ -1242,15 +1199,6 @@ class AgentOrchestrator:
 
         print("\n" + console.header("JUNTA DE LA MESA · revisión global del libro", char="#"))
         self.last_junta_at = time.strftime("%Y-%m-%d %H:%M:%S")
-
-        # Sin coordinador: resumen determinista (sin LLM).
-        if self.coordinator is None:
-            self._print_coordination({"rationale": "junta sin coordinador (resumen determinista)",
-                                      "decisions": []}, snapshot)
-            self._store_coordination(
-                snapshot, {"rationale": "junta sin coordinador (resumen determinista)",
-                           "decisions": []})
-            return
 
         state = bot_state.get_state()
         signals = dict(state.get("signals", {}) or {})
@@ -1270,14 +1218,13 @@ class AgentOrchestrator:
         lo imprime y lo guarda para el dashboard; el envío puede estar apagado."""
         account = self.client.get_account_info() or {}
         snapshot = None
-        if self.risk_book is not None:
-            try:
-                snapshot = self.risk_book.snapshot(
-                    self.client, self.agents,
-                    day_start_equity=self._window_start_equity,
-                    in_cooldown=self._risk_cooldown_active())
-            except Exception:  # noqa: BLE001 — el reporte nunca debe tumbar el bot
-                snapshot = None
+        try:
+            snapshot = self.risk_book.snapshot(
+                self.client, self.agents,
+                day_start_equity=self._window_start_equity,
+                in_cooldown=self._risk_cooldown_active())
+        except Exception:  # noqa: BLE001 — el reporte nunca debe tumbar el bot
+            snapshot = None
         state = bot_state.get_state()
 
         from core.reporting import build_report
@@ -1402,11 +1349,50 @@ class AgentOrchestrator:
             "last_optimization_at": self.last_optimization_at,
         }
 
+    def reload_runtime_config(self) -> None:
+        """Re-lee la config del .env (ya volcada en os.environ por el editor de
+        ajustes) y la aplica EN CALIENTE a los objetos vivos: RiskBook, director
+        LLM, cadencias del planificador y guardias de riesgo. Las claves que solo
+        se leen al arrancar (credenciales, modelo, NEWS_ENABLED…) no se tocan aquí
+        —el editor las marca como 'requiere reinicio'."""
+        from core.config import get_coordinator_config, get_schedule_config
+
+        # --- Cadencias del planificador ---
+        sched = get_schedule_config()
+        self.schedule_cfg = sched  # el reporte (SMTP) lee de aquí
+        self.rotation_seconds = sched.get("rotation_seconds", self.rotation_seconds)
+        self.news_poll_seconds = sched.get("news_poll_seconds", self.news_poll_seconds)
+        self.junta_interval_seconds = sched.get("junta_interval_seconds", self.junta_interval_seconds)
+        self.report_interval_seconds = sched.get("report_interval_seconds", self.report_interval_seconds)
+
+        # --- Guardias de riesgo / análisis (atributos del orquestador) ---
+        self.max_daily_loss_pct = float(os.getenv("MAX_DAILY_LOSS_PCT", "0") or 0)
+        self.risk_loss_window_seconds = float(
+            os.getenv("RISK_LOSS_WINDOW_SECONDS", str(6 * 3600)) or (6 * 3600))
+        self.parallel_analysis = (
+            os.getenv("PARALLEL_ANALYSIS", "true").lower() in ("1", "true", "yes", "on"))
+
+        # --- RiskBook (topes duros del coordinador) ---
+        cfg = get_coordinator_config()
+        self.risk_book.max_total_exposure_pct = float(cfg["max_total_exposure_pct"])
+        self.risk_book.max_symbol_allocation_pct = float(cfg["max_symbol_allocation_pct"])
+        self.risk_book.can_close = bool(cfg["can_close"])
+        self.risk_book.llm_can_close = bool(cfg["llm_can_close"])
+        self.risk_book.max_net_direction_pct = float(cfg["max_net_direction_pct"])
+        self.risk_book.reversal_drawdown_pct = float(cfg["reversal_drawdown_pct"])
+        self.risk_book.max_symbol_loss_pct = float(cfg["max_symbol_loss_pct"])
+        self.risk_book.min_hold_seconds = float(cfg["min_hold_seconds"])
+        # Temperatura del director (best-effort: el motor puede cachearla).
+        engine = getattr(self.coordinator, "engine", None)
+        if engine is not None and hasattr(engine, "temperature"):
+            try:
+                engine.temperature = float(cfg["temperature"])
+            except (ValueError, TypeError):
+                pass
+
     def coordinator_overview(self) -> dict:
-        """Estado del coordinador para el dashboard (/api/coordinator). Si no hay
-        coordinador activo, {"enabled": False}."""
-        if self.coordinator is None or self.risk_book is None:
-            return {"enabled": False}
+        """Estado del coordinador para el dashboard (/api/coordinator). La mesa
+        está siempre activa (`enabled` se mantiene por compatibilidad del API)."""
         return {
             "enabled": True,
             "provider": self.coordinator.provider,

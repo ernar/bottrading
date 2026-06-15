@@ -119,12 +119,8 @@ def select_coordinator_llm(agents: list, cfg: dict) -> tuple:
     """Elige el LLM del coordinador (mesa de dirección) reutilizando select_llm.
 
     Default: COORDINATOR_PROVIDER/COORDINATOR_MODEL del .env y, si están vacíos,
-    el LLM del primer agente. Devuelve (provider, model) o (None, None) si el
-    coordinador está desactivado."""
-    if not cfg["enabled"]:
-        print(console.dim("\n  Coordinador desactivado (COORDINATOR_ENABLED=false): "
-                          "modo clásico por agente."))
-        return None, None
+    el LLM del primer agente. La mesa SIEMPRE está activa (todo el flujo es
+    coordinado), así que siempre devuelve un (provider, model)."""
     print("\n" + console.header("LLM DEL COORDINADOR (MESA DE DIRECCIÓN)"))
     default_provider = cfg["provider"] or agents[0].params.provider
     default_model = cfg["model"] or agents[0].params.model
@@ -224,17 +220,15 @@ def main():
     print(console.kv("Agentes activos", console.bold(activos)))
     print(console.dim("  Presiona Ctrl+C para detener"))
 
-    # Mesa de dirección: el RiskBook (topes duros) es la tesorería; el
-    # CoordinatorAgent (LLM) reparte capital y decide go/no-go por símbolo. Si
-    # el coordinador está desactivado, el orquestador usa la ruta clásica.
+    # Mesa de dirección (SIEMPRE activa): el RiskBook (topes duros) es la
+    # tesorería; el CoordinatorAgent (LLM, con fail-safe determinista) reparte
+    # capital y decide go/no-go por símbolo. Todo el flujo es coordinado.
     risk_book = RiskBook(coordinator_cfg)
-    coordinator = None
-    if coordinator_cfg["enabled"] and coord_provider and coord_model:
-        coordinator = CoordinatorAgent(
-            provider=coord_provider, model=coord_model,
-            risk_book=risk_book, temperature=coordinator_cfg["temperature"])
-        print(console.kv("Mesa de dirección",
-                         f"{console.ok('activa')} con {console.bold(f'{coord_provider.upper()}/{coord_model}')}"))
+    coordinator = CoordinatorAgent(
+        provider=coord_provider, model=coord_model,
+        risk_book=risk_book, temperature=coordinator_cfg["temperature"])
+    print(console.kv("Mesa de dirección",
+                     f"{console.ok('activa')} con {console.bold(f'{coord_provider.upper()}/{coord_model}')}"))
 
     # Planificador de cadencias: rotación (tick base), sonda de noticias RED,
     # junta horaria y reporte periódico. Ver get_schedule_config().

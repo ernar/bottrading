@@ -7,6 +7,7 @@ import {
   hasUrlOverride,
   ENV_API_URL,
 } from '../config'
+import { BotSettings } from '../components/BotSettings'
 
 // Cabeceras para el test: usa el token escrito (aún sin guardar) + skip de ngrok.
 const ngrokSkip = { 'ngrok-skip-browser-warning': 'true' }
@@ -166,6 +167,8 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+
+      <BotSettings />
     </div>
   )
 }

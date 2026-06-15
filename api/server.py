@@ -243,6 +243,46 @@ def coordinator_decide():
     return jsonify(result), 200
 
 
+@app.route("/api/settings", methods=["GET"])
+@require_token
+def get_settings():
+    """Devuelve el esquema de ajustes editables del .env con su valor actual.
+    Los secretos no incluyen valor (solo `is_set`). Protegido por API_TOKEN."""
+    from core.settings_schema import read_settings
+    return jsonify({"settings": read_settings()}), 200
+
+
+@app.route("/api/settings", methods=["POST"])
+@require_token
+def update_settings():
+    """Escribe ajustes en el .env y los aplica EN CALIENTE donde se puede.
+    Body: {"updates": {KEY: value, ...}}. Los secretos vacíos no se sobrescriben.
+    Responde con las claves cambiadas y cuáles requieren reiniciar el bot."""
+    from core.settings_schema import validate_and_serialize, write_env, restart_required
+    body = request.get_json(silent=True) or {}
+    updates = body.get("updates", body)  # tolera el dict plano
+    try:
+        serialized = validate_and_serialize(updates)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not serialized:
+        return jsonify({"changed": [], "restart_required": [], "applied_hot": []}), 200
+    changed = write_env(serialized)
+    needs_restart = restart_required(changed)
+    # Aplica en caliente lo que se pueda sobre el orquestador vivo.
+    if _orchestrator is not None and hasattr(_orchestrator, "reload_runtime_config"):
+        try:
+            _orchestrator.reload_runtime_config()
+        except Exception as e:  # noqa: BLE001 — nunca tumbar la API por esto
+            logger.warning("reload_runtime_config falló: %s", e)
+    applied_hot = [k for k in changed if k not in needs_restart]
+    return jsonify({
+        "changed": changed,
+        "restart_required": needs_restart,
+        "applied_hot": applied_hot,
+    }), 200
+
+
 @app.route("/api/models", methods=["GET"])
 def get_models():
     """Proveedores/modelos LLM disponibles según las claves del .env.

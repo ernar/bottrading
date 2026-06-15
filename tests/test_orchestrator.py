@@ -50,7 +50,11 @@ def test_pos_direction_normaliza_mt4():
 
 def _orch():
     # El __init__ no usa el cliente; basta con un placeholder para estos tests.
-    orch = AgentOrchestrator([], client=None, platform="mt4")
+    # La mesa es obligatoria (todo el flujo es coordinado): placeholders simples
+    # bastan, el __init__ solo asigna atributos al risk_book y lee coordinator.engine.
+    orch = AgentOrchestrator([], client=None, platform="mt4",
+                             coordinator=SimpleNamespace(),
+                             risk_book=SimpleNamespace())
     orch.max_daily_loss_pct = 0.05
     orch.risk_loss_window_seconds = 6 * 3600
     # Ventana ya abierta con equity base de referencia (no expirada).

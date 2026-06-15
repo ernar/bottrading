@@ -161,10 +161,9 @@ def get_coordinator_config() -> dict:
     """Configuración del coordinador (mesa de dirección) desde .env.
 
     El coordinador es una capa por encima de los agentes especialistas que
-    reparte capital y decide go/no-go por símbolo. Variables soportadas:
+    reparte capital y decide go/no-go por símbolo. La mesa está SIEMPRE activa
+    (todo el flujo es coordinado; no existe ruta clásica). Variables soportadas:
 
-    - COORDINATOR_ENABLED (bool, default True): activa la capa coordinadora.
-      Si está desactivado, el orquestador usa la ruta clásica por agente.
     - COORDINATOR_PROVIDER / COORDINATOR_MODEL: LLM del coordinador. Si están
       vacíos, en main.py se hereda el LLM del primer agente como default.
     - COORDINATOR_CAN_CLOSE (bool, default True): permite cerrar/reducir
@@ -199,7 +198,6 @@ def get_coordinator_config() -> dict:
       hard-stop catastrófico (MAX_SYMBOL_LOSS_PCT) rompe la gracia. 0 = off.
     """
     return {
-        "enabled": _env_bool("COORDINATOR_ENABLED", True),
         "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
         "model": os.getenv("COORDINATOR_MODEL", "").strip(),
         "can_close": _env_bool("COORDINATOR_CAN_CLOSE", True),
