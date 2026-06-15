@@ -14,6 +14,7 @@ from agents.orchestrator import AgentOrchestrator
 from agents.coordinator import RiskBook, CoordinatorAgent
 from core.llm_config import available_providers
 from core.config import get_coordinator_config, get_schedule_config
+from core.mt4_launcher import relogin_terminal
 
 load_dotenv()
 
@@ -115,18 +116,20 @@ def select_agents() -> list:
     return agents
 
 
-def select_coordinator_llm(agents: list, cfg: dict) -> tuple:
-    """Elige el LLM del coordinador (mesa de dirección) reutilizando select_llm.
+# El coordinador (mesa de dirección) usa SIEMPRE este LLM, sin preguntar.
+COORDINATOR_PROVIDER = "gemini"
+COORDINATOR_MODEL = "gemini-3.5-flash"
 
-    Default: COORDINATOR_PROVIDER/COORDINATOR_MODEL del .env y, si están vacíos,
-    el LLM del primer agente. La mesa SIEMPRE está activa (todo el flujo es
-    coordinado), así que siempre devuelve un (provider, model)."""
+
+def select_coordinator_llm(agents: list, cfg: dict) -> tuple:
+    """LLM del coordinador (mesa de dirección): SIEMPRE gemini-3.5-flash.
+
+    La mesa está siempre activa y su director es fijo (no se pregunta ni se
+    hereda del agente). Devuelve siempre (gemini, gemini-3.5-flash)."""
     print("\n" + console.header("LLM DEL COORDINADOR (MESA DE DIRECCIÓN)"))
-    default_provider = cfg["provider"] or agents[0].params.provider
-    default_model = cfg["model"] or agents[0].params.model
-    provider, model = select_llm(default_provider, default_model)
-    print(f"  {console.ok('✓')} Coordinador usará {console.bold(f'{provider.upper()}/{model}')}")
-    return provider, model
+    print(f"  {console.ok('✓')} Coordinador usará "
+          f"{console.bold(f'{COORDINATOR_PROVIDER.upper()}/{COORDINATOR_MODEL}')} (fijo)")
+    return COORDINATOR_PROVIDER, COORDINATOR_MODEL
 
 
 def _is_port_in_use(port: int) -> bool:
@@ -165,6 +168,10 @@ def main():
     # LLM del coordinador (prompt de consola, va con el resto de la selección).
     coordinator_cfg = get_coordinator_config()
     coord_provider, coord_model = select_coordinator_llm(agents, coordinator_cfg)
+
+    # Relogin de la cuenta MT4: cierra y relanza el terminal con auto-login
+    # (credenciales del .env). Se omite si MT4_TERMINAL_PATH no está configurado.
+    relogin_terminal()
 
     client = build_client()
     print(console.accent("\nPlataforma: MT4"))

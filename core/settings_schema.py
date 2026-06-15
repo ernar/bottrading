@@ -38,11 +38,8 @@ SETTINGS_SCHEMA: list[dict] = [
 
     # --- Coordinador (mezcla hot/reinicio) ---
     # La mesa de dirección está SIEMPRE activa (todo el flujo es coordinado): no
-    # hay toggle para desactivarla.
-    {"key": "COORDINATOR_PROVIDER", "label": "Proveedor LLM director", "group": "Coordinador", "type": "str", "secret": False, "hot": False,
-     "help": "ollama / openai / gemini. Vacío = hereda el del primer agente."},
-    {"key": "COORDINATOR_MODEL", "label": "Modelo LLM director", "group": "Coordinador", "type": "str", "secret": False, "hot": False,
-     "help": "Modelo del director. Vacío = hereda el del primer agente."},
+    # hay toggle para desactivarla. El LLM director es FIJO (gemini-3.5-flash),
+    # por eso no se ofrece elegir proveedor/modelo aquí.
     {"key": "COORDINATOR_CAN_CLOSE", "label": "Cierre automático (kill-switch)", "group": "Coordinador", "type": "bool", "secret": False, "hot": True,
      "help": "Si es false, ni las guardias deterministas cierran posiciones."},
     {"key": "COORDINATOR_LLM_CAN_CLOSE", "label": "Gestión discrecional del LLM", "group": "Coordinador", "type": "bool", "secret": False, "hot": True,
@@ -90,6 +87,9 @@ SETTINGS_SCHEMA: list[dict] = [
     {"key": "MT4_PASSWORD", "label": "MT4 contraseña", "group": "Conexión / credenciales", "type": "str", "secret": True, "hot": False, "help": "Se guarda solo si escribes una nueva."},
     {"key": "MT4_HOST", "label": "MT4 host", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Host del puente/terminal."},
     {"key": "MT4_PORT", "label": "MT4 puerto", "group": "Conexión / credenciales", "type": "int", "secret": False, "hot": False, "help": "Puerto del puente."},
+    {"key": "MT4_SERVER", "label": "MT4 servidor", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Servidor del broker (relogin auto-login)."},
+    {"key": "MT4_TERMINAL_PATH", "label": "Ruta terminal.exe (relogin)", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Ruta a terminal.exe. Si se define, main.py reinicia el terminal con auto-login al arrancar."},
+    {"key": "MT4_RELOGIN_WAIT", "label": "Espera relogin (s)", "group": "Conexión / credenciales", "type": "int", "secret": False, "hot": False, "help": "Segundos a esperar tras relanzar el terminal. Default 12."},
     {"key": "MODEL", "label": "Modelo LLM por defecto", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Modelo base de los agentes. Requiere reinicio."},
     {"key": "SYMBOLS", "label": "Símbolos", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Lista de símbolos (coma). Requiere reinicio."},
     {"key": "API_HOST", "label": "API host", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "127.0.0.1 (local) o 0.0.0.0 (red, exige API_TOKEN)."},
