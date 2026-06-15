@@ -13,7 +13,8 @@ from agents.registry import list_agents, build_agent
 from agents.orchestrator import AgentOrchestrator
 from agents.coordinator import RiskBook, CoordinatorAgent
 from core.llm_config import available_providers
-from core.config import get_coordinator_config, get_schedule_config
+from core.config import get_coordinator_config, get_schedule_config, get_active_agents
+from agents.registry import AGENT_BLUEPRINTS
 from core.mt4_launcher import relogin_terminal
 
 load_dotenv()
@@ -58,9 +59,42 @@ def select_llm(default_provider: str, default_model: str) -> tuple[str, str]:
         print("    Opción inválida.")
 
 
+def _build_saved_agents() -> list:
+    """Reconstruye los agentes desde la selección guardada (ACTIVE_AGENTS en .env).
+    Omite nombres que ya no existan en el catálogo. Devuelve [] si no hay nada
+    válido guardado."""
+    saved = get_active_agents()
+    agents = []
+    for item in saved:
+        name = item["name"]
+        if name not in AGENT_BLUEPRINTS:
+            print("  " + console.warn(f"⚠ '{name}' guardado pero ya no está en el catálogo; omitido."))
+            continue
+        agent = build_agent(name, provider=item.get("provider"), model=item.get("model"))
+        agent.enabled = item.get("enabled", True)
+        agents.append(agent)
+    return agents
+
+
 def select_agents() -> list:
     """Lista los agentes especializados disponibles y, para cada uno elegido,
-    pregunta el provider/modelo LLM. Devuelve los agentes instanciados."""
+    pregunta el provider/modelo LLM. Devuelve los agentes instanciados.
+
+    Si hay una selección guardada (ACTIVE_AGENTS en .env, desde el botón
+    "Guardar selección" del dashboard), la ofrece como opción por defecto para no
+    tener que reelegir en cada arranque."""
+    saved_agents = _build_saved_agents()
+    if saved_agents:
+        print("\n" + console.header("SELECCIÓN DE AGENTES GUARDADA"))
+        for a in saved_agents:
+            estado = console.ok("ON") if getattr(a, "enabled", True) else console.dim("OFF")
+            print(f"  {console.ok('✓')} {console.bold(f'{a.name:<12}')} [{console.info(a.symbol)}] "
+                  f"{a.params.provider.upper()}/{a.params.model} · {estado}")
+        ans = input("\n¿Usar esta selección guardada? [S/n] (n = elegir manualmente): ").strip().lower()
+        if ans in ("", "s", "si", "sí", "y", "yes"):
+            return saved_agents
+        print(console.dim("  Selección manual..."))
+
     blueprints = list_agents()
 
     print("\n" + console.header("SELECCIONAR AGENTES"))

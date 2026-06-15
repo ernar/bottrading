@@ -37,6 +37,8 @@ export function AgentsPage() {
   const [busy, setBusy] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  // Feedback efímero tras guardar la selección de agentes.
+  const [savedMsg, setSavedMsg] = useState<string | null>(null)
 
   const load = useCallback(() => {
     fetch(`${API_URL}/api/agents`, { headers: getApiHeaders() })
@@ -107,6 +109,23 @@ export function AgentsPage() {
       .finally(() => setBusy(false))
   }
 
+  const saveSelection = () => {
+    setBusy(true)
+    fetch(`${API_URL}/api/agents/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
+      body: JSON.stringify({}),
+    })
+      .then(r => r.json())
+      .then((res) => {
+        const n = res?.saved?.length ?? 0
+        setSavedMsg(`Selección guardada (${n} agente${n === 1 ? '' : 's'}) — se reusará al reiniciar`)
+        setTimeout(() => setSavedMsg(null), 4000)
+      })
+      .catch(() => {})
+      .finally(() => setBusy(false))
+  }
+
   const runOptimization = (apply: boolean) => {
     setBusy(true)
     fetch(`${API_URL}/api/agents/optimize`, {
@@ -161,7 +180,16 @@ export function AgentsPage() {
       <section>
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h2 className="text-xl font-bold">Agentes activos</h2>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            {savedMsg && <span className="text-xs text-emerald-400">✓ {savedMsg}</span>}
+            <button
+              onClick={saveSelection}
+              disabled={busy}
+              title="Guarda los agentes cargados (modelo + ON/OFF) para reusarlos en el próximo arranque"
+              className="px-3 py-2 text-sm rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+            >
+              Guardar selección
+            </button>
             <button
               onClick={() => runOptimization(false)}
               disabled={busy}

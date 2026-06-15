@@ -100,6 +100,10 @@ class StrategyEngine:
         self.min_confidence = self.MIN_CONFIDENCE if min_confidence is None else min_confidence
         self.min_rr = self.MIN_RR if min_rr is None else min_rr
         self.temperature = temperature
+        # Directiva de estilo (perfil de riesgo + horizonte) inyectada en el prompt
+        # para que el LLM cambie REALMENTE su disposición. La fija el orquestador
+        # (_refresh_trading_directives) según el perfil activo; vacía = sin sesgo.
+        self.trading_directive = ""
         # Comisión: puede venir del parámetro o del config (defaulteado a 7.0).
         self.commission_per_lot = commission_per_lot if commission_per_lot is not None else config.commission_per_lot
         if self.provider == "ollama":
@@ -143,7 +147,9 @@ class StrategyEngine:
 Devuelve solo el JSON con el formato especificado."""
         system = SYSTEM_PROMPT
         if self.system_suffix:
-            system = f"{SYSTEM_PROMPT}\n\n--- Especialización del agente ---\n{self.system_suffix}"
+            system = f"{system}\n\n--- Especialización del agente ---\n{self.system_suffix}"
+        if self.trading_directive:
+            system = f"{system}\n\n--- Estilo de operación (perfil activo) ---\n{self.trading_directive}"
         return self._call_ai(system, user_prompt)
 
     @staticmethod

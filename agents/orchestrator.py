@@ -227,8 +227,22 @@ class AgentOrchestrator:
                              "todo el flujo es coordinado (no hay ruta clásica).")
         self.coordinator = coordinator
         self.risk_book = risk_book
-        # Contadores por agente: base para optimizar.
+        # Contadores por agente: base para optimizar. Se restauran de la DB para
+        # que el resumen del dashboard (señales/trades/holds) SOBREVIVA a los
+        # reinicios del bot (antes vivían solo en memoria y se perdían).
         self.stats = {a.name: {"signals": 0, "trades": 0, "holds": 0} for a in agents}
+        try:
+            from core.db import load_agent_stats
+            saved = load_agent_stats()
+            for name in self.stats:
+                if name in saved:
+                    self.stats[name] = saved[name]
+        except Exception:
+            pass
+        # Inyecta la directiva del perfil activo (riesgo + horizonte) en los prompts
+        # del especialista y de la mesa, para que el LLM cambie de disposición desde
+        # el primer ciclo (no solo al mover el selector en vivo).
+        self._refresh_trading_directives()
         # Reporte de la última optimización (para exponer al dashboard).
         self.last_optimization = None
         self.last_optimization_at = None
@@ -476,6 +490,9 @@ class AgentOrchestrator:
         # determinista y previa al análisis: asegura beneficio en lo ya abierto.
         self._manage_position_lifecycle()
         self._run_coordinated_cycle(force_symbols=forced_symbols)
+        # Persiste los contadores por agente para que el resumen del dashboard
+        # sobreviva a los reinicios (señales/trades/holds). Fail-safe.
+        self._persist_stats()
 
     def _poll_red_news(self) -> set:
         """Sondea noticias de alto impacto (RED) de los símbolos con agente.
@@ -1703,6 +1720,36 @@ class AgentOrchestrator:
                 "provider": agent.params.provider, "model": agent.params.model,
                 "enabled": agent.enabled}
 
+    def _refresh_trading_directives(self) -> None:
+        """Inyecta la directiva del perfil activo (riesgo + horizonte) en los prompts
+        del especialista (`agent.strategy.trading_directive`) y de la mesa
+        (`coordinator.risk_directive`). Es lo que hace que el perfil cambie de
+        verdad el comportamiento del LLM (los topes/umbrales solo filtran).
+        Fail-safe: no propaga errores."""
+        try:
+            from core.profiles import (get_active_risk, get_active_horizon,
+                                       build_agent_directive, build_coordinator_directive)
+            risk, horizon = get_active_risk(), get_active_horizon()
+            agent_directive = build_agent_directive(risk, horizon)
+            coord_directive = build_coordinator_directive(risk, horizon)
+            for agent in self.agents:
+                strat = getattr(agent, "strategy", None)
+                if strat is not None:
+                    strat.trading_directive = agent_directive
+            if self.coordinator is not None:
+                self.coordinator.risk_directive = coord_directive
+        except Exception as e:
+            print(f"  refresh de directivas de perfil falló: {e}")
+
+    def _persist_stats(self) -> None:
+        """Vuelca los contadores por agente a la DB (upsert). Fail-safe: nunca
+        tumba el bucle por un fallo de persistencia."""
+        try:
+            from core.db import save_agent_stats
+            save_agent_stats(self.stats)
+        except Exception:
+            pass
+
     # ----- Exposición para el dashboard -----
 
     def agents_overview(self) -> dict:
@@ -1794,6 +1841,9 @@ class AgentOrchestrator:
         self.risk_book.reversal_drawdown_pct = float(cfg["reversal_drawdown_pct"])
         self.risk_book.max_symbol_loss_pct = float(cfg["max_symbol_loss_pct"])
         self.risk_book.min_hold_seconds = float(cfg["min_hold_seconds"])
+        # Rango del R:R objetivo (lo mueve el selector de horizonte).
+        self.risk_book.tp_rr_min = float(cfg["tp_rr_min"])
+        self.risk_book.tp_rr_max = float(cfg["tp_rr_max"])
         # Temperatura del director (best-effort: el motor puede cachearla).
         engine = getattr(self.coordinator, "engine", None)
         if engine is not None and hasattr(engine, "temperature"):
@@ -1801,6 +1851,9 @@ class AgentOrchestrator:
                 engine.temperature = float(cfg["temperature"])
             except (ValueError, TypeError):
                 pass
+        # Re-inyecta la directiva del perfil (riesgo + horizonte) en los prompts: al
+        # cambiar de perfil en vivo, el LLM debe cambiar de disposición YA.
+        self._refresh_trading_directives()
 
         # --- Parámetros de los agentes (umbrales de señal) ---
         # Re-aplica en caliente los overrides de .env (incluidas las claves
@@ -1831,9 +1884,12 @@ class AgentOrchestrator:
             "reversal_drawdown_pct": self.risk_book.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.risk_book.max_symbol_loss_pct,
             "min_hold_seconds": self.risk_book.min_hold_seconds,
-            # Perfil de riesgo activo (selector del dashboard). "moderate" si no
-            # se ha fijado ninguno.
+            # Perfil de riesgo y horizonte activos (selectores del dashboard).
             "risk_profile": os.getenv("RISK_PROFILE", "moderate").strip() or "moderate",
+            "horizon": os.getenv("HORIZON", "medio").strip() or "medio",
+            # Params de duración (los mueve el horizonte) para mostrarlos en el front.
+            "tp_rr_min": self.risk_book.tp_rr_min,
+            "tp_rr_max": self.risk_book.tp_rr_max,
             "last_coordination": self.last_coordination,
             "last_coordination_at": self.last_coordination_at,
             "last_junta_at": self.last_junta_at,

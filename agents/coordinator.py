@@ -594,6 +594,10 @@ class CoordinatorAgent:
         config = BotConfig(model=model, debug_mode=debug_mode)
         self.engine = StrategyEngine(config, provider=provider, temperature=temperature)
         self.last_rationale = ""
+        # Directiva de apetito (perfil de riesgo + horizonte) inyectada en el prompt
+        # de la mesa para que el LLM director cambie REALMENTE su disposición. La
+        # fija el orquestador (_refresh_trading_directives); vacía = sin sesgo.
+        self.risk_directive = ""
 
     # ----- API principal -----
 
@@ -604,8 +608,11 @@ class CoordinatorAgent:
         LLM falla o el JSON es inválido, cae a una decisión determinista."""
         raw = None
         if signals or snapshot.get("open_positions_total"):
+            system = COORDINATOR_SYSTEM_PROMPT
+            if self.risk_directive:
+                system = f"{system}\n\n--- Apetito de la mesa (perfil activo) ---\n{self.risk_directive}"
             raw = self.engine.chat_json(
-                COORDINATOR_SYSTEM_PROMPT,
+                system,
                 self._build_user_prompt(snapshot, signals, agents_overview, news_context),
             )
         parsed = self._parse(raw) if raw else None

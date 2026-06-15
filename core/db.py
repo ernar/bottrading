@@ -152,6 +152,19 @@ class RiskFirstSeen(Base):
     first_seen: Mapped[float] = mapped_column(Float)
 
 
+class AgentStat(Base):
+    """Contadores acumulados por agente (señales/trades/holds) para que el
+    resumen del dashboard SOBREVIVA a los reinicios del bot (antes solo vivían en
+    memoria y se perdían). Clave = nombre del agente."""
+    __tablename__ = "agent_stats"
+
+    agent: Mapped[str] = mapped_column(String(64), primary_key=True)
+    signals: Mapped[int] = mapped_column(Integer, default=0)
+    trades: Mapped[int] = mapped_column(Integer, default=0)
+    holds: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 # Índices por consulta habitual (plataforma + símbolo + tiempo).
 Index("ix_signals_query", Signal.platform, Signal.symbol, Signal.timestamp)
 Index("ix_trades_query", Trade.platform, Trade.symbol, Trade.timestamp)
@@ -226,3 +239,34 @@ def session_scope():
         raise
     finally:
         session.close()
+
+
+# ----- Contadores por agente (persistencia del resumen del dashboard) -----
+
+def load_agent_stats() -> dict:
+    """Devuelve {agent: {"signals", "trades", "holds"}} desde la DB para
+    restaurar los contadores al arrancar. Fail-safe: ante error devuelve {}."""
+    try:
+        with session_scope() as s:
+            return {r.agent: {"signals": r.signals, "trades": r.trades, "holds": r.holds}
+                    for r in s.query(AgentStat).all()}
+    except Exception:
+        return {}
+
+
+def save_agent_stats(stats: dict) -> None:
+    """Upsert de los contadores por agente. Fail-safe (no propaga errores: el
+    bucle del bot no debe caerse por un fallo de persistencia)."""
+    try:
+        with session_scope() as s:
+            for name, c in (stats or {}).items():
+                row = s.get(AgentStat, name)
+                if row is None:
+                    row = AgentStat(agent=name)
+                    s.add(row)
+                row.signals = int(c.get("signals", 0) or 0)
+                row.trades = int(c.get("trades", 0) or 0)
+                row.holds = int(c.get("holds", 0) or 0)
+                row.updated_at = datetime.now()
+    except Exception:
+        pass

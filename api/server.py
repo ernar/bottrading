@@ -278,67 +278,17 @@ def coordinator_decide():
     return jsonify(result), 200
 
 
-# Perfiles de riesgo: cada nivel es un set coherente de claves .env que el
-# selector del dashboard aplica de una vez (mesa + agentes). "moderate" = el
-# comportamiento por defecto. Los frenos de pérdida (MAX_DAILY_LOSS_PCT,
-# MAX_SYMBOL_LOSS_PCT) se dejan fuera a propósito: no se aflojan al subir el
-# apetito. Los valores se escriben en .env (persistentes) y se aplican en
-# caliente vía reload_runtime_config; las claves <PARAM>_DEFAULT mueven a TODOS
-# los agentes a la vez (core/config.get_agent_param_overrides).
-RISK_PROFILES: dict[str, dict[str, str]] = {
-    "conservative": {
-        "MAX_TOTAL_EXPOSURE_PCT": "0.30", "MAX_SYMBOL_ALLOCATION_PCT": "0.20",
-        "MAX_NET_DIRECTION_PCT": "0.40", "MAX_PYRAMID_DIRECTION_PCT": "0.40",
-        "REVERSAL_DRAWDOWN_PCT": "0.025", "MIN_HOLD_SECONDS": "600",
-        "COORDINATOR_TP_RR_MAX": "3.0",
-        "MIN_CONFIDENCE_DEFAULT": "0.70", "MIN_RR_DEFAULT": "1.6",
-        "MAX_OPEN_POSITIONS_DEFAULT": "2", "AT_MAX_ANALYSIS_INTERVAL": "900",
-    },
-    "moderate": {
-        "MAX_TOTAL_EXPOSURE_PCT": "0.50", "MAX_SYMBOL_ALLOCATION_PCT": "0.40",
-        "MAX_NET_DIRECTION_PCT": "0.60", "MAX_PYRAMID_DIRECTION_PCT": "0.60",
-        "REVERSAL_DRAWDOWN_PCT": "0.015", "MIN_HOLD_SECONDS": "300",
-        "COORDINATOR_TP_RR_MAX": "4.0",
-        "MIN_CONFIDENCE_DEFAULT": "0.60", "MIN_RR_DEFAULT": "1.3",
-        "MAX_OPEN_POSITIONS_DEFAULT": "3", "AT_MAX_ANALYSIS_INTERVAL": "600",
-    },
-    "aggressive": {
-        "MAX_TOTAL_EXPOSURE_PCT": "0.75", "MAX_SYMBOL_ALLOCATION_PCT": "0.60",
-        "MAX_NET_DIRECTION_PCT": "0.90", "MAX_PYRAMID_DIRECTION_PCT": "1.20",
-        "REVERSAL_DRAWDOWN_PCT": "0.010", "MIN_HOLD_SECONDS": "180",
-        "COORDINATOR_TP_RR_MAX": "6.0",
-        "MIN_CONFIDENCE_DEFAULT": "0.55", "MIN_RR_DEFAULT": "1.1",
-        "MAX_OPEN_POSITIONS_DEFAULT": "5", "AT_MAX_ANALYSIS_INTERVAL": "300",
-    },
-    "extreme": {
-        "MAX_TOTAL_EXPOSURE_PCT": "0.90", "MAX_SYMBOL_ALLOCATION_PCT": "0.80",
-        "MAX_NET_DIRECTION_PCT": "1.20", "MAX_PYRAMID_DIRECTION_PCT": "1.80",
-        "REVERSAL_DRAWDOWN_PCT": "0.008", "MIN_HOLD_SECONDS": "120",
-        "COORDINATOR_TP_RR_MAX": "8.0",
-        "MIN_CONFIDENCE_DEFAULT": "0.50", "MIN_RR_DEFAULT": "1.0",
-        "MAX_OPEN_POSITIONS_DEFAULT": "7", "AT_MAX_ANALYSIS_INTERVAL": "180",
-    },
-}
-
-
-@app.route("/api/risk-profile", methods=["POST"])
-@require_token
-def set_risk_profile():
-    """Aplica un perfil de riesgo (conservative/moderate/aggressive/extreme) a la
-    mesa Y a los agentes en caliente, y lo persiste en .env. Body: {"profile": ...}.
-    Cambia de una vez los topes de cartera, la piramidación, los umbrales de los
-    agentes y la cadencia de reanálisis al máximo. Protegido por API_TOKEN."""
+def _apply_profile(table: dict, level: str, marker_key: str,
+                   marker_value: str, event: str):
+    """Lógica común de los dos selectores (riesgo / horizonte): escribe el set de
+    claves .env del nivel + la marca del nivel activo, lo aplica en caliente vía
+    reload_runtime_config (incluida la re-inyección de la directiva del prompt) y
+    emite el evento WS. Devuelve (payload, http_status)."""
     from core.settings_schema import write_env
-    body = request.get_json(silent=True) or {}
-    profile = str(body.get("profile", "")).strip().lower()
-    if profile not in RISK_PROFILES:
-        return jsonify({
-            "error": f"perfil desconocido: {profile!r}",
-            "valid": list(RISK_PROFILES.keys()),
-        }), 400
-    # Escribe el set de claves del perfil + marca el perfil activo.
-    serialized = dict(RISK_PROFILES[profile])
-    serialized["RISK_PROFILE"] = profile
+    if level not in table:
+        return {"error": f"nivel desconocido: {level!r}", "valid": list(table.keys())}, 400
+    serialized = dict(table[level])
+    serialized[marker_key] = marker_value
     changed = write_env(serialized)
     if _orchestrator is not None and hasattr(_orchestrator, "reload_runtime_config"):
         try:
@@ -348,9 +298,42 @@ def set_risk_profile():
     overview = (_orchestrator.coordinator_overview()
                 if _orchestrator is not None and hasattr(_orchestrator, "coordinator_overview")
                 else {})
-    payload = {"profile": profile, "changed": changed, "overview": overview}
-    socketio.emit("risk_profile_changed", payload)
-    return jsonify(payload), 200
+    payload = {"level": marker_value, "changed": changed, "overview": overview}
+    socketio.emit(event, payload)
+    return payload, 200
+
+
+@app.route("/api/risk-profile", methods=["POST"])
+@require_token
+def set_risk_profile():
+    """Aplica un perfil de RIESGO (conservative/moderate/aggressive/extreme): apetito,
+    exposición y selectividad — y la directiva de apetito en los prompts. Lo persiste
+    en .env y lo aplica en caliente. Body: {"profile": ...}. Protegido por API_TOKEN."""
+    from core.profiles import RISK_PROFILES
+    body = request.get_json(silent=True) or {}
+    profile = str(body.get("profile", "")).strip().lower()
+    payload, status = _apply_profile(
+        RISK_PROFILES, profile, "RISK_PROFILE", profile, "risk_profile_changed")
+    if status == 200:
+        payload["profile"] = profile
+    return jsonify(payload), status
+
+
+@app.route("/api/horizon", methods=["POST"])
+@require_token
+def set_horizon():
+    """Aplica un HORIZONTE (corto/medio/largo): duración de las operaciones — TP más
+    cercano/lejano, periodo de gracia, trailing/parcial, cadencia — y la directiva de
+    horizonte en los prompts. Lo persiste en .env y lo aplica en caliente.
+    Body: {"horizon": ...}. Protegido por API_TOKEN."""
+    from core.profiles import HORIZON_PROFILES
+    body = request.get_json(silent=True) or {}
+    horizon = str(body.get("horizon", "")).strip().lower()
+    payload, status = _apply_profile(
+        HORIZON_PROFILES, horizon, "HORIZON", horizon, "horizon_changed")
+    if status == 200:
+        payload["horizon"] = horizon
+    return jsonify(payload), status
 
 
 @app.route("/api/settings", methods=["GET"])
@@ -566,6 +549,28 @@ def activate_agent(name):
         return jsonify({"error": str(e)}), 409
     socketio.emit("agent_added", result)
     return jsonify({"status": "ok", **result}), 200
+
+
+@app.route("/api/agents/save", methods=["POST"])
+@require_token
+def save_agents_selection():
+    """Persiste la selección actual de agentes (los cargados + su provider/modelo
+    y estado enabled) en .env (clave ACTIVE_AGENTS, JSON) para reusarla en la
+    próxima sesión del bot. No reinicia nada: solo guarda. Protegido por API_TOKEN."""
+    import json
+    from core.settings_schema import write_env
+    if _orchestrator is None:
+        return jsonify({"error": "orchestrator not running"}), 503
+    selection = [{
+        "name": a.name,
+        "provider": a.params.provider,
+        "model": a.params.model,
+        "enabled": bool(getattr(a, "enabled", True)),
+    } for a in _orchestrator.agents]
+    write_env({"ACTIVE_AGENTS": json.dumps(selection, ensure_ascii=False)})
+    payload = {"status": "ok", "saved": selection}
+    socketio.emit("agents_selection_saved", payload)
+    return jsonify(payload), 200
 
 
 @app.route("/api/agents/optimize", methods=["POST"])

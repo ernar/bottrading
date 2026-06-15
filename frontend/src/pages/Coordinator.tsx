@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Coordination, CoordinatorDecision, CoordinatorOverview } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
-import { RiskProfileSelector } from '../components/RiskProfileSelector'
+import { TradingProfiles } from '../components/RiskProfileSelector'
 
 const API_URL = getApiUrl()
 
@@ -80,8 +80,8 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
         </p>
       </section>
 
-      {/* Selector de perfil de riesgo (mesa + agentes, en vivo) */}
-      <RiskProfileSelector overview={overview} onChanged={load} />
+      {/* Selectores de perfil de riesgo + horizonte (mesa + agentes, en vivo) */}
+      <TradingProfiles overview={overview} onChanged={load} />
 
       {/* Diagrama de flujo de información mesa ↔ agentes */}
       <FlowDiagram coordination={coordination} overview={overview} />

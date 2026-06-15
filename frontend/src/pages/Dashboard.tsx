@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { BotState } from '../types/bot'
 import { PortfolioChart } from '../components/PortfolioChart'
 import type { EquityPoint } from '../components/PortfolioChart'
-import { RiskProfileSelector } from '../components/RiskProfileSelector'
+import { TradingProfiles } from '../components/RiskProfileSelector'
 import { getApiUrl, getApiHeaders } from '../config'
 
 const API_URL = getApiUrl()
@@ -104,8 +104,8 @@ export function DashboardPage({ state }: DashboardPageProps) {
 
   return (
     <div className="p-4 sm:p-8 space-y-8">
-      {/* Perfil de riesgo: visible y editable desde el dashboard (mesa + agentes) */}
-      <RiskProfileSelector />
+      {/* Perfil de riesgo + horizonte: visibles y editables desde el dashboard */}
+      <TradingProfiles />
 
       <section>
         <div className="flex items-center justify-between mb-4">

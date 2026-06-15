@@ -120,6 +120,10 @@ def get_agent_param_overrides(symbol: str, model: str) -> dict:
         ("lot_size", float),
         ("temperature", float),
         ("max_open_positions", int),
+        # Gestión dinámica de posición (la mueve el selector de horizonte):
+        ("trailing_breakeven_atr_mult", float),
+        ("trailing_step_atr_mult", float),
+        ("partial_profit_trigger_pct", float),
     ]
     
     for param_name, param_type in params_to_check:
@@ -155,6 +159,36 @@ def get_agent_param_overrides(symbol: str, model: str) -> dict:
                 pass
     
     return overrides
+
+
+def get_active_agents() -> list:
+    """Lista de agentes activos guardada para reusar entre sesiones.
+
+    Se persiste en .env como ACTIVE_AGENTS (JSON), p. ej.:
+        ACTIVE_AGENTS=[{"name":"btc-agent","provider":"gemini","model":"gemini-2.0-flash","enabled":true}]
+
+    Devuelve una lista de dicts {name, provider, model, enabled}. Vacía si no hay
+    selección guardada o el JSON es inválido (fail-safe). La escribe el dashboard
+    (botón "Guardar selección" -> POST /api/agents/save)."""
+    raw = os.getenv("ACTIVE_AGENTS", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data:
+        if isinstance(item, dict) and item.get("name"):
+            out.append({
+                "name": str(item["name"]),
+                "provider": (item.get("provider") or "").lower().strip() or None,
+                "model": (item.get("model") or "").strip() or None,
+                "enabled": bool(item.get("enabled", True)),
+            })
+    return out
 
 
 def get_coordinator_config() -> dict:

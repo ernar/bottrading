@@ -167,6 +167,9 @@ export interface CoordinatorOverview {
   max_symbol_loss_pct?: number
   min_hold_seconds?: number
   risk_profile?: RiskProfile
+  horizon?: Horizon
+  tp_rr_min?: number
+  tp_rr_max?: number
   last_coordination?: Coordination | null
   last_coordination_at?: string | null
   last_junta_at?: string | null
@@ -179,6 +182,8 @@ export interface CoordinatorOverview {
 }
 
 export type RiskProfile = 'conservative' | 'moderate' | 'aggressive' | 'extreme'
+
+export type Horizon = 'corto' | 'medio' | 'largo'
 
 export interface BotState {
   signals: Record<string, Signal>
