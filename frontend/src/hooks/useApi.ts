@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { BotState, Signal, Position, Trade, AccountInfo } from '../types/bot'
+import { BotState, Signal, Position, Trade, AccountInfo, CandlesResponse, DbSignal } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 
 const API_URL = getApiUrl()
@@ -37,6 +37,18 @@ export function useApi() {
     return data
   }
 
+  // Velas H1 del símbolo para el gráfico.
+  const getCandles = async (symbol: string, bars = 150): Promise<CandlesResponse> => {
+    const { data } = await api.get(`/api/candles/${symbol}?bars=${bars}`)
+    return data
+  }
+
+  // Histórico de señales persistidas del símbolo (para los marcadores).
+  const getSignalHistory = async (symbol: string, limit = 50): Promise<DbSignal[]> => {
+    const { data } = await api.get(`/api/db/signals?symbol=${symbol}&limit=${limit}&platform=mt4`)
+    return data
+  }
+
   const startBot = async (): Promise<any> => {
     const { data } = await api.post('/api/bot/start')
     return data
@@ -63,6 +75,8 @@ export function useApi() {
     getAccount,
     getHistory,
     getState,
+    getCandles,
+    getSignalHistory,
     startBot,
     stopBot,
     closePosition,

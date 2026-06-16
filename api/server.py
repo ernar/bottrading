@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import datetime
 from core.state import bot_state
-from core.clock import broker_now
+from core.clock import broker_now, broker_dt_from_mt_epoch
 from core.llm_config import available_providers
 
 app = Flask(__name__)
@@ -148,12 +148,14 @@ def get_csv_signals():
     from core.db import Signal, get_session
     limit = int(request.args.get("limit", 15))
     platform = request.args.get("platform", "mt4").upper()
+    symbol = request.args.get("symbol")  # opcional: filtra por símbolo (gráfico)
     session = get_session()
     try:
-        rows = (session.query(Signal)
-                .filter(Signal.platform == platform)
-                .order_by(Signal.timestamp.desc(), Signal.id.desc())
-                .limit(limit).all())
+        q = session.query(Signal).filter(Signal.platform == platform)
+        if symbol:
+            q = q.filter(Signal.symbol == symbol)
+        rows = (q.order_by(Signal.timestamp.desc(), Signal.id.desc())
+                 .limit(limit).all())
     finally:
         session.close()
     rows.reverse()  # cronológico ascendente, como el CSV
@@ -169,6 +171,25 @@ def get_csv_signals():
         "executed": "true" if r.executed else "false",
     } for r in rows]
     return jsonify(out), 200
+
+
+@app.route("/api/candles/<symbol>", methods=["GET"])
+def get_candles(symbol):
+    """Velas H1 del símbolo para el gráfico del dashboard. El EA bridge solo
+    entrega H1; otros timeframes devuelven lista vacía. El tiempo se sella en
+    HORA DEL BRÓKER ("YYYY-MM-DD HH:MM:SS") para que el front lo trate igual que
+    los timestamps de señales/equity (brokerToDisplayMs) y los marcadores alineen
+    con las velas. Mercado cerrado o EA caído -> candles vacío (no es error)."""
+    if _mt_client is None:
+        return jsonify({"symbol": symbol, "timeframe": "H1", "candles": []}), 200
+    bars = max(10, min(int(request.args.get("bars", 150)), 500))
+    raw = _mt_client.get_ohlcv(symbol, "H1", bars) or []
+    candles = [{
+        "t": broker_dt_from_mt_epoch(c["time"]).strftime("%Y-%m-%d %H:%M:%S"),
+        "open": c["open"], "high": c["high"], "low": c["low"],
+        "close": c["close"], "volume": c["volume"],
+    } for c in raw]
+    return jsonify({"symbol": symbol, "timeframe": "H1", "candles": candles}), 200
 
 
 @app.route("/api/db/trades", methods=["GET"])
@@ -540,6 +561,75 @@ def set_horizon():
     if status == 200:
         payload["horizon"] = horizon
     return jsonify(payload), status
+
+
+@app.route("/api/risk/spread", methods=["GET"])
+@require_token
+def get_risk_spread():
+    """Filtro de spread (puntos) por símbolo, para la pestaña Riesgo de Ajustes.
+
+    Devuelve el valor por defecto (MAX_SPREAD_FILTER_DEFAULT del .env, "" si no
+    está) y una fila por agente cargado con su `max_spread_filter` EFECTIVO (el
+    que aplica ahora mismo, ya resueltos los overrides del .env). Protegido por
+    API_TOKEN."""
+    agents = getattr(_orchestrator, "agents", None) or []
+    symbols = []
+    for a in agents:
+        symbols.append({
+            "name": a.name,
+            "symbol": a.symbol,
+            "value": round(float(getattr(a.config, "max_spread_filter", 0.0) or 0.0), 1),
+        })
+    default = os.getenv("MAX_SPREAD_FILTER_DEFAULT", "").strip()
+    return jsonify({"default": default, "symbols": symbols}), 200
+
+
+@app.route("/api/risk/spread", methods=["POST"])
+@require_token
+def set_risk_spread():
+    """Guarda el filtro de spread por símbolo y lo aplica EN CALIENTE.
+
+    Body: {"default": <num|"">, "symbols": {"BTCUSD": <num>, ...}}. Escribe las
+    claves MAX_SPREAD_FILTER_DEFAULT / MAX_SPREAD_FILTER_<SÍMBOLO> en el .env
+    (las consume get_agent_param_overrides) y llama a reload_runtime_config para
+    re-aplicar los params de los agentes sin reiniciar. Protegido por API_TOKEN."""
+    from core.settings_schema import write_env
+    body = request.get_json(silent=True) or {}
+    serialized: dict[str, str] = {}
+
+    def _norm(val) -> str | None:
+        """Número válido -> str repr; vacío/None -> "" (desactiva el override);
+        no numérico -> None (se ignora)."""
+        if val is None or (isinstance(val, str) and val.strip() == ""):
+            return ""
+        try:
+            return repr(float(val))
+        except (ValueError, TypeError):
+            return None
+
+    if "default" in body:
+        nv = _norm(body.get("default"))
+        if nv is None:
+            return jsonify({"error": "default: se esperaba un número"}), 400
+        serialized["MAX_SPREAD_FILTER_DEFAULT"] = nv
+
+    for sym, val in (body.get("symbols") or {}).items():
+        nv = _norm(val)
+        if nv is None:
+            return jsonify({"error": f"{sym}: se esperaba un número"}), 400
+        key = f"MAX_SPREAD_FILTER_{str(sym).upper()}"
+        serialized[key] = nv
+
+    if not serialized:
+        return jsonify({"changed": []}), 200
+
+    changed = write_env(serialized)
+    if _orchestrator is not None and hasattr(_orchestrator, "reload_runtime_config"):
+        try:
+            _orchestrator.reload_runtime_config()
+        except Exception as e:  # noqa: BLE001 — nunca tumbar la API por esto
+            logger.warning("reload_runtime_config falló tras cambiar spread: %s", e)
+    return jsonify({"changed": changed}), 200
 
 
 @app.route("/api/settings", methods=["GET"])

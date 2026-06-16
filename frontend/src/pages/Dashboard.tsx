@@ -91,11 +91,19 @@ export function DashboardPage({ state }: DashboardPageProps) {
   // el gráfico se mueva sin esperar al próximo refresco/registro del backend.
   // `safeEquity` protege ante respuestas que no sean un array.
   const safeEquity = Array.isArray(equity) ? equity : []
-  // El punto en vivo lleva equity Y balance, para que ambos gráficos (equity y
-  // balance) se muevan sin esperar al próximo registro del backend.
+  // CLAVE: el punto en vivo se ancla a `last_update` (hora del bróker del ÚLTIMO
+  // dato real), NO al reloj de pared. Si el bot/WS deja de enviar (bot parado o
+  // API caída), `last_update` se congela y el punto deja de avanzar: así no se
+  // dibuja una cola plana que crece sola con el reloj (el "salto del horario").
+  // Solo se añade si aporta algo nuevo (equity distinto) y su marca es POSTERIOR
+  // al último punto registrado (evita un segmento que retroceda). Lleva equity Y
+  // balance para que ambos gráficos se muevan a la vez.
+  const lastLogged = safeEquity[safeEquity.length - 1]
+  const liveTs = state?.last_update
   const equitySeries: EquityPoint[] =
-    liveEquity != null && safeEquity.length > 0 && safeEquity[safeEquity.length - 1].equity !== liveEquity
-      ? [...safeEquity, { t: 'now', equity: liveEquity, balance: liveBalance }]
+    liveEquity != null && liveTs && lastLogged && lastLogged.equity !== liveEquity
+      && brokerToDisplayMs(liveTs) > brokerToDisplayMs(lastLogged.t)
+      ? [...safeEquity, { t: liveTs, equity: liveEquity, balance: liveBalance }]
       : safeEquity
 
   // P/L flotante: misma fuente que el Header (equity - balance) para que ambos

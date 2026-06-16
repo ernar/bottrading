@@ -1110,7 +1110,8 @@ class AgentOrchestrator:
 
     def _open_from_signal(self, agent, signal, scale: float = 1.0,
                           enforce_max_positions: bool = True,
-                          min_rr_override: float = None) -> bool:
+                          min_rr_override: float = None,
+                          max_spread_override: float = None) -> bool:
         """Valida y ejecuta una entrada a partir de la señal. `scale` modula el lote
         base según la asignación del coordinador y su size_mult: <1 lo reduce, >1 lo
         agranda (entrada de convicción / piramidación). `enforce_max_positions`
@@ -1118,7 +1119,9 @@ class AgentOrchestrator:
         la mesa, que ya gobierna la exposición real (RiskBook) y puede abrir más si lo
         considera necesario. `min_rr_override` (ruta coordinada) exige ese R:R en la
         validación cuando la mesa fijó un TP objetivo (tp_rr) más corto que el del
-        especialista. Devuelve True si la orden se ejecutó."""
+        especialista. `max_spread_override` (ruta coordinada) exige ese filtro de
+        spread cuando la mesa fijó un `max_spread` por decisión (en lugar del baseline
+        del especialista). Devuelve True si la orden se ejecutó."""
         symbol = agent.symbol
         base_volume = agent.resolve_volume(self.client, signal)
         # Solo el lote base exacto (scale == 1) evita el redondeo al step; cualquier
@@ -1135,7 +1138,8 @@ class AgentOrchestrator:
         if not agent.validate(signal, positions, tick=tick,
                               spread_points=spread_points, total_open_positions=total_open,
                               enforce_max_positions=enforce_max_positions,
-                              min_rr=min_rr_override):
+                              min_rr=min_rr_override,
+                              max_spread_override=max_spread_override):
             print("  " + console.warn("⚠ Señal no validada para ejecución."))
             return False
 
@@ -1313,13 +1317,22 @@ class AgentOrchestrator:
                 verbo = "agranda" if size_mult > 1 else "reduce"
                 print(console.dim(f"     Lote mesa: size_mult {size_mult:.2f}x {verbo} "
                                   f"el lote base (escala total {scale:.2f}x)"))
+            # Filtro de spread de la mesa (transitorio): si la mesa fijó un max_spread
+            # por decisión, la entrada se valida contra ese umbral en vez del baseline
+            # del especialista (0/ausente = baseline configurado del símbolo).
+            max_spread = decision.get("max_spread") or 0.0
+            if max_spread > 0:
+                base_spread = agent.config.max_spread_filter
+                print(console.dim(f"     Spread mesa: filtro máx. {base_spread:.1f} → "
+                                  f"{max_spread:.1f} pts para esta entrada"))
             # La mesa ya aprobó: el límite global de número de posiciones lo decide
             # ella (gobierna la exposición real vía RiskBook), no el filtro per-agente.
             # Si la mesa fijó un tp_rr, la entrada se valida contra ese R:R (el TP
             # más corto es decisión deliberada de la mesa, no del especialista).
             self._open_from_signal(agent, signal, scale=scale,
                                    enforce_max_positions=False,
-                                   min_rr_override=(tp_rr if tp_rr > 0 else None))
+                                   min_rr_override=(tp_rr if tp_rr > 0 else None),
+                                   max_spread_override=(max_spread if max_spread > 0 else None))
         else:
             motivo = decision.get("clamp") or decision.get("reason", "decisión del coordinador")
             print(f"  {console.err('✗ [Mesa] Entrada VETADA')} en {symbol}: {console.dim(motivo)}")
@@ -1549,8 +1562,8 @@ class AgentOrchestrator:
             return
 
         sym_info = snapshot.get("symbols", {})
-        headers = ["Símbolo", "Señal", "Neto", "Veredicto", "Prio", "Asig", "Lote×", "TP obj.", "Gestión", "Motivo/clamp"]
-        aligns = ["<", "<", "<", "<", ">", ">", ">", ">", "<", "<"]
+        headers = ["Símbolo", "Señal", "Neto", "Veredicto", "Prio", "Asig", "Lote×", "TP obj.", "Spread", "Gestión", "Motivo/clamp"]
+        aligns = ["<", "<", "<", "<", ">", ">", ">", ">", ">", "<", "<"]
         rows = []
         for d in sorted(decisions, key=lambda x: x.get("priority", 99)):
             sym = d.get("symbol")
@@ -1568,6 +1581,8 @@ class AgentOrchestrator:
             tp_cell = f"1:{tp_rr:.2f}" if tp_rr > 0 else console.dim("—")
             size_mult = d.get("size_mult") or 0.0
             mult_cell = f"{size_mult:.2f}x" if size_mult > 0 else console.dim("—")
+            max_spread = d.get("max_spread") or 0.0
+            spread_cell = f"{max_spread:.1f}" if max_spread > 0 else console.dim("—")
             rows.append([
                 sym,
                 (sig_action, console.side),
@@ -1577,6 +1592,7 @@ class AgentOrchestrator:
                 f"{d.get('allocation_pct', 0):.0%}",
                 mult_cell,
                 tp_cell,
+                spread_cell,
                 (pos_cell, pos_style),
                 (motivo, console.dim) if motivo else "",
             ])

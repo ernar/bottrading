@@ -250,7 +250,8 @@ Devuelve solo el JSON con el formato especificado."""
 
     def validate_trade(self, signal: dict, positions: list = None, tick=None,
                        spread_points: float = None, total_open_positions: int = None,
-                       enforce_max_positions: bool = True, min_rr: float = None) -> bool:
+                       enforce_max_positions: bool = True, min_rr: float = None,
+                       max_spread_override: float = None) -> bool:
         """Valida señal antes de ejecutar. Devuelve False con el motivo impreso en debug.
 
         `positions` son las del símbolo (para no duplicar dirección). `spread_points`
@@ -266,8 +267,17 @@ Devuelve solo el JSON con el formato especificado."""
         `min_rr`: umbral de R:R a exigir en ESTA validación. Si es None se usa el de
         la instancia (`self.min_rr`). La ruta coordinada lo pasa cuando la mesa fija
         un R:R objetivo (tp_rr) más corto que el del especialista: el TP lo decide
-        deliberadamente la mesa, así que la entrada se valida contra ese R:R."""
+        deliberadamente la mesa, así que la entrada se valida contra ese R:R.
+
+        `max_spread_override`: filtro de spread (en puntos) a exigir en ESTA
+        validación. Si es None o <= 0 se usa el del especialista
+        (`self.config.max_spread_filter`). La ruta coordinada lo pasa cuando la mesa
+        fija un `max_spread` por decisión (transitorio: solo esta entrada, sin tocar
+        el baseline configurado del símbolo)."""
         effective_min_rr = self.min_rr if min_rr is None else min_rr
+        effective_max_spread = (max_spread_override
+                                if (max_spread_override and max_spread_override > 0)
+                                else self.config.max_spread_filter)
         def reject(reason: str) -> bool:
             if self.config.debug_mode:
                 print(f"  [Validación] Rechazada: {reason}")
@@ -295,9 +305,9 @@ Devuelve solo el JSON con el formato especificado."""
         if (enforce_max_positions and not override and self.config.max_open_positions
                 and open_count >= self.config.max_open_positions):
             return reject(f"máximo de posiciones abiertas ({open_count}/{self.config.max_open_positions})")
-        if (spread_points is not None and self.config.max_spread_filter
-                and spread_points > self.config.max_spread_filter):
-            return reject(f"spread {spread_points:.1f} pts > máximo {self.config.max_spread_filter:.1f}")
+        if (spread_points is not None and effective_max_spread
+                and spread_points > effective_max_spread):
+            return reject(f"spread {spread_points:.1f} pts > máximo {effective_max_spread:.1f}")
 
         # Nota: Permitimos múltiples posiciones en la misma dirección.
         # El límite total está controlado por max_open_positions.

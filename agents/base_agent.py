@@ -179,11 +179,13 @@ class SymbolAgent:
 
     def validate(self, signal: dict, positions: list = None, tick=None,
                  spread_points: float = None, total_open_positions: int = None,
-                 enforce_max_positions: bool = True, min_rr: float = None) -> bool:
+                 enforce_max_positions: bool = True, min_rr: float = None,
+                 max_spread_override: float = None) -> bool:
         return self.strategy.validate_trade(
             signal, positions, tick=tick, spread_points=spread_points,
             total_open_positions=total_open_positions,
-            enforce_max_positions=enforce_max_positions, min_rr=min_rr)
+            enforce_max_positions=enforce_max_positions, min_rr=min_rr,
+            max_spread_override=max_spread_override)
 
     def resolve_volume(self, client, signal: dict) -> float:
         """Volumen a operar. Lote fijo (params.lot_size) salvo que el agente

@@ -539,6 +539,9 @@ function DecisionCard({ d }: { d: CoordinatorDecision }) {
         {d.approve && !!d.tp_rr && d.tp_rr > 0 && (
           <span className="px-2 py-0.5 rounded bg-gray-900 text-gray-300">TP obj. 1:{d.tp_rr.toFixed(2)}</span>
         )}
+        {d.approve && !!d.max_spread && d.max_spread > 0 && (
+          <span className="px-2 py-0.5 rounded bg-gray-900 text-gray-300">spread máx. {d.max_spread.toFixed(1)} pts</span>
+        )}
         <span className={`px-2 py-0.5 rounded ${actionColors[d.position_action] || 'bg-gray-700 text-gray-300'}`}>
           posiciones: {d.position_action}{d.manage_direction ? ` (${d.manage_direction})` : ''}
         </span>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getApiUrl, getApiHeaders } from '../config'
 import { ConnectionSettings } from './ConnectionSettings'
+import { SpreadSettings } from './SpreadSettings'
 
 const API_URL = getApiUrl()
 
@@ -254,6 +255,9 @@ export function BotSettings() {
                 // desplegable (como en agentes/mesa), no con dos campos de texto: se
                 // ocultan del grid y se muestra el selector arriba.
                 const isAssistant = group === 'Asistente'
+                // El grupo "Riesgo" muestra además el editor de spread por símbolo
+                // (no es un campo del .env plano: tiene su propia UI/guardado).
+                const isRiesgo = group === 'Riesgo'
                 const fields = entries.filter(e =>
                   e.group === group && matches(e) &&
                   !(isAssistant && ASSISTANT_MODEL_KEYS.includes(e.key)))
@@ -267,6 +271,7 @@ export function BotSettings() {
                 return (
                   <div key={group} className="bg-gray-800 rounded-lg border border-gray-700 p-5">
                     <h3 className="text-sm font-bold text-cyan-300 uppercase tracking-wide mb-4">{group}</h3>
+                    {isRiesgo && !q && <SpreadSettings />}
                     {showAssistantSelector && (
                       <AssistantModelSelect
                         models={models}

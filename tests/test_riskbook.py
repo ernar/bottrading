@@ -56,10 +56,10 @@ def _sym(remaining_pct=0.4, net_direction="FLAT", net_exposure_pct=0.0,
 
 
 def _decision(symbol="BTCUSD", approve=True, alloc=0.2, action="hold", tp_rr=0.0,
-              size_mult=0.0):
+              size_mult=0.0, max_spread=0.0):
     return {"symbol": symbol, "approve": approve, "priority": 1,
             "allocation_pct": alloc, "position_action": action, "tp_rr": tp_rr,
-            "size_mult": size_mult}
+            "size_mult": size_mult, "max_spread": max_spread}
 
 
 # ----- RiskBook.clamp: topes duros -----
@@ -208,6 +208,39 @@ def test_clamp_size_mult_ausente_queda_en_cero():
     assert out[0]["size_mult"] == 0.0
 
 
+# ----- Filtro de spread (max_spread) gobernado por la mesa -----
+
+def test_clamp_max_spread_se_propaga_y_anota():
+    # La mesa afloja el filtro (baseline 50 -> 80): se propaga y deja nota.
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4, "max_spread_filter": 50.0}})
+    out = rb.clamp([_decision(max_spread=80.0)], snap)
+    assert out[0]["max_spread"] == 80.0
+    assert "max_spread afloja" in out[0]["clamp"]
+
+
+def test_clamp_max_spread_aprieta_anota():
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4, "max_spread_filter": 50.0}})
+    out = rb.clamp([_decision(max_spread=20.0)], snap)
+    assert out[0]["max_spread"] == 20.0
+    assert "max_spread aprieta" in out[0]["clamp"]
+
+
+def test_clamp_max_spread_negativo_se_recorta_a_cero():
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    out = rb.clamp([_decision(max_spread=-5.0)], snap)
+    assert out[0]["max_spread"] == 0.0
+
+
+def test_clamp_max_spread_ausente_queda_en_cero():
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    out = rb.clamp([_decision()], snap)  # max_spread=0 (baseline)
+    assert out[0]["max_spread"] == 0.0
+
+
 # ----- CoordinatorAgent: parseo y fallback -----
 
 def _coord(max_symbol=0.4) -> CoordinatorAgent:
@@ -275,6 +308,22 @@ def test_parse_size_mult_ausente_es_cero():
            '"allocation_pct": 0.2}]}')
     _, decisions = c._parse(raw)
     assert decisions[0]["size_mult"] == 0.0
+
+
+def test_parse_extrae_max_spread():
+    c = _coord()
+    raw = ('{"rationale": "ok", "decisions": [{"symbol": "BTCUSD", "approve": true, '
+           '"allocation_pct": 0.2, "max_spread": 65}]}')
+    _, decisions = c._parse(raw)
+    assert decisions[0]["max_spread"] == 65.0
+
+
+def test_parse_max_spread_ausente_es_cero():
+    c = _coord()
+    raw = ('{"rationale": "ok", "decisions": [{"symbol": "BTCUSD", "approve": true, '
+           '"allocation_pct": 0.2}]}')
+    _, decisions = c._parse(raw)
+    assert decisions[0]["max_spread"] == 0.0
 
 
 def test_fallback_aprueba_solo_accionables_con_reparto():
@@ -586,6 +635,21 @@ def test_clamp_par_correlacionado_respeta_libro_abierto():
     assert "grupo correlacionado" in by["ETHUSD"]["clamp"]
 
 
+def test_clamp_par_correlacionado_consenso_de_reversion():
+    # CONSENSO: BTC tiene neto LONG abierto, pero AMBOS especialistas giran a SELL
+    # a la vez. El grupo flipa de forma coherente -> se aprueban las dos entradas
+    # SELL (no es pairs trade: ambas patas nuevas van al mismo lado). Antes la
+    # exposición abierta LONG vetaba los dos cortos (oportunidad perdida).
+    rb = _rb(max_net=0.6)
+    snap = _snapshot(equity=10000, symbols={
+        "BTCUSD": _sym(net_direction="LONG", net_exposure_pct=0.3, open_positions=2),
+        "ETHUSD": _sym(remaining_pct=0.4)})
+    signals = {"BTCUSD": _sig("SELL", 0.7), "ETHUSD": _sig("SELL", 0.6)}
+    out = rb.clamp([_decision("BTCUSD"), _decision("ETHUSD")], snap, signals)
+    assert all(d["approve"] for d in out)
+    assert all("grupo correlacionado" not in d["clamp"] for d in out)
+
+
 def test_clamp_par_correlacionado_no_afecta_a_simbolo_solo():
     # Con un único símbolo del grupo presente, la guardia no hace nada.
     rb = _rb(max_net=0.6)
@@ -600,12 +664,20 @@ def test_clamp_par_correlacionado_no_afecta_a_simbolo_solo():
 
 class _FakeInfo:
     trade_contract_size = 1.0
+    point = 1.0
+
+
+class _FakeTick:
+    def __init__(self, ask, bid):
+        self.ask = ask
+        self.bid = bid
 
 
 class _FakeClient:
-    def __init__(self, account, positions):
+    def __init__(self, account, positions, tick=None):
         self._account = account
         self._positions = positions
+        self._tick = tick
 
     def get_account_info(self):
         return self._account
@@ -618,10 +690,19 @@ class _FakeClient:
     def get_symbol_info(self, symbol):
         return _FakeInfo()
 
+    def get_tick(self, symbol):
+        return self._tick
+
+
+class _FakeConfig:
+    def __init__(self, max_spread_filter=0.0):
+        self.max_spread_filter = max_spread_filter
+
 
 class _FakeAgent:
-    def __init__(self, symbol):
+    def __init__(self, symbol, max_spread_filter=0.0):
         self.symbol = symbol
+        self.config = _FakeConfig(max_spread_filter)
 
 
 def _account(equity=100000, used_margin=10000, hedging=True):
@@ -687,7 +768,8 @@ def test_snapshot_neto_flat_cuando_se_netea():
 
 def test_snapshot_registra_edad_de_posiciones():
     # La mesa registra cuándo vio cada ticket por primera vez; en el primer
-    # snapshot la edad es ~0 (recién vista) y poda los tickets que desaparecen.
+    # snapshot la edad es ~0 (recién vista) y poda los tickets que ya no aparecen
+    # en una lectura FIABLE (no vacía) posterior.
     rb = _rb(min_hold=300)
     positions = [
         {"symbol": "BTCUSD", "ticket": 111, "direction": "BUY", "volume": 0.1,
@@ -698,10 +780,34 @@ def test_snapshot_registra_edad_de_posiciones():
     age = snap["symbols"]["BTCUSD"]["newest_position_age"]
     assert age is not None and age >= 0
     assert "111" in rb._first_seen
-    # Si la posición desaparece, su edad se olvida.
-    client2 = _FakeClient(_account(), [])
+    # La posición 111 se cierra y abre otra (222): una lectura NO vacía que ya no
+    # incluye 111 sí poda su edad (el cierre es real, no un fallo de lectura).
+    client2 = _FakeClient(_account(), [
+        {"symbol": "BTCUSD", "ticket": 222, "direction": "BUY", "volume": 0.1,
+         "current_price": 50000, "profit": 0.0}])
     rb.snapshot(client2, [_FakeAgent("BTCUSD")])
     assert "111" not in rb._first_seen
+    assert "222" in rb._first_seen
+
+
+def test_lectura_vacia_espuria_no_borra_la_edad():
+    # Regresión: get_positions() devuelve [] tanto si NO hay posiciones como si la
+    # lectura FALLA (bridge no listo al arrancar). Una lista vacía NO debe arrasar
+    # el registro de antigüedad, o el período de gracia se reiniciaría en cada
+    # arranque (snapshot de _startup_review antes de que el bridge esté caliente).
+    rb = _rb(min_hold=300)
+    positions = [
+        {"symbol": "BTCUSD", "ticket": 111, "direction": "BUY", "volume": 0.1,
+         "current_price": 50000, "profit": 0.0},
+    ]
+    rb.snapshot(_FakeClient(_account(), positions), [_FakeAgent("BTCUSD")])
+    rb._first_seen["111"] -= 400  # antedata: ya pasó la gracia
+    # Lectura vacía espuria (bridge no listo / error): no se poda 111.
+    rb.snapshot(_FakeClient(_account(), []), [_FakeAgent("BTCUSD")])
+    assert "111" in rb._first_seen
+    # Al reaparecer la posición, conserva su edad (gracia ya cumplida, no reinicia).
+    snap = rb.snapshot(_FakeClient(_account(), positions), [_FakeAgent("BTCUSD")])
+    assert snap["symbols"]["BTCUSD"]["newest_position_age"] >= 400
 
 
 def test_snapshot_sin_posiciones_edad_none():
@@ -709,6 +815,27 @@ def test_snapshot_sin_posiciones_edad_none():
     client = _FakeClient(_account(), [])
     snap = rb.snapshot(client, [_FakeAgent("BTCUSD")])
     assert snap["symbols"]["BTCUSD"]["newest_position_age"] is None
+
+
+def test_snapshot_expone_spread_baseline_y_actual():
+    # El snapshot lleva el filtro de spread del especialista (baseline) y el spread
+    # actual (ask-bid)/point, para que el director razone un override max_spread.
+    rb = _rb()
+    client = _FakeClient(_account(), [], tick=_FakeTick(ask=50005.0, bid=50000.0))
+    snap = rb.snapshot(client, [_FakeAgent("BTCUSD", max_spread_filter=50.0)])
+    s = snap["symbols"]["BTCUSD"]
+    assert s["max_spread_filter"] == 50.0
+    assert s["current_spread"] == 5.0  # (50005 - 50000) / point(1.0)
+
+
+def test_snapshot_spread_actual_none_sin_tick():
+    # Sin tick disponible, current_spread es None (fail-safe), sin romper el snapshot.
+    rb = _rb()
+    client = _FakeClient(_account(), [], tick=None)
+    snap = rb.snapshot(client, [_FakeAgent("BTCUSD", max_spread_filter=8.0)])
+    s = snap["symbols"]["BTCUSD"]
+    assert s["max_spread_filter"] == 8.0
+    assert s["current_spread"] is None
 
 
 # ----- Persistencia del período de gracia (sobrevive a reinicios) -----

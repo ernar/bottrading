@@ -193,6 +193,22 @@ class RiskBook:
                     pass
         return 1.0
 
+    @staticmethod
+    def _current_spread(client, symbol: str):
+        """Spread actual en puntos (ask-bid)/point, o None si no se puede calcular
+        (sin tick o sin `point`). Fail-safe: cualquier error -> None."""
+        try:
+            tick = client.get_tick(symbol)
+            if not tick:
+                return None
+            info = client.get_symbol_info(symbol)
+            point = float(getattr(info, "point", 0) or 0)
+            if point <= 0:
+                return None
+            return (tick.ask - tick.bid) / point
+        except Exception:
+            return None
+
     def snapshot(self, client, agents: list, day_start_equity: float = None,
                  in_cooldown: bool = False, day_window_seconds: float = None,
                  day_window_start_ts: float = None) -> dict:
@@ -260,13 +276,22 @@ class RiskBook:
                 d["short_count"] += 1
                 d["short_profit"] += profit
 
-        # Poda: olvida la edad de los tickets que ya no están abiertos.
-        self._first_seen = {t: s for t, s in self._first_seen.items()
-                            if t in current_tickets}
-        # Persiste solo si el registro cambió (alta de ticket nuevo o poda), para
-        # que el período de gracia sobreviva al próximo reinicio.
-        if self._first_seen != first_seen_before:
-            self._save_first_seen()
+        # Poda + persistencia SOLO con una lectura de posiciones FIABLE (no vacía).
+        # `get_positions()` devuelve `[]` tanto si NO hay posiciones como si la
+        # lectura FALLA (bridge MT aún no listo al arrancar, timeout, error del EA).
+        # Si podáramos/persistiéramos con un `[]` ESPURIO borraríamos el registro y
+        # el período de gracia se REINICIARÍA en cada arranque: `_startup_review()`
+        # hace un snapshot antes de que el bridge esté caliente, y ese `[]` espurio
+        # arrasaba lo persistido. Con la lista vacía no tocamos nada; los tickets que
+        # de verdad se cerraron se podan en la siguiente lectura no vacía que ya no
+        # los incluya (autocorrección, sin coste para la edad de los que siguen).
+        if all_positions:
+            self._first_seen = {t: s for t, s in self._first_seen.items()
+                                if t in current_tickets}
+            # Persiste solo si el registro cambió (alta de ticket nuevo o poda), para
+            # que el período de gracia sobreviva al próximo reinicio.
+            if self._first_seen != first_seen_before:
+                self._save_first_seen()
 
         total_exposure_pct = (used_margin / equity) if equity > 0 else 0.0
         daily_pnl_pct = None
@@ -308,6 +333,12 @@ class RiskBook:
             # Margen aproximado del símbolo = nocional × factor (margen/nocional).
             symbol_margin = ps["notional"] * margin_factor
             used_pct = (symbol_margin / equity) if equity > 0 else 0.0
+            # Filtro de spread del especialista (baseline configurado, en puntos) y
+            # spread actual en vivo: el director los ve para decidir si fija un
+            # `max_spread` por decisión (ajustar el filtro de coste de esa entrada).
+            agent_cfg = getattr(agent, "config", None)
+            max_spread_filter = float(getattr(agent_cfg, "max_spread_filter", 0.0) or 0.0)
+            current_spread = self._current_spread(client, sym)
             # Sesgo neto: nocional de largos - cortos (con signo). FLAT si se netea.
             net_notional = ps["long_notional"] - ps["short_notional"]
             net_volume = round(ps["long_vol"] - ps["short_vol"], 6)
@@ -339,6 +370,11 @@ class RiskBook:
                                         if ps.get("oldest_age") is not None else None),
                 "max_allocation_pct": self.max_symbol_allocation_pct,
                 "remaining_pct": round(max(0.0, self.max_symbol_allocation_pct - used_pct), 4),
+                # Filtro de spread del especialista (baseline, puntos) + spread vivo,
+                # para que el director razone un override `max_spread` por decisión.
+                "max_spread_filter": round(max_spread_filter, 1) if max_spread_filter else 0.0,
+                "current_spread": (round(current_spread, 1)
+                                   if current_spread is not None else None),
             }
 
         return {
@@ -421,6 +457,7 @@ class RiskBook:
             manage_direction = d.get("manage_direction")
             tp_rr = float(d.get("tp_rr") or 0.0)
             size_mult = float(d.get("size_mult") or 0.0)
+            max_spread = float(d.get("max_spread") or 0.0)
 
             sym_info = symbols.get(sym, {})
             net_direction = sym_info.get("net_direction", "FLAT")
@@ -465,6 +502,18 @@ class RiskBook:
                     notes.append(f"size_mult {size_mult:.2f}x->{clamped_mult:.2f}x "
                                  f"(rango {self.size_mult_min:.2f}-{self.size_mult_max:.2f})")
                 size_mult = clamped_mult
+
+            # 1d) Filtro de spread (max_spread): si la mesa lo informó (>0), recortar
+            # negativos a 0 (transitorio: aplica solo a la entrada de esta decisión, no
+            # toca el baseline del símbolo). Sin tope superior: las unidades de spread
+            # varían por símbolo. 0/ausente => baseline configurado del especialista.
+            if max_spread < 0:
+                max_spread = 0.0
+            if max_spread > 0:
+                baseline_spread = float(sym_info.get("max_spread_filter") or 0.0)
+                if baseline_spread > 0 and abs(max_spread - baseline_spread) > 1e-9:
+                    verbo = "afloja" if max_spread > baseline_spread else "aprieta"
+                    notes.append(f"max_spread {verbo} {baseline_spread:.1f}->{max_spread:.1f} pts")
 
             # --- Guardias deterministas sobre las posiciones abiertas ---
             forced = False
@@ -595,6 +644,7 @@ class RiskBook:
             d["position_action"] = action
             d["tp_rr"] = round(tp_rr, 2) if tp_rr > 0 else 0.0
             d["size_mult"] = round(size_mult, 2) if size_mult > 0 else 0.0
+            d["max_spread"] = round(max_spread, 1) if max_spread > 0 else 0.0
             if manage_direction:
                 d["manage_direction"] = manage_direction
             d["clamp"] = "; ".join(notes)
@@ -648,7 +698,21 @@ class RiskBook:
             if not approved:
                 continue
 
-            # El libro abierto manda; si está plano, gana la entrada más fiable.
+            # CONSENSO DEL GRUPO: dos o más entradas aprobadas que COINCIDEN en
+            # dirección => el grupo gira de forma coherente; se permiten todas, AUNQUE
+            # eso revierta una posición abierta en sentido contrario (de esa posición
+            # vieja se ocupa la guardia de reversión por símbolo, no este guard). Antes
+            # la dirección dominante la fijaba SOLO la exposición abierta combinada, y
+            # un consenso de reversión (ambos especialistas giran a la vez) quedaba
+            # vetado por una posición rancia: oportunidad de señal perdida. No es un
+            # pairs trade involuntario porque ambas patas nuevas van al MISMO lado.
+            entry_dirs = {ent for _m, ent, _c in approved}
+            if len(approved) >= 2 and len(entry_dirs) == 1:
+                continue
+
+            # DISCREPANCIA (largo de uno, corto del otro) o una sola entrada opuesta al
+            # libro: ESO sí es el pairs trade a evitar. El libro abierto manda; si está
+            # plano, gana la entrada más fiable. La pata opuesta se veta.
             if group_dir in ("LONG", "SHORT"):
                 winner = group_dir
             else:
@@ -693,6 +757,14 @@ Reglas:
   piramidas un ganador a favor; bájalo en señales flojas o cartera ya tensionada. Una capa de
   riesgo posterior lo acota al rango permitido y, pase lo que pase, el margen libre y los topes de
   exposición recortan el lote final: nunca podrás sobrepasar los límites duros con size_mult.
+- FILTRO DE SPREAD (max_spread): cada símbolo tiene un filtro de spread BASE (en puntos) que veta
+  abrir si el coste de entrada es excesivo; el contexto te muestra el spread ACTUAL y ese filtro
+  máx. por símbolo. Para una entrada que apruebas puedes fijar max_spread = el umbral de spread (en
+  puntos) a exigir SOLO en esta entrada: SÚBELO si el spread está temporalmente ensanchado pero la
+  señal compensa el coste extra (no perder una buena entrada por un pico de spread), o BÁJALO para
+  ser más estricto en baja liquidez / antes de un dato de alto impacto. Es transitorio: no cambia
+  la configuración del símbolo, solo el filtro de ESTA entrada. Vacío (o 0) = se respeta el filtro
+  base del especialista.
 - APETITO POR DEFECTO: una señal accionable (buy/sell) que te llega YA pasó los filtros de
   confianza y riesgo/beneficio del especialista; representa una ventaja real. Tu postura por
   defecto ante ella es APROBAR. No la rechaces por cautela genérica: solo di no si hay una razón
@@ -749,13 +821,14 @@ Responde SOLO con JSON válido, sin texto adicional:
   "rationale": "razón global breve EN ESPAÑOL de tus decisiones de cartera",
   "decisions": [
     {"symbol": "BTCUSD", "approve": true, "priority": 1, "allocation_pct": 0.25,
-     "position_action": "hold", "tp_rr": 1.5, "size_mult": 1.2,
+     "position_action": "hold", "tp_rr": 1.5, "size_mult": 1.2, "max_spread": 60,
      "reason": "explicación breve EN ESPAÑOL"}
   ]
 }
 position_action admite: "hold" | "reduce" | "close" | "hedge". tp_rr es opcional (omítelo o 0
 para respetar el TP del especialista). size_mult es opcional (omítelo o 1 para el lote base del
-especialista; >1 agranda, <1 encoge)."""
+especialista; >1 agranda, <1 encoge). max_spread es opcional (omítelo o 0 para respetar el filtro
+de spread base del especialista; en puntos, solo para esta entrada)."""
 
 
 class CoordinatorAgent:
@@ -898,6 +971,15 @@ class CoordinatorAgent:
                          f"({pos_label}, "
                          f"P/L flotante {si.get('floating_pnl', 0):+.2f}){at_max_tag} | "
                          f"margen para asignar: {self._pct(si.get('remaining_pct'))}")
+            # Spread actual vs filtro base: el director decide si fija un max_spread.
+            max_sf = si.get("max_spread_filter") or 0.0
+            cur_sp = si.get("current_spread")
+            if max_sf > 0 or cur_sp is not None:
+                cur_txt = f"{cur_sp:.1f}" if cur_sp is not None else "n/a"
+                max_txt = f"{max_sf:.1f}" if max_sf > 0 else "sin filtro"
+                wide = (" ⚠ ENSANCHADO" if (cur_sp is not None and max_sf > 0
+                                            and cur_sp > max_sf) else "")
+                lines.append(f"  Spread: actual {cur_txt} pts / filtro máx {max_txt} pts{wide}")
             # Antigüedad de las posiciones abiertas: la mesa avisa de las recién
             # abiertas (en gracia) para no cerrarlas antes de que evolucionen.
             if si.get("open_positions") and si.get("newest_position_age") is not None:
@@ -1006,6 +1088,9 @@ class CoordinatorAgent:
                 # Multiplicador de lote opcional sobre el lote base del especialista.
                 # 0/ausente => lote base (×1).
                 "size_mult": self._to_float(d.get("size_mult"), 0.0),
+                # Filtro de spread opcional (puntos) para ESTA entrada. 0/ausente =>
+                # baseline configurado del especialista (transitorio, no lo reescribe).
+                "max_spread": self._to_float(d.get("max_spread"), 0.0),
                 "reason": str(d.get("reason", "")),
             })
         return str(data.get("rationale", "")), decisions

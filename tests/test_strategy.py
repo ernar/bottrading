@@ -68,6 +68,33 @@ def test_rechaza_spread_alto():
                               spread_points=5.0) is False
 
 
+def test_max_spread_override_afloja_filtro():
+    # La mesa afloja el filtro (max_spread): una entrada con spread que el baseline
+    # (2.0) rechazaría se acepta con un override mayor (10.0).
+    eng = _engine(max_spread_filter=2.0)
+    assert eng.validate_trade(_buy_signal(), positions=[], tick=_tick(),
+                              spread_points=5.0) is False
+    assert eng.validate_trade(_buy_signal(), positions=[], tick=_tick(),
+                              spread_points=5.0, max_spread_override=10.0) is True
+
+
+def test_max_spread_override_aprieta_filtro():
+    # La mesa aprieta el filtro: una entrada que el baseline (10.0) permitiría se
+    # rechaza con un override más estricto (3.0).
+    eng = _engine(max_spread_filter=10.0)
+    assert eng.validate_trade(_buy_signal(), positions=[], tick=_tick(),
+                              spread_points=5.0) is True
+    assert eng.validate_trade(_buy_signal(), positions=[], tick=_tick(),
+                              spread_points=5.0, max_spread_override=3.0) is False
+
+
+def test_max_spread_override_cero_usa_baseline():
+    # override <= 0 (o None) => se respeta el baseline del especialista.
+    eng = _engine(max_spread_filter=2.0)
+    assert eng.validate_trade(_buy_signal(), positions=[], tick=_tick(),
+                              spread_points=5.0, max_spread_override=0.0) is False
+
+
 def test_rechaza_max_posiciones_globales():
     eng = _engine(max_open_positions=3)
     assert eng.validate_trade(_buy_signal(), positions=[], tick=_tick(),

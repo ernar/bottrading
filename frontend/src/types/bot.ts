@@ -39,6 +39,51 @@ export interface Trade {
   duration_seconds: number | null
 }
 
+// Vela H1 para el gráfico (GET /api/candles/<symbol>). `t` en hora del bróker
+// "YYYY-MM-DD HH:MM:SS" (tratada con brokerToDisplayMs, igual que equity/señales).
+export interface Candle {
+  t: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface CandlesResponse {
+  symbol: string
+  timeframe: string
+  candles: Candle[]
+}
+
+// Fila del histórico de señales persistidas (GET /api/db/signals). El backend
+// devuelve action en MAYÚSCULAS y varios campos numéricos como string ("" si nulo).
+export interface DbSignal {
+  timestamp: string
+  platform: string
+  agent: string
+  symbol: string
+  action: string
+  confidence: string
+  trend: string
+  risk_level: string
+  entry: number | string
+  stop_loss: number | string
+  take_profit: number | string
+  reason: string
+  trade_id: string
+  executed: string
+}
+
+// Marcador de señal ya normalizado para pintar sobre las velas.
+export interface SignalMarker {
+  t: string
+  action: 'buy' | 'sell'
+  price: number
+  confidence?: number
+  reason?: string
+}
+
 export interface AccountInfo {
   balance: number
   equity: number
@@ -126,6 +171,9 @@ export interface CoordinatorSymbolState {
   open_positions: number
   max_allocation_pct: number
   remaining_pct: number
+  // Filtro de spread del especialista (baseline, puntos) y spread actual en vivo.
+  max_spread_filter?: number
+  current_spread?: number | null
 }
 
 export interface CoordinatorSnapshot {
@@ -161,6 +209,9 @@ export interface CoordinatorDecision {
   manage_direction?: 'BUY' | 'SELL'
   tp_rr?: number
   size_mult?: number
+  // Filtro de spread (puntos) que la mesa fija para ESTA entrada (transitorio).
+  // 0/ausente = baseline del especialista.
+  max_spread?: number
   reason: string
   clamp?: string
 }

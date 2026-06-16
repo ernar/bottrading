@@ -5,6 +5,7 @@ import { Navigation } from './components/Navigation'
 import { DuplicateInstanceModal } from './components/DuplicateInstanceModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { DashboardPage } from './pages/Dashboard'
+import { ChartsPage } from './pages/Charts'
 import { PositionsPage } from './pages/Positions'
 import { HistoryPage } from './pages/History'
 import { AgentsPage } from './pages/Agents'
@@ -25,6 +26,7 @@ function App() {
         <ErrorBoundary>
           <Routes>
             <Route path="/" element={<DashboardPage state={state} />} />
+            <Route path="/charts" element={<ChartsPage state={state} />} />
             <Route path="/coordinator" element={<CoordinatorPage liveCoordination={coordination} />} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/positions" element={<PositionsPage state={state} coordination={coordination} />} />
