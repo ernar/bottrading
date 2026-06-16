@@ -10,6 +10,7 @@ import { PositionsPage } from './pages/Positions'
 import { HistoryPage } from './pages/History'
 import { AgentsPage } from './pages/Agents'
 import { CoordinatorPage } from './pages/Coordinator'
+import { TerminalPage } from './pages/Terminal'
 import { ChatWidget } from './components/ChatWidget'
 import { LofiPlayer } from './components/LofiPlayer'
 import { SettingsPage } from './pages/Settings'
@@ -31,6 +32,7 @@ function App() {
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/positions" element={<PositionsPage state={state} coordination={coordination} />} />
             <Route path="/history" element={<HistoryPage state={state} />} />
+            <Route path="/terminal" element={<TerminalPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </ErrorBoundary>

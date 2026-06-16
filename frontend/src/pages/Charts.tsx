@@ -61,10 +61,11 @@ export function ChartsPage({ state }: ChartsPageProps) {
       .catch(() => {})
   }, [])
 
-  // Posición abierta del símbolo (en vivo, desde el estado del WebSocket).
-  const position: Position | null = useMemo(() => {
-    if (!symbol) return null
-    return Object.values(state?.positions || {}).find(p => p.symbol === symbol) || null
+  // TODAS las posiciones abiertas del símbolo (en vivo, desde el WebSocket).
+  // Puede haber varias por símbolo (pirámide), así que las pasamos todas.
+  const positions: Position[] = useMemo(() => {
+    if (!symbol) return []
+    return Object.values(state?.positions || {}).filter(p => p.symbol === symbol)
   }, [state?.positions, symbol])
 
   // Marca temporal de la última señal viva del símbolo: dispara el refresco de
@@ -116,7 +117,7 @@ export function ChartsPage({ state }: ChartsPageProps) {
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input type="checkbox" checked={showPosition}
               onChange={e => setShowPosition(e.target.checked)} />
-            <span className="text-gray-300">Posición</span>
+            <span className="text-gray-300">Posiciones{positions.length ? ` (${positions.length})` : ''}</span>
           </label>
         </div>
       </div>
@@ -146,7 +147,7 @@ export function ChartsPage({ state }: ChartsPageProps) {
           candles={candles}
           symbol={symbol}
           signals={markers}
-          position={position}
+          positions={positions}
           showSignals={showSignals}
           showPosition={showPosition}
         />
@@ -154,7 +155,8 @@ export function ChartsPage({ state }: ChartsPageProps) {
 
       <p className="text-xs text-gray-600">
         Velas H1 del bróker. ▲ verde = señal de compra · ▼ rojo = señal de venta (en su
-        precio de entrada). Líneas discontinuas: entrada, SL y TP de la posición abierta.
+        precio de entrada). Líneas discontinuas: entrada, SL y TP de cada posición abierta.
+        Zoom con la rueda del ratón (o los botones +/−), arrastra para desplazar y ⤢ para ver todo.
       </p>
     </div>
   )

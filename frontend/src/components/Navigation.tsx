@@ -7,6 +7,7 @@ const LINKS = [
   { to: '/agents', label: 'Agents' },
   { to: '/positions', label: 'Positions' },
   { to: '/history', label: 'History' },
+  { to: '/terminal', label: 'Terminal' },
   { to: '/settings', label: 'Ajustes' },
 ]
 

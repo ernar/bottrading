@@ -43,9 +43,11 @@ export function useApi() {
     return data
   }
 
-  // Histórico de señales persistidas del símbolo (para los marcadores).
-  const getSignalHistory = async (symbol: string, limit = 50): Promise<DbSignal[]> => {
-    const { data } = await api.get(`/api/db/signals?symbol=${symbol}&limit=${limit}&platform=mt4`)
+  // Histórico de señales persistidas del símbolo (para los marcadores). Solo
+  // accionables (nonhold): el bot registra una señal por rotación y la mayoría
+  // son HOLD, que ahogarían a las BUY/SELL dentro del límite.
+  const getSignalHistory = async (symbol: string, limit = 200): Promise<DbSignal[]> => {
+    const { data } = await api.get(`/api/db/signals?symbol=${symbol}&limit=${limit}&platform=mt4&nonhold=1`)
     return data
   }
 

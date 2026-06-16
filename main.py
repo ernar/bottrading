@@ -4,6 +4,13 @@ import threading
 import socket as _socket
 from dotenv import load_dotenv
 
+# Tee de stdout/stderr -> buffer en memoria para la pestaña "Terminal" del
+# dashboard. Se instala ANTES que el resto de imports del proyecto (console
+# reconfigura stdout; api.server fija el logging de stderr al importarse), para
+# que la captura abarque también los primeros mensajes del arranque.
+from core.console_capture import install_capture
+install_capture()
+
 from core import console
 from core.state import bot_state
 from clients.mt4_client import MT4Client

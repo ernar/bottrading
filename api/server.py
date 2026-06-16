@@ -149,11 +149,17 @@ def get_csv_signals():
     limit = int(request.args.get("limit", 15))
     platform = request.args.get("platform", "mt4").upper()
     symbol = request.args.get("symbol")  # opcional: filtra por símbolo (gráfico)
+    # opcional: descarta los HOLD (el bot registra una señal por rotación y la
+    # mayoría son HOLD; el gráfico solo quiere las accionables BUY/SELL, que de
+    # otro modo quedan ahogadas/cortadas por el límite entre tantos HOLD).
+    nonhold = request.args.get("nonhold", "").lower() in ("1", "true", "yes")
     session = get_session()
     try:
         q = session.query(Signal).filter(Signal.platform == platform)
         if symbol:
             q = q.filter(Signal.symbol == symbol)
+        if nonhold:
+            q = q.filter(Signal.action != "HOLD")
         rows = (q.order_by(Signal.timestamp.desc(), Signal.id.desc())
                  .limit(limit).all())
     finally:
@@ -392,6 +398,19 @@ def get_news():
                 flat.append({"symbol": sym, **assigned[sym][i]})
 
     return jsonify({"enabled": news_provider.enabled, "headlines": flat}), 200
+
+
+@app.route("/api/console", methods=["GET"])
+def get_console():
+    """Salida de consola del bot (lo que imprime ``python main.py``) para la
+    pestaña Terminal del dashboard. Polling incremental: ``?since=<seq>`` devuelve
+    solo las líneas nuevas; ``since<0`` (o ausente) devuelve el backlog completo
+    del buffer con ``reset=true``. Conserva los códigos ANSI (el front los
+    colorea). Lectura sin token, como el resto de rutas GET de estado."""
+    from core.console_capture import get_capture
+    since = int(request.args.get("since", -1) or -1)
+    limit = int(request.args.get("limit", 1000) or 1000)
+    return jsonify(get_capture().snapshot(since=since, limit=limit)), 200
 
 
 @app.route("/api/stats", methods=["GET"])
