@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getApiUrl, getApiHeaders } from '../config'
+import { ConnectionSettings } from './ConnectionSettings'
 
 const API_URL = getApiUrl()
 
@@ -30,29 +31,39 @@ type Status =
   | { s: 'saving' }
   | { s: 'saved'; result: SaveResult }
 
+type Val = string | boolean
+
+const ALL = '__all__'
+const CONN = '__conn__' // pestaña de conexión del dashboard (no es un grupo del .env)
+
 export function BotSettings() {
   const [entries, setEntries] = useState<SettingEntry[]>([])
-  const [edited, setEdited] = useState<Record<string, string | boolean>>({})
+  const [original, setOriginal] = useState<Record<string, Val>>({})
+  const [edited, setEdited] = useState<Record<string, Val>>({})
   const [status, setStatus] = useState<Status>({ s: 'idle' })
+  const [query, setQuery] = useState('')
+  const [activeGroup, setActiveGroup] = useState(CONN)
 
   const load = useCallback(() => {
     setStatus({ s: 'loading' })
     fetch(`${API_URL}/api/settings`, { headers: getApiHeaders() })
       .then(async r => {
-        if (r.status === 401) throw new Error('No autorizado: define el API Token arriba.')
+        if (r.status === 401) throw new Error('No autorizado: define el API Token en la pestaña «Conexión».')
         if (!r.ok) throw new Error(`El servidor respondió HTTP ${r.status}.`)
         return r.json()
       })
       .then((data: { settings: SettingEntry[] }) => {
-        setEntries(data.settings || [])
+        const list = data.settings || []
+        setEntries(list)
         // Valor inicial editable: el actual (no secretos); los secretos vacíos.
-        const init: Record<string, string | boolean> = {}
-        for (const e of data.settings || []) {
+        const init: Record<string, Val> = {}
+        for (const e of list) {
           if (e.secret) init[e.key] = ''
           else if (e.type === 'bool') init[e.key] = Boolean(e.value)
           else init[e.key] = e.value == null ? '' : String(e.value)
         }
         setEdited(init)
+        setOriginal(init)
         setStatus({ s: 'ready' })
       })
       .catch(e => setStatus({ s: 'error', msg: e instanceof Error ? e.message : 'error' }))
@@ -60,12 +71,48 @@ export function BotSettings() {
 
   useEffect(() => { load() }, [load])
 
-  const setVal = (key: string, v: string | boolean) =>
-    setEdited(prev => ({ ...prev, [key]: v }))
+  const setVal = (key: string, v: Val) => setEdited(prev => ({ ...prev, [key]: v }))
+
+  // Grupos en orden de aparición del esquema.
+  const groups = useMemo(() => {
+    const g: string[] = []
+    for (const e of entries) if (!g.includes(e.group)) g.push(e.group)
+    return g
+  }, [entries])
+
+  // ¿Cambió un campo respecto al valor cargado? (un secreto es "sucio" si se
+  // escribió algo, ya que su valor real no se conoce).
+  const isDirty = useCallback((e: SettingEntry) => {
+    const v = edited[e.key]
+    if (e.secret) return typeof v === 'string' && v.trim() !== ''
+    return v !== original[e.key]
+  }, [edited, original])
+
+  const dirtyKeys = useMemo(() => entries.filter(isDirty).map(e => e.key), [entries, isDirty])
+  const dirtyByGroup = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const e of entries) if (isDirty(e)) m[e.group] = (m[e.group] || 0) + 1
+    return m
+  }, [entries, isDirty])
+
+  const q = query.trim().toLowerCase()
+  const matches = useCallback((e: SettingEntry) =>
+    !q || e.label.toLowerCase().includes(q) || e.key.toLowerCase().includes(q) || e.help.toLowerCase().includes(q),
+  [q])
+
+  // Con búsqueda activa, se ignora la pestaña y se muestran todos los grupos que
+  // contengan alguna coincidencia; si no, solo el grupo activo (o todos).
+  const visibleGroups = q
+    ? groups.filter(g => entries.some(e => e.group === g && matches(e)))
+    : activeGroup === ALL ? groups : groups.filter(g => g === activeGroup)
+
+  // La pestaña de conexión del dashboard no es un grupo del .env: tiene su propia
+  // UI (URL/token con sus botones). La búsqueda (sobre el .env) la sustituye.
+  const showConnection = !q && activeGroup === CONN
 
   const save = () => {
     // Envía todos los no-secretos; los secretos solo si el usuario escribió algo.
-    const updates: Record<string, string | boolean> = {}
+    const updates: Record<string, Val> = {}
     for (const e of entries) {
       const v = edited[e.key]
       if (e.secret) {
@@ -81,7 +128,7 @@ export function BotSettings() {
       body: JSON.stringify({ updates }),
     })
       .then(async r => {
-        if (r.status === 401) throw new Error('No autorizado: define el API Token arriba.')
+        if (r.status === 401) throw new Error('No autorizado: define el API Token en la pestaña «Conexión».')
         const j = await r.json()
         if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
         return j as SaveResult
@@ -93,18 +140,45 @@ export function BotSettings() {
       .catch(e => setStatus({ s: 'error', msg: e instanceof Error ? e.message : 'error' }))
   }
 
-  // Agrupa preservando el orden de aparición del esquema.
-  const groups: string[] = []
-  for (const e of entries) if (!groups.includes(e.group)) groups.push(e.group)
+  const discard = () => { setEdited(original); setStatus({ s: 'ready' }) }
+
+  const tabBtn = (g: string, label: string) => {
+    const active = q ? false : activeGroup === g
+    const n = g === ALL ? dirtyKeys.length : dirtyByGroup[g] || 0
+    return (
+      <button
+        key={g}
+        onClick={() => { setActiveGroup(g); setQuery('') }}
+        className={`px-3 py-1.5 text-sm rounded-full whitespace-nowrap transition-colors border ${
+          active
+            ? 'bg-blue-600 border-blue-500 text-white'
+            : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+        }`}
+      >
+        {label}
+        {n > 0 && (
+          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500 text-gray-900 font-bold align-middle">{n}</span>
+        )}
+      </button>
+    )
+  }
 
   return (
-    <div className="mt-8">
-      <h2 className="text-xl font-bold mb-1">Ajustes del bot (.env)</h2>
-      <p className="text-sm text-gray-400 mb-4">
-        Edita la configuración del bot. Los cambios marcados <Hot /> se aplican en caliente;
-        el resto requiere reiniciar <code>main.py</code>. Las contraseñas/token solo se
-        guardan si escribes un valor nuevo.
-      </p>
+    <div>
+      {!showConnection && (
+        <>
+          <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
+            <h2 className="text-lg font-semibold text-gray-200">Configuración del bot (<code>.env</code>)</h2>
+            <div className="flex items-center gap-3 text-[11px] text-gray-400">
+              <span className="flex items-center gap-1"><Hot /> se aplica sin reiniciar</span>
+              <span className="flex items-center gap-1"><Restart /> requiere reiniciar</span>
+            </div>
+          </div>
+          <p className="text-sm text-gray-400 mb-4">
+            Las contraseñas y tokens solo se guardan si escribes un valor nuevo.
+          </p>
+        </>
+      )}
 
       {status.s === 'loading' && (
         <div className="bg-gray-800 text-gray-400 p-6 rounded text-center text-sm">Cargando ajustes…</div>
@@ -127,36 +201,90 @@ export function BotSettings() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 items-start">
-            {groups.map(group => (
-              <div key={group} className="bg-gray-800 rounded-lg border border-gray-700 p-5">
-                <h3 className="text-sm font-bold text-cyan-300 uppercase tracking-wide mb-3">{group}</h3>
-                <div className="space-y-4">
-                  {entries.filter(e => e.group === group).map(e => (
-                    <Field key={e.key} entry={e} value={edited[e.key]} onChange={v => setVal(e.key, v)} />
-                  ))}
-                </div>
+          {/* Buscador + navegación por grupos */}
+          <div className="mb-5 space-y-3">
+            <div className="relative max-w-sm">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">🔍</span>
+              <input
+                type="text"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Buscar ajuste (nombre, clave o descripción)…"
+                className="w-full pl-9 pr-8 py-2 rounded-lg bg-gray-900 border border-gray-700 text-white text-sm
+                           focus:outline-none focus:border-blue-500"
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-lg leading-none"
+                  aria-label="Limpiar búsqueda"
+                >×</button>
+              )}
+            </div>
+            {!q && (
+              <div className="flex flex-wrap gap-2">
+                {tabBtn(CONN, 'Conexión')}
+                {groups.map(g => tabBtn(g, g))}
+                {tabBtn(ALL, 'Todos')}
               </div>
-            ))}
+            )}
           </div>
 
-          <div className="flex items-center gap-3 mt-4">
+          {/* Contenido: la pestaña Conexión usa su propia UI; el resto, tarjetas */}
+          {showConnection ? (
+            <ConnectionSettings />
+          ) : (
+            <div className="space-y-6">
+              {visibleGroups.map(group => {
+                const fields = entries.filter(e => e.group === group && matches(e))
+                if (fields.length === 0) return null
+                return (
+                  <div key={group} className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+                    <h3 className="text-sm font-bold text-cyan-300 uppercase tracking-wide mb-4">{group}</h3>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-5">
+                      {fields.map(e => (
+                        <Field key={e.key} entry={e} value={edited[e.key]} dirty={isDirty(e)} onChange={v => setVal(e.key, v)} />
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              {q && visibleGroups.length === 0 && (
+                <div className="bg-gray-800 text-gray-400 p-8 rounded text-center text-sm">
+                  Ningún ajuste coincide con «{query}».
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Barra de guardado pegajosa (solo para los ajustes del .env, no Conexión) */}
+      {entries.length > 0 && !showConnection && (
+        <div className="sticky bottom-0 mt-6 -mx-4 sm:-mx-8 px-4 sm:px-8 py-3 bg-gray-900/95 backdrop-blur border-t border-gray-700
+                        flex items-center justify-between gap-3 z-10">
+          <span className="text-sm text-gray-400">
+            {dirtyKeys.length === 0
+              ? 'Sin cambios pendientes'
+              : <><span className="text-amber-300 font-semibold">{dirtyKeys.length}</span> cambio(s) sin guardar</>}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={discard}
+              disabled={status.s === 'saving' || dirtyKeys.length === 0}
+              className="px-3 py-2 text-sm rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40"
+            >
+              Descartar
+            </button>
             <button
               onClick={save}
-              disabled={status.s === 'saving'}
-              className="px-4 py-2 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50"
+              disabled={status.s === 'saving' || dirtyKeys.length === 0}
+              className="px-4 py-2 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40"
             >
               {status.s === 'saving' ? 'Guardando…' : 'Guardar ajustes'}
             </button>
-            <button
-              onClick={load}
-              disabled={status.s === 'saving'}
-              className="px-3 py-2 text-sm rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50"
-            >
-              Descartar cambios
-            </button>
           </div>
-        </>
+        </div>
       )}
     </div>
   )
@@ -166,24 +294,33 @@ function Hot() {
   return <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900 text-emerald-200 align-middle">en caliente</span>
 }
 
+function Restart() {
+  return <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 align-middle">reinicio</span>
+}
+
 function Field({
-  entry, value, onChange,
+  entry, value, dirty, onChange,
 }: {
   entry: SettingEntry
-  value: string | boolean
-  onChange: (v: string | boolean) => void
+  value: Val
+  dirty: boolean
+  onChange: (v: Val) => void
 }) {
   const labelRow = (
     <div className="flex items-center gap-2 flex-wrap">
       <label className="text-sm font-medium text-gray-200">{entry.label}</label>
+      {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" title="Modificado" />}
       <code className="text-[10px] text-gray-500">{entry.key}</code>
-      {entry.hot ? <Hot /> : <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">reinicio</span>}
+      {entry.hot ? <Hot /> : <Restart />}
     </div>
   )
 
+  // Borde izquierdo ámbar cuando el campo está modificado.
+  const wrap = `pl-3 border-l-2 ${dirty ? 'border-amber-400' : 'border-transparent'}`
+
   if (entry.type === 'bool') {
     return (
-      <div className="flex items-start justify-between gap-4">
+      <div className={`${wrap} flex items-start justify-between gap-4`}>
         <div className="min-w-0">
           {labelRow}
           <p className="text-xs text-gray-500 mt-0.5">{entry.help}</p>
@@ -201,7 +338,7 @@ function Field({
   }
 
   return (
-    <div>
+    <div className={wrap}>
       {labelRow}
       <input
         type={entry.secret ? 'password' : entry.type === 'str' ? 'text' : 'number'}

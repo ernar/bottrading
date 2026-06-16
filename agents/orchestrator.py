@@ -1728,14 +1728,19 @@ class AgentOrchestrator:
         Fail-safe: no propaga errores."""
         try:
             from core.profiles import (get_active_risk, get_active_horizon,
-                                       build_agent_directive, build_coordinator_directive)
+                                       build_agent_directive, build_coordinator_directive,
+                                       allows_high_risk_with_positions)
             risk, horizon = get_active_risk(), get_active_horizon()
             agent_directive = build_agent_directive(risk, horizon)
             coord_directive = build_coordinator_directive(risk, horizon)
+            # Apetito alto (aggressive/extreme): levanta el veto de validate_trade a
+            # las señales risk_level="high" con posiciones abiertas.
+            allow_high_risk = allows_high_risk_with_positions(risk)
             for agent in self.agents:
                 strat = getattr(agent, "strategy", None)
                 if strat is not None:
                     strat.trading_directive = agent_directive
+                    strat.allow_high_risk_with_positions = allow_high_risk
             if self.coordinator is not None:
                 self.coordinator.risk_directive = coord_directive
         except Exception as e:

@@ -183,6 +183,106 @@ def get_csv_trades():
     return jsonify(out), 200
 
 
+@app.route("/api/db/closed-trades", methods=["GET"])
+def get_closed_trades():
+    """Histórico de trades CERRADOS persistidos (tabla ``closed_trades``), con
+    filtros. A diferencia de ``state.closed_trades`` (solo la sesión en memoria),
+    esto sobrevive a los reinicios.
+
+    Parámetros (query string, todos opcionales):
+      - ``platform`` (default mt4)
+      - ``symbol``   filtra por símbolo exacto
+      - ``action``   BUY / SELL
+      - ``result``   ``win`` (pnl > 0) o ``loss`` (pnl <= 0)
+      - ``from``/``to``  rango de fechas ``YYYY-MM-DD`` sobre el cierre (``to`` incl.)
+      - ``limit``    máximo de filas devueltas (default 200, 0 = sin tope)
+
+    Devuelve ``{trades, summary, symbols}``: ``summary`` (total/winning/pnl) se
+    calcula sobre TODO el set filtrado, no solo sobre las filas devueltas;
+    ``symbols`` es la lista de símbolos distintos (para el desplegable)."""
+    from datetime import timedelta
+    from sqlalchemy import case, func
+    from core.db import ClosedTrade, get_session
+
+    platform = request.args.get("platform", "mt4").upper()
+    symbol = (request.args.get("symbol") or "").strip()
+    action = (request.args.get("action") or "").strip().upper()
+    result = (request.args.get("result") or "").strip().lower()
+    limit = int(request.args.get("limit", 200) or 0)
+
+    def _parse_day(name):
+        raw = (request.args.get(name) or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError:
+            return None
+
+    date_from = _parse_day("from")
+    date_to = _parse_day("to")
+
+    session = get_session()
+    try:
+        def _apply_filters(q):
+            q = q.filter(ClosedTrade.platform == platform)
+            if symbol:
+                q = q.filter(ClosedTrade.symbol == symbol)
+            if action in ("BUY", "SELL"):
+                q = q.filter(ClosedTrade.action == action)
+            if result == "win":
+                q = q.filter(ClosedTrade.pnl > 0)
+            elif result == "loss":
+                q = q.filter(ClosedTrade.pnl <= 0)
+            if date_from is not None:
+                q = q.filter(ClosedTrade.timestamp >= date_from)
+            if date_to is not None:
+                q = q.filter(ClosedTrade.timestamp < date_to + timedelta(days=1))
+            return q
+
+        rows_q = _apply_filters(session.query(ClosedTrade)).order_by(
+            ClosedTrade.timestamp.desc(), ClosedTrade.id.desc())
+        if limit and limit > 0:
+            rows_q = rows_q.limit(limit)
+        rows = rows_q.all()
+
+        # Resumen sobre el set filtrado completo (independiente del límite).
+        agg = _apply_filters(session.query(
+            func.count(ClosedTrade.id),
+            func.coalesce(func.sum(ClosedTrade.pnl), 0.0),
+            func.coalesce(func.sum(
+                case((ClosedTrade.pnl > 0, 1), else_=0)), 0),
+        )).one()
+        total, total_pnl, winning = int(agg[0]), float(agg[1]), int(agg[2])
+
+        symbols = [s[0] for s in (session.query(ClosedTrade.symbol)
+                   .filter(ClosedTrade.platform == platform)
+                   .distinct().order_by(ClosedTrade.symbol.asc()).all()) if s[0]]
+    finally:
+        session.close()
+
+    trades = []
+    for r in rows:
+        close_dt = r.timestamp
+        open_dt = None
+        if close_dt and r.duration_seconds:
+            open_dt = close_dt - timedelta(seconds=int(r.duration_seconds))
+        trades.append({
+            "symbol": r.symbol, "action": r.action,
+            "entry_price": r.entry_price, "exit_price": r.exit_price,
+            "volume": r.volume, "pnl": r.pnl, "commission": r.commission,
+            "open_time": _fmt_ts(open_dt), "close_time": _fmt_ts(close_dt),
+            "duration_seconds": r.duration_seconds,
+            "close_reason": r.close_reason, "trade_id": r.trade_id,
+        })
+
+    return jsonify({
+        "trades": trades,
+        "summary": {"total": total, "winning": winning, "pnl": round(total_pnl, 2)},
+        "symbols": symbols,
+    }), 200
+
+
 @app.route("/api/equity", methods=["GET"])
 def get_equity():
     """Serie temporal de la cartera (balance/equity) para el gráfico de evolución

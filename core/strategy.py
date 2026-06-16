@@ -104,6 +104,11 @@ class StrategyEngine:
         # para que el LLM cambie REALMENTE su disposición. La fija el orquestador
         # (_refresh_trading_directives) según el perfil activo; vacía = sin sesgo.
         self.trading_directive = ""
+        # Apetito de riesgo: si el perfil activo es de apetito alto
+        # (aggressive/extreme) se permite abrir señales risk_level="high" aunque
+        # ya haya posiciones abiertas. Lo fija el orquestador según el perfil
+        # (_refresh_trading_directives); el resto de guardarraíles siguen.
+        self.allow_high_risk_with_positions = False
         # Comisión: puede venir del parámetro o del config (defaulteado a 7.0).
         self.commission_per_lot = commission_per_lot if commission_per_lot is not None else config.commission_per_lot
         if self.provider == "ollama":
@@ -222,7 +227,8 @@ Devuelve solo el JSON con el formato especificado."""
             return reject(f"acción desconocida '{action}'")
         if signal["confidence"] < self.min_confidence:
             return reject(f"confianza {signal['confidence']:.0%} < {self.min_confidence:.0%}")
-        if signal.get("risk_level") == "high" and positions:
+        if (signal.get("risk_level") == "high" and positions
+                and not self.allow_high_risk_with_positions):
             return reject("riesgo alto con posiciones abiertas")
 
         # Una señal de confianza muy alta se salta el límite de posiciones del

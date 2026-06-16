@@ -146,6 +146,22 @@ def get_active_horizon() -> str:
     return val if val in HORIZON_PROFILES else "medio"
 
 
+# Perfiles cuyo apetito permite ABRIR señales de riesgo ALTO (risk_level="high")
+# aunque ya haya posiciones abiertas en el símbolo. Los perfiles más cautos las
+# vetan en `validate_trade` ("riesgo alto con posiciones abiertas"); en los de
+# apetito alto ese veto se levanta para que la mesa pueda asumir más riesgo
+# cuando el usuario sube el toggle. El resto de guardarraíles (exposición por
+# símbolo/total, margen libre, R:R mínimo) siguen vigentes.
+_HIGH_RISK_WITH_POSITIONS_PROFILES = {"aggressive", "extreme"}
+
+
+def allows_high_risk_with_positions(risk: str) -> bool:
+    """True si el perfil de riesgo permite operar señales ``risk_level="high"``
+    aun con posiciones abiertas (apetito alto). Lo consulta el orquestador para
+    fijar `StrategyEngine.allow_high_risk_with_positions`. Ver `validate_trade`."""
+    return risk in _HIGH_RISK_WITH_POSITIONS_PROFILES
+
+
 def build_agent_directive(risk: str, horizon: str) -> str:
     """Directiva combinada (riesgo + horizonte) para el prompt del especialista."""
     parts = [_RISK_AGENT_DIRECTIVE.get(risk, ""), _HORIZON_DIRECTIVE.get(horizon, "")]

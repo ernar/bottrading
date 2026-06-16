@@ -90,6 +90,25 @@ def test_permite_apilar_misma_direccion_bajo_el_limite():
                               total_open_positions=1) is True
 
 
+def test_rechaza_riesgo_alto_con_posiciones_por_defecto():
+    # Apetito normal: una señal risk_level="high" con posiciones abiertas se veta.
+    eng = _engine()
+    sig = _buy_signal()
+    sig["risk_level"] = "high"
+    pos = SimpleNamespace(direction="BUY")
+    assert eng.validate_trade(sig, positions=[pos], tick=_tick()) is False
+
+
+def test_permite_riesgo_alto_con_posiciones_en_apetito_alto():
+    # Perfil agresivo/extremo (allow_high_risk_with_positions): se levanta el veto.
+    eng = _engine()
+    eng.allow_high_risk_with_positions = True
+    sig = _buy_signal()
+    sig["risk_level"] = "high"
+    pos = SimpleNamespace(direction="BUY")
+    assert eng.validate_trade(sig, positions=[pos], tick=_tick()) is True
+
+
 # ----- calculate_lot_size -----
 
 def test_lot_size_riesgo_basico():
