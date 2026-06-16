@@ -134,6 +134,15 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
           Junta horaria: <span className="text-gray-300">{overview?.last_junta_at || 'pendiente'}</span>
           {' · '}último reporte: <span className="text-gray-300">{overview?.last_report_at || 'pendiente'}</span>
         </p>
+        {overview?.director_note && (
+          <div className="mt-3 rounded-lg border border-purple-700/60 bg-purple-950/20 px-4 py-3">
+            <div className="text-xs font-bold text-purple-300 flex items-center gap-2">
+              📝 Nota de la dirección
+              <span className="font-normal text-gray-500">· la fija el responsable desde el chat · la mesa la pondera cada rotación</span>
+            </div>
+            <p className="text-sm text-gray-200 mt-1 italic">“{overview.director_note}”</p>
+          </div>
+        )}
       </section>
 
       {/* Selectores de perfil de riesgo + horizonte (mesa + agentes, en vivo) */}

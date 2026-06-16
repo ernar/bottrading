@@ -18,7 +18,13 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 def _call_openai(model: str, system: str, user: str, temperature: float = 0.2) -> Optional[str]:
     from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    from core.llm_config import llm_timeout_seconds
+    # timeout: evita que una petición colgada congele el bucle (None = sin límite).
+    # max_retries=0: el SDK reintenta 2 veces por defecto y multiplicaría el tiempo
+    # de espera (3×timeout). En un bucle con fallback cada rotación preferimos un
+    # único intento acotado por el timeout.
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"),
+                    timeout=llm_timeout_seconds(), max_retries=0)
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -28,21 +34,30 @@ def _call_openai(model: str, system: str, user: str, temperature: float = 0.2) -
     return response.choices[0].message.content
 
 
-def _call_deepseek(model: str, system: str, user: str, temperature: float = 0.2) -> Optional[str]:
+def _call_deepseek(model: str, system: str, user: str, temperature: float = 0.2,
+                   thinking: str = None, reasoning_effort: str = None) -> Optional[str]:
     # DeepSeek expone una API compatible con OpenAI: reutilizamos el SDK de OpenAI
     # apuntando a su base_url y su clave (DEEPSEEK_API_KEY).
     from openai import OpenAI
+    from core.llm_config import deepseek_thinking_options, llm_timeout_seconds
+    # timeout: evita que una petición colgada congele el bucle (None = sin límite).
+    # max_retries=0: sin los 2 reintentos por defecto del SDK (multiplicarían la
+    # espera a 3×timeout); un único intento acotado, con fallback en la mesa.
     client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
-                    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+                    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                    timeout=llm_timeout_seconds(), max_retries=0)
+    thinking_on, extra_body = deepseek_thinking_options(model, thinking, reasoning_effort)
     kwargs = {
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "temperature": temperature,
     }
-    # deepseek-chat soporta JSON mode; deepseek-reasoner (R1) NO acepta
-    # response_format ni temperature, así que solo forzamos JSON fuera del reasoner
-    # (el parseo de generate_signal extrae el JSON aunque venga con texto alrededor).
-    if "reasoner" not in model.lower():
+    if extra_body:
+        kwargs["extra_body"] = extra_body  # toggle de thinking en los híbridos V4
+    if not thinking_on:
+        # Modo NO pensante (deepseek-chat / V4 con thinking off): soporta JSON mode
+        # y temperature. En modo pensante ambos se ignoran/no se garantizan, así que
+        # se omiten (generate_signal extrae el JSON del content de todos modos).
+        kwargs["temperature"] = temperature
         kwargs["response_format"] = {"type": "json_object"}
     response = client.chat.completions.create(**kwargs)
     return response.choices[0].message.content
@@ -52,7 +67,11 @@ def _call_gemini(model: str, system: str, user: str, temperature: float = 0.2) -
     # SDK nuevo `google-genai` (el antiguo `google.generativeai` está deprecado).
     from google import genai
     from google.genai import types
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    from core.llm_config import llm_timeout_seconds
+    # timeout (ms en google-genai): evita que una petición colgada congele el bucle.
+    timeout = llm_timeout_seconds()
+    http_options = types.HttpOptions(timeout=int(timeout * 1000)) if timeout else None
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"), http_options=http_options)
     response = client.models.generate_content(
         model=model,
         contents=user,
@@ -111,9 +130,16 @@ class StrategyEngine:
     def __init__(self, config: BotConfig, provider: str = "gemini",
                  system_suffix: str = "", min_confidence: float = None,
                  min_rr: float = None, temperature: float = 0.2,
-                 commission_per_lot: float = None):
+                 commission_per_lot: float = None,
+                 thinking: str = None, reasoning_effort: str = None):
         self.config = config
         self.provider = provider.lower()
+        # Modo pensamiento (thinking/Reasoner) de DeepSeek, opcional y por
+        # instancia: "auto"/None delega en DEEPSEEK_THINKING global; "enabled"/
+        # "disabled" lo fuerzan para ESTE motor (mezclar agentes pensantes y
+        # rápidos). Solo afecta a los modelos híbridos deepseek-v4-*.
+        self.thinking = thinking
+        self.reasoning_effort = reasoning_effort
         # Persona/contexto adicional inyectado por un agente especializado.
         self.system_suffix = system_suffix
         # Umbrales por instancia: un agente puede ser más o menos conservador
@@ -133,7 +159,10 @@ class StrategyEngine:
         # Comisión: puede venir del parámetro o del config (defaulteado a 7.0).
         self.commission_per_lot = commission_per_lot if commission_per_lot is not None else config.commission_per_lot
         if self.provider == "ollama":
-            self._ollama = ollama.Client()
+            from core.llm_config import llm_timeout_seconds
+            # timeout: evita que una generación local atascada congele el bucle
+            # (None = sin límite, comportamiento anterior).
+            self._ollama = ollama.Client(timeout=llm_timeout_seconds())
 
     def _call_ai(self, system: str, user: str) -> Optional[str]:
         model = self.config.model
@@ -141,7 +170,8 @@ class StrategyEngine:
             if self.provider == "openai":
                 return _call_openai(model, system, user, self.temperature)
             if self.provider == "deepseek":
-                return _call_deepseek(model, system, user, self.temperature)
+                return _call_deepseek(model, system, user, self.temperature,
+                                      self.thinking, self.reasoning_effort)
             if self.provider == "gemini":
                 return _call_gemini(model, system, user, self.temperature)
             response = self._ollama.chat(

@@ -138,7 +138,18 @@ export function ChatWidget() {
       .then(r => r.json())
       .then(d => {
         const reply = d.reply || d.error || 'No he podido responder.'
-        setMessages(prev => [...prev, { role: 'model', content: reply }])
+        const extra: ChatMessage[] = [{ role: 'model', content: reply }]
+        // Confirmación del efecto real: el backend fijó/retiró una nota de dirección
+        // para la mesa (solo viene cuando el asistente emitió el marcador).
+        if (d.director_note !== undefined) {
+          extra.push({
+            role: 'model',
+            content: d.director_note
+              ? `📝 Nota fijada para la mesa: “${d.director_note}”. La tendrá en cuenta en las próximas rotaciones (visible en la pestaña Mesa).`
+              : '🗑️ He retirado la nota de dirección de la mesa.',
+          })
+        }
+        setMessages(prev => [...prev, ...extra])
         setSuggestions(Array.isArray(d.suggestions) ? d.suggestions : [])
       })
       .catch(() => {

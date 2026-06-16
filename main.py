@@ -70,7 +70,9 @@ def _build_saved_agents() -> list:
         if name not in AGENT_BLUEPRINTS:
             print("  " + console.warn(f"⚠ '{name}' guardado pero ya no está en el catálogo; omitido."))
             continue
-        agent = build_agent(name, provider=item.get("provider"), model=item.get("model"))
+        agent = build_agent(name, provider=item.get("provider"), model=item.get("model"),
+                            thinking=item.get("thinking"),
+                            reasoning_effort=item.get("reasoning_effort"))
         agent.enabled = item.get("enabled", True)
         agents.append(agent)
     return agents

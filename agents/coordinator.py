@@ -774,6 +774,11 @@ class CoordinatorAgent:
         # de la mesa para que el LLM director cambie REALMENTE su disposición. La
         # fija el orquestador (_refresh_trading_directives); vacía = sin sesgo.
         self.risk_directive = ""
+        # Nota de DIRECCIÓN: instrucción libre del responsable (la fija el asistente
+        # desde el chat cuando el usuario se lo pide) que el director pondera en sus
+        # decisiones de las siguientes rotaciones. La fija el orquestador
+        # (set_director_note, persistida en .env DIRECTOR_NOTE); vacía = sin nota.
+        self.director_note = ""
 
     def set_model(self, provider: str, model: str) -> dict:
         """Cambia el provider/modelo LLM del director EN CALIENTE.
@@ -807,6 +812,9 @@ class CoordinatorAgent:
             system = COORDINATOR_SYSTEM_PROMPT
             if self.risk_directive:
                 system = f"{system}\n\n--- Apetito de la mesa (perfil activo) ---\n{self.risk_directive}"
+            if self.director_note:
+                system = (f"{system}\n\n--- NOTA DE LA DIRECCIÓN (instrucción del responsable; tenla MUY "
+                          f"en cuenta al decidir, salvo que choque con un tope de riesgo) ---\n{self.director_note}")
             raw = self.engine.chat_json(
                 system,
                 self._build_user_prompt(snapshot, signals, agents_overview, news_context),

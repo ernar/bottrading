@@ -643,9 +643,24 @@ def assistant_chat():
     except Exception as e:  # noqa: BLE001 — nunca devolver 500 silencioso al chat
         logger.error(f"assistant chat error: {e}")
         return jsonify({"error": str(e)}), 500
-    return jsonify({"reply": result.get("reply", ""),
-                    "suggestions": result.get("suggestions", []),
-                    "session_id": session_id}), 200
+    payload = {"reply": result.get("reply", ""),
+               "suggestions": result.get("suggestions", []),
+               "session_id": session_id}
+    # Si el asistente dejó una NOTA DE DIRECCIÓN para la mesa (el usuario se lo
+    # pidió), aplicarla al coordinador en caliente y persistirla. Se interpreta una
+    # palabra de retirada como vaciar la nota. Solo presente cuando hubo marcador.
+    note = result.get("director_note")
+    if note is not None and _orchestrator is not None and hasattr(_orchestrator, "set_director_note"):
+        clear_words = {"borrar", "borra", "quitar", "quita", "ninguna", "ninguno",
+                       "limpiar", "limpia", "none", "clear", "elimina", "eliminar",
+                       "olvida", "olvidala", "olvídala", "olvidalo", "olvídalo", ""}
+        target = "" if note.strip().lower() in clear_words else note.strip()
+        try:
+            applied = _orchestrator.set_director_note(target)
+            payload["director_note"] = applied.get("director_note", target)
+        except Exception as e:  # noqa: BLE001 — nunca tumbar el chat por esto
+            logger.warning("no se pudo aplicar la nota de dirección: %s", e)
+    return jsonify(payload), 200
 
 
 @app.route("/api/assistant/history", methods=["GET"])
@@ -772,6 +787,9 @@ def save_agents_selection():
         "provider": a.params.provider,
         "model": a.params.model,
         "enabled": bool(getattr(a, "enabled", True)),
+        # Modo pensamiento DeepSeek por agente (para que el toggle sobreviva al reinicio).
+        "thinking": a.params.thinking,
+        "reasoning_effort": a.params.reasoning_effort,
     } for a in _orchestrator.agents]
     write_env({"ACTIVE_AGENTS": json.dumps(selection, ensure_ascii=False)})
     payload = {"status": "ok", "saved": selection}

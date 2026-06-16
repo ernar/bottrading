@@ -12,6 +12,11 @@ export function priceDecimals(symbol: string | null | undefined): number {
 // horario de verano o la diferencia con el bróker.
 export const DISPLAY_OFFSET_HOURS = -1
 
+// Offset GMT del servidor del bróker (espejo de `MT_SERVER_GMT_OFFSET` del backend).
+// Solo lo necesita el punto EN VIVO del gráfico (`nowDisplayMs`) para situarse en la
+// misma escala que las marcas del bróker SIN depender del huso del navegador.
+export const BROKER_GMT_OFFSET_HOURS = 3
+
 const OFFSET_MS = DISPLAY_OFFSET_HOURS * 3600 * 1000
 
 // Convierte una marca del backend a epoch-ms ya desplazado (+offset de display),
@@ -31,13 +36,17 @@ export function brokerToDisplayMs(value: string | number | null | undefined): nu
 
 // Instante ACTUAL en la misma escala que brokerToDisplayMs (ms UTC-anclados +
 // offset de display), para colocar el punto "en vivo" del gráfico sobre el mismo
-// eje que las marcas del bróker. Mezclar Date.now() (epoch real) con marcas
-// ancladas a UTC metía una cola plana fantasma del ancho del huso del navegador.
-// Equivale a brokerToDisplayMs("hora bróker ahora"): la hora de pared LOCAL
-// reinterpretada como UTC (bajo el contrato de que DISPLAY_OFFSET_HOURS mapea
-// bróker -> hora local del usuario).
+// eje que las marcas del bróker. Equivale a brokerToDisplayMs("hora bróker ahora"):
+// UTC real + offset del bróker (-> hora de pared del bróker) + offset de display.
+//
+// IMPORTANTE: usa offsets FIJOS (los mismos que el resto de marcas), NO el huso del
+// navegador (`getTimezoneOffset`). Date.now() es epoch UTC y es independiente de la
+// zona del equipo; al sumar offsets constantes, el punto en vivo aterriza SIEMPRE
+// donde caería una marca del bróker recién registrada. Antes esto dependía del huso
+// del navegador y, si no era exactamente bróker+display (sesión remota, equipo en la
+// zona del bróker, DST), metía una cola plana fantasma del ancho de esa diferencia.
 export function nowDisplayMs(): number {
-  return Date.now() - new Date().getTimezoneOffset() * 60000
+  return Date.now() + (BROKER_GMT_OFFSET_HOURS + DISPLAY_OFFSET_HOURS) * 3600 * 1000
 }
 
 // `timeZone: 'UTC'` es deliberado: la marca ya viene desplazada en brokerToDisplayMs,

@@ -63,6 +63,10 @@ export interface AgentParams {
   atr_sl_mult: number
   atr_tp_mult: number
   lot_size: number
+  // Modo pensamiento (thinking/Reasoner) de DeepSeek por agente. Solo afecta a
+  // los modelos híbridos deepseek-v4-*. "auto" sigue el ajuste global.
+  thinking?: 'auto' | 'enabled' | 'disabled'
+  reasoning_effort?: '' | 'high' | 'max'
 }
 
 export interface AgentInfo {
@@ -171,6 +175,9 @@ export interface CoordinatorOverview {
   enabled: boolean
   provider?: string
   model?: string
+  // Nota de dirección activa (instrucción del responsable que la mesa pondera).
+  // La fija el asistente desde el chat; "" / ausente = sin nota.
+  director_note?: string
   can_close?: boolean
   max_total_exposure_pct?: number
   max_symbol_allocation_pct?: number

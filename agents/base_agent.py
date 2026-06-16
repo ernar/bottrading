@@ -33,6 +33,14 @@ class AgentParams(BaseModel):
     en caliente para optimizar resultados."""
     provider: str = "gemini"
     model: str = "gemini-2.0-flash"
+    # Modo pensamiento (thinking/Reasoner) de DeepSeek, por agente: "auto" sigue
+    # el default del modelo / DEEPSEEK_THINKING global; "enabled"/"disabled" lo
+    # fuerzan para ESTE agente (mezclar especialistas pensantes y rápidos). Solo
+    # afecta a los modelos híbridos deepseek-v4-*.
+    thinking: str = "auto"
+    # Profundidad del pensamiento cuando está activo: "" (la del modelo / global),
+    # "high" o "max".
+    reasoning_effort: str = ""
     min_confidence: float = 0.6
     min_rr: float = 1.0
     atr_sl_mult: float = 1.5
@@ -107,6 +115,8 @@ class SymbolAgent:
             min_confidence=params.min_confidence,
             min_rr=params.min_rr,
             temperature=params.temperature,
+            thinking=params.thinking,
+            reasoning_effort=params.reasoning_effort,
         )
         # Memoria aislada por agente: cada uno aprende de sus propias señales.
         self.memory = SignalMemory(scope=name)
@@ -220,6 +230,8 @@ class SymbolAgent:
                 min_confidence=new_params.min_confidence,
                 min_rr=new_params.min_rr,
                 temperature=new_params.temperature,
+                thinking=new_params.thinking,
+                reasoning_effort=new_params.reasoning_effort,
             )
         self.params = new_params
         self.config.default_lot_size = new_params.lot_size
@@ -231,6 +243,9 @@ class SymbolAgent:
         self.strategy.min_confidence = new_params.min_confidence
         self.strategy.min_rr = new_params.min_rr
         self.strategy.temperature = new_params.temperature
+        # thinking/reasoning_effort se leen del motor vivo en cada llamada DeepSeek.
+        self.strategy.thinking = new_params.thinking
+        self.strategy.reasoning_effort = new_params.reasoning_effort
 
     # ----- Introspección (para CLI y dashboard/orquestador) -----
 
@@ -241,6 +256,8 @@ class SymbolAgent:
             "description": self.description,
             "provider": self.params.provider,
             "model": self.params.model,
+            "thinking": self.params.thinking,
+            "reasoning_effort": self.params.reasoning_effort,
             "min_confidence": self.params.min_confidence,
             "min_rr": self.params.min_rr,
             "lot_size": self.params.lot_size,

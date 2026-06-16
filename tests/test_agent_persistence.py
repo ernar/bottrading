@@ -48,8 +48,10 @@ def test_active_agents_parsea_y_normaliza(monkeypatch):
     )
     out = get_active_agents()
     assert out == [
-        {"name": "btc-agent", "provider": "gemini", "model": "gemini-2.0-flash", "enabled": False},
-        {"name": "eth-agent", "provider": None, "model": None, "enabled": True},
+        {"name": "btc-agent", "provider": "gemini", "model": "gemini-2.0-flash", "enabled": False,
+         "thinking": None, "reasoning_effort": None},
+        {"name": "eth-agent", "provider": None, "model": None, "enabled": True,
+         "thinking": None, "reasoning_effort": None},
     ]
 
 

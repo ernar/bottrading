@@ -103,7 +103,7 @@ export function AgentsPage() {
       .finally(() => setBusy(false))
   }
 
-  const changeParams = (name: string, updates: Record<string, number>) => {
+  const changeParams = (name: string, updates: Record<string, number | string>) => {
     setBusy(true)
     return fetch(`${API_URL}/api/agents/${name}/params`, {
       method: 'POST',
@@ -278,6 +278,15 @@ export function AgentsPage() {
                       disabled={busy}
                       onChange={(p, m) => changeModel(a.name, p, m)}
                     />
+                    {a.model?.startsWith('deepseek-v4') && (
+                      <ThinkingSelector
+                        thinking={a.params.thinking}
+                        effort={a.params.reasoning_effort}
+                        disabled={busy}
+                        onChange={(thinking, reasoning_effort) =>
+                          changeParams(a.name, { thinking, reasoning_effort })}
+                      />
+                    )}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     <button
@@ -495,6 +504,49 @@ function ModelSelector({
       >
         {options.map(opt => (
           <option key={opt} value={opt}>{opt.toUpperCase()}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+// Selector del modo "pensamiento" (thinking/Reasoner) de DeepSeek para un agente.
+// Solo se muestra con modelos híbridos deepseek-v4-*. Combina el toggle de
+// thinking y la profundidad (reasoning_effort) en un único desplegable para no
+// recargar la tabla; "Auto" sigue el ajuste global (DEEPSEEK_THINKING).
+const THINKING_OPTIONS: { key: string; label: string; thinking: string; effort: string }[] = [
+  { key: 'auto', label: 'Pensar: Auto (global)', thinking: 'auto', effort: '' },
+  { key: 'enabled', label: 'Pensar: Sí', thinking: 'enabled', effort: '' },
+  { key: 'enabled|high', label: 'Pensar: Sí (high)', thinking: 'enabled', effort: 'high' },
+  { key: 'enabled|max', label: 'Pensar: Sí (max)', thinking: 'enabled', effort: 'max' },
+  { key: 'disabled', label: 'Pensar: No', thinking: 'disabled', effort: '' },
+]
+
+function ThinkingSelector({
+  thinking, effort, disabled, onChange,
+}: {
+  thinking?: string
+  effort?: string
+  disabled: boolean
+  onChange: (thinking: string, effort: string) => void
+}) {
+  const th = thinking || 'auto'
+  const ef = effort || ''
+  const current = th === 'enabled' && ef ? `enabled|${ef}` : th
+  return (
+    <div className="mt-1">
+      <select
+        value={current}
+        disabled={disabled}
+        title="Modo pensamiento (thinking) de DeepSeek V4 para este agente: razona antes de proponer la señal"
+        onChange={e => {
+          const opt = THINKING_OPTIONS.find(o => o.key === e.target.value)
+          if (opt) onChange(opt.thinking, opt.effort)
+        }}
+        className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-amber-200 disabled:opacity-50"
+      >
+        {THINKING_OPTIONS.map(o => (
+          <option key={o.key} value={o.key}>{o.label}</option>
         ))}
       </select>
     </div>

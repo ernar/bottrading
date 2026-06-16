@@ -35,6 +35,8 @@ type Val = string | boolean
 
 const ALL = '__all__'
 const CONN = '__conn__' // pestaña de conexión del dashboard (no es un grupo del .env)
+// Claves del modelo del asistente que el selector sustituye (no se muestran como texto).
+const ASSISTANT_MODEL_KEYS = ['ASSISTANT_PROVIDER', 'ASSISTANT_MODEL']
 
 export function BotSettings() {
   const [entries, setEntries] = useState<SettingEntry[]>([])
@@ -43,6 +45,10 @@ export function BotSettings() {
   const [status, setStatus] = useState<Status>({ s: 'idle' })
   const [query, setQuery] = useState('')
   const [activeGroup, setActiveGroup] = useState(CONN)
+  // Catálogo de proveedores/modelos disponibles (solo los que tienen API key en
+  // el .env), igual que el selector de agentes y mesa. Puebla el desplegable del
+  // modelo del asistente: el usuario elige sin reescribir la clave.
+  const [models, setModels] = useState<Record<string, string[]>>({})
 
   const load = useCallback(() => {
     setStatus({ s: 'loading' })
@@ -70,6 +76,14 @@ export function BotSettings() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Catálogo de modelos para el selector del asistente (mismo endpoint que agentes/mesa).
+  useEffect(() => {
+    fetch(`${API_URL}/api/models`, { headers: getApiHeaders() })
+      .then(r => r.json())
+      .then(setModels)
+      .catch(() => {})
+  }, [])
 
   const setVal = (key: string, v: Val) => setEdited(prev => ({ ...prev, [key]: v }))
 
@@ -236,11 +250,32 @@ export function BotSettings() {
           ) : (
             <div className="space-y-6">
               {visibleGroups.map(group => {
-                const fields = entries.filter(e => e.group === group && matches(e))
-                if (fields.length === 0) return null
+                // En el grupo "Asistente", el proveedor y el modelo se eligen con un
+                // desplegable (como en agentes/mesa), no con dos campos de texto: se
+                // ocultan del grid y se muestra el selector arriba.
+                const isAssistant = group === 'Asistente'
+                const fields = entries.filter(e =>
+                  e.group === group && matches(e) &&
+                  !(isAssistant && ASSISTANT_MODEL_KEYS.includes(e.key)))
+                const showAssistantSelector = isAssistant && (
+                  !q || entries.some(e => ASSISTANT_MODEL_KEYS.includes(e.key) && matches(e)))
+                if (fields.length === 0 && !showAssistantSelector) return null
+                const provEntry = entries.find(e => e.key === 'ASSISTANT_PROVIDER')
+                const modelEntry = entries.find(e => e.key === 'ASSISTANT_MODEL')
+                const assistantDirty =
+                  (provEntry ? isDirty(provEntry) : false) || (modelEntry ? isDirty(modelEntry) : false)
                 return (
                   <div key={group} className="bg-gray-800 rounded-lg border border-gray-700 p-5">
                     <h3 className="text-sm font-bold text-cyan-300 uppercase tracking-wide mb-4">{group}</h3>
+                    {showAssistantSelector && (
+                      <AssistantModelSelect
+                        models={models}
+                        provider={String(edited.ASSISTANT_PROVIDER || '') || 'gemini'}
+                        model={String(edited.ASSISTANT_MODEL || '')}
+                        dirty={assistantDirty}
+                        onChange={(p, m) => { setVal('ASSISTANT_PROVIDER', p); setVal('ASSISTANT_MODEL', m) }}
+                      />
+                    )}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-5">
                       {fields.map(e => (
                         <Field key={e.key} entry={e} value={edited[e.key]} dirty={isDirty(e)} onChange={v => setVal(e.key, v)} />
@@ -286,6 +321,56 @@ export function BotSettings() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// Selector de proveedor/modelo del asistente. Reusa el catálogo de /api/models
+// (mismo que el de agentes y mesa): lista plana "provider/model" y solo muestra
+// los proveedores que tienen su API key configurada en el .env, así no hay que
+// reescribir la clave. Escribe en ASSISTANT_PROVIDER/ASSISTANT_MODEL del .env por
+// el flujo normal de guardado (se aplica en caliente; el asistente relee el env).
+function AssistantModelSelect({
+  models, provider, model, dirty, onChange,
+}: {
+  models: Record<string, string[]>
+  provider: string
+  model: string
+  dirty: boolean
+  onChange: (provider: string, model: string) => void
+}) {
+  const current = model ? `${provider}/${model}` : ''
+  const options = Object.entries(models).flatMap(([prov, list]) => list.map(m => `${prov}/${m}`))
+  // El modelo activo puede no estar en la lista (p. ej. clave retirada): lo añadimos.
+  if (current && !options.includes(current)) options.unshift(current)
+
+  return (
+    <div className={`pl-3 mb-5 border-l-2 ${dirty ? 'border-amber-400' : 'border-transparent'}`}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-sm font-medium text-gray-200">Proveedor y modelo del asistente</label>
+        {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" title="Modificado" />}
+        <code className="text-[10px] text-gray-500">ASSISTANT_PROVIDER / ASSISTANT_MODEL</code>
+        <Hot />
+      </div>
+      <select
+        value={current}
+        onChange={e => {
+          const [p, ...rest] = e.target.value.split('/')
+          onChange(p, rest.join('/'))
+        }}
+        className="w-full max-w-md mt-1 px-3 py-2 rounded bg-gray-900 border border-gray-600 text-white text-sm
+                   focus:outline-none focus:border-blue-500"
+      >
+        {options.length === 0 && <option value="">(sin proveedores: configura una API key abajo)</option>}
+        {current === '' && options.length > 0 && <option value="">— elige modelo —</option>}
+        {options.map(opt => (
+          <option key={opt} value={opt}>{opt.toUpperCase()}</option>
+        ))}
+      </select>
+      <p className="text-xs text-gray-500 mt-0.5">
+        Igual que el selector de agentes y mesa: solo aparecen los proveedores con su API key ya
+        configurada (abajo). La clave se coge del <code>.env</code>; no hace falta reescribirla.
+      </p>
     </div>
   )
 }

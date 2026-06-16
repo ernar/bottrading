@@ -67,14 +67,20 @@ def _openai_chat(model: str, system: str, history: list, temperature: float = 0.
 def _deepseek_chat(model: str, system: str, history: list, temperature: float = 0.4) -> str:
     """Texto conversacional vía DeepSeek (API compatible con OpenAI)."""
     from openai import OpenAI
+    from core.llm_config import deepseek_thinking_options
     client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
                     base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
     messages = [{"role": "system", "content": system}]
     for m in history:
         role = "assistant" if m["role"] == "model" else "user"
         messages.append({"role": role, "content": m["content"]})
-    resp = client.chat.completions.create(
-        model=model, messages=messages, temperature=temperature)
+    thinking_on, extra_body = deepseek_thinking_options(model)
+    kwargs = {"model": model, "messages": messages}
+    if extra_body:
+        kwargs["extra_body"] = extra_body  # toggle de thinking en los híbridos V4
+    if not thinking_on:
+        kwargs["temperature"] = temperature  # el modo pensante ignora temperature
+    resp = client.chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -106,6 +112,16 @@ posiciones ni noticias. Si un dato no está, dilo en una frase ("ahora mismo no 
 redondeados de forma legible.
 - NO ejecutas órdenes ni cambias ajustes: si te lo piden, dilo en una frase y remite a la pestaña \
 correspondiente del dashboard.
+- NOTAS DE DIRECCIÓN PARA LA MESA: puedes dejar una instrucción para la MESA DE DIRECCIÓN (el director \
+que coordina la cartera) cuando el usuario te lo pida explícitamente (p. ej. "dile a la mesa que sea \
+cauta con BTC", "que priorice cerrar cortos", "que no abra nada hoy"). La mesa la tendrá en cuenta al \
+decidir en las SIGUIENTES rotaciones, hasta que se cambie o se retire. Cuando —y SOLO cuando— el usuario \
+te pida instruir a la mesa, añade, además de tu respuesta normal, una línea aparte con EXACTAMENTE este \
+formato, justo ANTES de la línea SUGERENCIAS:
+  NOTA_MESA: <instrucción concisa, en una sola línea, en español>
+  Para RETIRAR la nota vigente (el usuario dice "quita la nota", "olvídalo", etc.) usa: NOTA_MESA: borrar
+  No incluyas la línea NOTA_MESA en respuestas informativas normales, ni la menciones en el cuerpo del \
+texto. Sigues sin ejecutar órdenes: la nota es una directiva para que el director la pondere, no una orden.
 - AL FINAL de cada respuesta añade SIEMPRE una última línea, separada, con EXACTAMENTE este formato:
   SUGERENCIAS: pregunta 1 | pregunta 2 | pregunta 3
   Son 2-3 preguntas BREVES de seguimiento que el usuario podría querer hacerte a continuación, \
@@ -115,6 +131,30 @@ relevantes al contexto. No las menciones ni numeres en el cuerpo de la respuesta
 # Marcador con el que el modelo cierra su respuesta listando preguntas de
 # seguimiento. Se separan por "|" y se extraen para mostrarlas como chips.
 _SUGGESTION_MARKER = "SUGERENCIAS:"
+
+# Marcador con el que el asistente deja una NOTA DE DIRECCIÓN para la mesa
+# (instrucción del responsable que el director ponderará en las siguientes
+# rotaciones). Se emite SOLO cuando el usuario lo pide explícitamente; el backend
+# la extrae y la aplica al prompt del coordinador.
+_NOTE_MARKER = "NOTA_MESA:"
+
+
+def _split_note(text: str) -> tuple:
+    """Separa una eventual línea ``NOTA_MESA: <instrucción>`` del resto del texto.
+
+    Devuelve ``(texto_sin_nota, nota | None)``. ``None`` = el asistente no dejó
+    nota en este turno (lo normal). Una cadena (posiblemente una palabra de
+    retirada como "borrar") = el usuario pidió fijar/cambiar/retirar la nota."""
+    if not text or _NOTE_MARKER not in text:
+        return text or "", None
+    kept: list = []
+    note = None
+    for line in text.splitlines():
+        if note is None and line.strip().startswith(_NOTE_MARKER):
+            note = line.strip()[len(_NOTE_MARKER):].strip()
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip(), note
 
 
 def _split_suggestions(text: str) -> tuple:
@@ -260,7 +300,10 @@ class OrgAssistant:
                               f"en Ajustes."),
                     "suggestions": []}
 
-        reply, suggestions = _split_suggestions(raw)
+        # Extrae primero una eventual NOTA_MESA (instrucción para la mesa) y luego
+        # las sugerencias; ambas son líneas marcadas que no van en el cuerpo.
+        body, director_note = _split_note(raw)
+        reply, suggestions = _split_suggestions(body)
         if not reply:
             reply = "No he podido elaborar una respuesta. ¿Puedes reformular la pregunta?"
 
@@ -270,7 +313,12 @@ class OrgAssistant:
         if len(sess["history"]) > self.MAX_TURNS:
             sess["history"] = sess["history"][-self.MAX_TURNS:]
         sess["updated"] = time.time()
-        return {"reply": reply, "suggestions": suggestions}
+        result = {"reply": reply, "suggestions": suggestions}
+        # Solo se incluye cuando el asistente emitió el marcador (el usuario pidió
+        # instruir a la mesa): el backend la aplica al coordinador. None = no tocar.
+        if director_note is not None:
+            result["director_note"] = director_note
+        return result
 
 
 def build_live_context(state: dict, coordinator_overview: dict,

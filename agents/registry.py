@@ -291,25 +291,36 @@ def list_agents() -> list[AgentBlueprint]:
 
 
 def build_agent(name: str, debug_mode: bool = True,
-                provider: str | None = None, model: str | None = None) -> SymbolAgent:
+                provider: str | None = None, model: str | None = None,
+                thinking: str | None = None,
+                reasoning_effort: str | None = None) -> SymbolAgent:
     """Instancia un agente a partir de su blueprint.
 
     `provider`/`model` permiten sobreescribir el LLM por defecto del blueprint
-    (p. ej. elegir Gemini desde el menú) sin tocar el catálogo.
-    
+    (p. ej. elegir Gemini desde el menú) sin tocar el catálogo. `thinking`/
+    `reasoning_effort` sobreescriben el modo pensamiento DeepSeek del agente (lo
+    usa la selección guardada para que el toggle del dashboard sobreviva al
+    reinicio).
+
     También aplica overrides de configuración desde .env (MAX_OPEN_POSITIONS_*,
     MIN_CONFIDENCE_*, etc.) según la precedencia: símbolo > modelo > default.
     """
     bp = AGENT_BLUEPRINTS[name]
     params = bp.params
-    
-    # Sobreescribir provider/model si se proporcionan
-    if provider or model:
-        params = bp.params.model_copy(update={
-            "provider": provider or bp.params.provider,
-            "model": model or bp.params.model,
-        })
-    
+
+    # Sobreescribir provider/model/thinking si se proporcionan
+    overrides_llm = {}
+    if provider:
+        overrides_llm["provider"] = provider
+    if model:
+        overrides_llm["model"] = model
+    if thinking is not None:
+        overrides_llm["thinking"] = thinking
+    if reasoning_effort is not None:
+        overrides_llm["reasoning_effort"] = reasoning_effort
+    if overrides_llm:
+        params = bp.params.model_copy(update=overrides_llm)
+
     # Aplicar overrides desde .env (precedencia: símbolo > modelo > default)
     overrides = get_agent_param_overrides(bp.symbol, params.model)
     if overrides:

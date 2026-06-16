@@ -187,6 +187,9 @@ def get_active_agents() -> list:
                 "provider": (item.get("provider") or "").lower().strip() or None,
                 "model": (item.get("model") or "").strip() or None,
                 "enabled": bool(item.get("enabled", True)),
+                # Modo pensamiento DeepSeek por agente (None = sin override guardado).
+                "thinking": (item.get("thinking") or "").lower().strip() or None,
+                "reasoning_effort": (item.get("reasoning_effort") or "").lower().strip() or None,
             })
     return out
 

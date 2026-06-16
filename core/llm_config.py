@@ -148,3 +148,72 @@ def available_providers() -> dict[str, list[str]]:
         providers["gemini"] = _gemini_models(default)
 
     return providers
+
+
+def llm_timeout_seconds(default: float = 180.0) -> float | None:
+    """Timeout (segundos) para las llamadas al LLM.
+
+    Evita que una petición colgada (proveedor en la nube que no responde, Ollama
+    atascado) congele el bucle del bot indefinidamente: sin él, una llamada sin
+    respuesta deja la mesa parada en "Decidiendo asignación" para siempre. Al
+    expirar, el SDK lanza una excepción que ``StrategyEngine._call_ai`` captura y
+    convierte en ``None`` (la mesa cae a su decisión determinista; un especialista
+    se salta ese ciclo).
+
+    Configurable con ``LLM_TIMEOUT_SECONDS``. Vacío => ``default``. <= 0 => sin
+    timeout (``None``, comportamiento anterior). El default es generoso para no
+    cortar respuestas legítimas de modelos pensantes (DeepSeek thinking/Reasoner)."""
+    raw = os.getenv("LLM_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return default
+    try:
+        val = float(raw)
+    except ValueError:
+        return default
+    return val if val > 0 else None
+
+
+def deepseek_thinking_options(model: str, thinking: str | None = None,
+                              reasoning_effort: str | None = None
+                              ) -> tuple[bool, dict | None]:
+    """Resuelve el modo "pensamiento" (thinking/Reasoner) para una llamada DeepSeek.
+
+    Devuelve ``(thinking_on, extra_body)``:
+    - ``thinking_on``: si la llamada razonará antes de responder. El llamador lo
+      usa para NO enviar ``temperature`` ni forzar ``response_format`` (el modo
+      pensante los ignora o no garantiza JSON mode; el razonamiento vuelve aparte
+      en ``reasoning_content`` y el parser extrae el JSON del ``content``).
+    - ``extra_body``: cuerpo extra para el SDK de OpenAI (solo modelos híbridos
+      V4): ``{"thinking": {"type": "enabled"|"disabled"}, "reasoning_effort": …}``
+      o ``None`` para el resto.
+
+    Precedencia: override per-agente (args ``thinking``/``reasoning_effort``) >
+    variables de entorno (``DEEPSEEK_THINKING``/``DEEPSEEK_REASONING_EFFORT``) >
+    default del modelo. Un override ``None``/``""``/``"auto"`` delega en el env.
+
+    Reglas por modelo:
+    - ``deepseek-v4-*`` (híbridos): thinking ON por defecto.
+    - ``deepseek-reasoner`` (legacy): el propio alias ya activa el pensamiento
+      (sin ``extra_body``).
+    - ``deepseek-chat`` u otros: sin pensamiento.
+    """
+    m = (model or "").lower()
+
+    if m.startswith("deepseek-v4"):
+        val = (thinking or "").strip().lower()
+        if val in ("", "auto"):  # sin override per-agente: cae al env
+            val = os.getenv("DEEPSEEK_THINKING", "").strip().lower()
+        on = val not in ("disabled", "off", "false", "0", "no")  # ON por defecto
+        body: dict = {"thinking": {"type": "enabled" if on else "disabled"}}
+        if on:
+            effort = (reasoning_effort or "").strip().lower()
+            if not effort:  # sin override per-agente: cae al env
+                effort = os.getenv("DEEPSEEK_REASONING_EFFORT", "").strip().lower()
+            if effort in ("high", "max"):
+                body["reasoning_effort"] = effort
+        return on, body
+
+    if "reasoner" in m:
+        return True, None
+
+    return False, None

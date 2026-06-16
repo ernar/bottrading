@@ -241,6 +241,10 @@ class AgentOrchestrator:
         # del especialista y de la mesa, para que el LLM cambie de disposición desde
         # el primer ciclo (no solo al mover el selector en vivo).
         self._refresh_trading_directives()
+        # Nota de dirección (instrucción libre del responsable, fijada desde el chat
+        # del asistente) que la mesa pondera en sus decisiones. Se recarga del .env
+        # (DIRECTOR_NOTE) para que SOBREVIVA a los reinicios del bot.
+        self.coordinator.director_note = (os.getenv("DIRECTOR_NOTE", "") or "").strip()
         # Reporte de la última optimización (para exponer al dashboard).
         self.last_optimization = None
         self.last_optimization_at = None
@@ -1753,34 +1757,64 @@ class AgentOrchestrator:
               f"{result['provider'].upper()}/{result['model']}")
         return result
 
+    def set_director_note(self, note: str) -> dict:
+        """Fija (o retira, si ``note`` queda vacío) la NOTA DE DIRECCIÓN que la mesa
+        pondera en sus decisiones de las siguientes rotaciones. La emite el asistente
+        desde el chat cuando el usuario le pide instruir a la mesa. Se aplica en
+        caliente (el director la inyecta en su prompt en la próxima coordinación) y se
+        persiste en .env (DIRECTOR_NOTE) para sobrevivir a reinicios. Colapsa los
+        saltos de línea (el .env es de una sola línea)."""
+        clean = " ".join((note or "").split())
+        self.coordinator.director_note = clean
+        try:
+            from core.settings_schema import write_env
+            write_env({"DIRECTOR_NOTE": clean})
+        except Exception as e:  # noqa: BLE001 — nunca tumbar el API por la persistencia
+            print(f"  [mesa] no se pudo persistir DIRECTOR_NOTE: {e}")
+        print(f"  [mesa] nota de dirección {'fijada: ' + clean if clean else 'retirada'}")
+        return {"director_note": clean}
+
     # Parámetros editables a mano desde el dashboard (umbrales de señal). Se
     # acotan con PARAM_BOUNDS para no dejar al agente en una config absurda.
     EDITABLE_PARAMS = ("min_confidence", "min_rr", "atr_sl_mult", "atr_tp_mult")
+    # Parámetros de elección (string) editables: modo pensamiento de DeepSeek, con
+    # sus valores válidos. Solo afectan a los modelos híbridos deepseek-v4-*.
+    EDITABLE_CHOICE_PARAMS = {
+        "thinking": ("auto", "enabled", "disabled"),
+        "reasoning_effort": ("", "high", "max"),
+    }
 
     def set_agent_params(self, name: str, updates: dict) -> dict:
-        """Ajusta a mano los umbrales de un agente en caliente (desde el
-        dashboard). Solo acepta las claves de `EDITABLE_PARAMS`, cada una
-        validada como número y recortada a su rango en `PARAM_BOUNDS`. El cambio
-        surte efecto en el siguiente análisis del agente (no reconstruye la
-        estrategia: provider/modelo no cambian aquí).
+        """Ajusta a mano los parámetros de un agente en caliente (desde el
+        dashboard). Acepta los umbrales numéricos de `EDITABLE_PARAMS` (validados
+        y recortados a su rango en `PARAM_BOUNDS`) y los de elección de
+        `EDITABLE_CHOICE_PARAMS` (modo pensamiento DeepSeek, validados contra su
+        lista de valores). El cambio surte efecto en el siguiente análisis del
+        agente (no reconstruye la estrategia: provider/modelo no cambian aquí).
 
         Lanza KeyError si el agente no existe y ValueError si no llega ninguna
-        clave válida o algún valor no es numérico."""
+        clave válida, algún número no es válido o una elección está fuera de su
+        lista."""
         agent = next((a for a in self.agents if a.name == name), None)
         if agent is None:
             raise KeyError(name)
         clean = {}
         for key, value in (updates or {}).items():
-            if key not in self.EDITABLE_PARAMS:
-                continue
-            try:
-                num = float(value)
-            except (TypeError, ValueError):
-                raise ValueError(f"valor no numérico para {key}: {value!r}")
-            lo, hi = PARAM_BOUNDS[key]
-            clean[key] = _clamp(num, key)
-            if num < lo or num > hi:
-                print(f"  [{name}] {key}={num} recortado a {clean[key]} (rango {lo}–{hi})")
+            if key in self.EDITABLE_PARAMS:
+                try:
+                    num = float(value)
+                except (TypeError, ValueError):
+                    raise ValueError(f"valor no numérico para {key}: {value!r}")
+                lo, hi = PARAM_BOUNDS[key]
+                clean[key] = _clamp(num, key)
+                if num < lo or num > hi:
+                    print(f"  [{name}] {key}={num} recortado a {clean[key]} (rango {lo}–{hi})")
+            elif key in self.EDITABLE_CHOICE_PARAMS:
+                val = ("" if value is None else str(value)).strip().lower()
+                allowed = self.EDITABLE_CHOICE_PARAMS[key]
+                if val not in allowed:
+                    raise ValueError(f"valor inválido para {key}: {value!r} (válidos: {allowed})")
+                clean[key] = val
         if not clean:
             raise ValueError("no se recibió ningún parámetro editable válido")
         new_params = agent.params.model_copy(update=clean)
@@ -1902,6 +1936,8 @@ class AgentOrchestrator:
                     "atr_sl_mult": p.atr_sl_mult,
                     "atr_tp_mult": p.atr_tp_mult,
                     "lot_size": p.lot_size,
+                    "thinking": p.thinking,
+                    "reasoning_effort": p.reasoning_effort,
                 },
                 "stats": self.stats[agent.name],
                 "performance": agent.memory.get_performance(agent.symbol),
@@ -2006,6 +2042,9 @@ class AgentOrchestrator:
             "enabled": True,
             "provider": self.coordinator.provider,
             "model": self.coordinator.model,
+            # Nota de dirección activa (instrucción del responsable que la mesa
+            # pondera). La fija el asistente desde el chat; "" = sin nota.
+            "director_note": self.coordinator.director_note,
             "can_close": self.risk_book.can_close,
             "llm_can_close": self.risk_book.llm_can_close,
             "max_total_exposure_pct": self.risk_book.max_total_exposure_pct,
