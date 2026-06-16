@@ -154,7 +154,12 @@ Estado en `coordinator_overview()` →
 símbolo (`net_direction` LONG/SHORT/FLAT, `net_exposure_pct`, `net_volume`) y si la cuenta soporta
 hedging. `clamp()` añade guardias deterministas (configurables): **anti-apilamiento**
 (`MAX_NET_DIRECTION_PCT`), **guardia de reversión** (`REVERSAL_DRAWDOWN_PCT`) y **hard-stop por
-símbolo** (`MAX_SYMBOL_LOSS_PCT`). **Período de gracia** (`MIN_HOLD_SECONDS`, default 300): la edad
+símbolo** (`MAX_SYMBOL_LOSS_PCT`). **Coherencia entre símbolos correlacionados** (grupo FIJO
+`CORRELATED_GROUPS = [("BTCUSD", "ETHUSD")]`, match por prefijo): `_apply_correlated_group_guard`
+(post-pass del `clamp`) **veta abrir la pata opuesta** del par — no se va largo de uno y corto del
+otro a la vez (pairs trade involuntario). La dirección dominante la fija la exposición abierta
+combinada del grupo; si está plano, gana la entrada de mayor confianza. Nunca toca posiciones
+abiertas (tienen su Stop Loss): solo bloquea entradas. **Período de gracia** (`MIN_HOLD_SECONDS`, default 300): la edad
 se mide con `time.monotonic` local (`RiskBook._first_seen`, inmune al desfase de zona del bróker);
 mientras la posición más reciente sea más joven que el umbral, la guardia de reversión se pausa y
 un `reduce`/`close` del LLM se aplaza a `hold` — solo el hard-stop catastrófico rompe la gracia.

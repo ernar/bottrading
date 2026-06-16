@@ -24,6 +24,14 @@ from core.strategy import StrategyEngine
 from agents.positions import _pos_get, _pos_to_float, _pos_direction
 
 
+# Grupos de símbolos CORRELACIONADOS (se mueven juntos). Dentro de un grupo NO se
+# mantienen direcciones netas opuestas a la vez: ir largo de uno y corto del otro
+# es, sin querer, un pairs trade que paga doble coste y queda medio cubierto.
+# Grupo fijo BTC/ETH (ETH tiene beta alta respecto a BTC). El match es por PREFIJO
+# para tolerar sufijos del bróker (BTCUSDm, ETHUSD.r, etc.).
+CORRELATED_GROUPS: list[tuple[str, ...]] = [("BTCUSD", "ETHUSD")]
+
+
 class RiskBook:
     """Capa determinista de riesgo/capital. Fuente única de verdad de la
     economía de la cartera y guardarraíl de los límites duros."""
@@ -134,6 +142,18 @@ class RiskBook:
             return "BUY"
         if net_direction == "SHORT":
             return "SELL"
+        return None
+
+    @staticmethod
+    def _correlated_bases(symbol) -> Optional[tuple[str, ...]]:
+        """Bases del grupo correlacionado al que pertenece `symbol`, o None.
+
+        El match es por PREFIJO (case-insensitive) para tolerar sufijos del
+        bróker: "BTCUSDm"/"ETHUSD.r" caen en el grupo ("BTCUSD", "ETHUSD")."""
+        s = str(symbol or "").upper()
+        for group in CORRELATED_GROUPS:
+            if any(s.startswith(base) for base in group):
+                return group
         return None
 
     # Orden de "fuerza" de una acción sobre posiciones abiertas: una guardia
@@ -528,7 +548,70 @@ class RiskBook:
                 d["manage_direction"] = manage_direction
             d["clamp"] = "; ".join(notes)
             out.append(d)
+
+        # Coherencia entre símbolos correlacionados (BTC/ETH): veta abrir la pata
+        # opuesta dentro del grupo. Se aplica al final, sobre las decisiones ya
+        # clampadas, porque cruza información ENTRE símbolos.
+        self._apply_correlated_group_guard(out, symbols, signals)
         return out
+
+    def _apply_correlated_group_guard(self, out: list, symbols: dict, signals: dict):
+        """Veta entradas que abrirían direcciones netas OPUESTAS dentro de un grupo
+        de símbolos correlacionados (p. ej. BTC/ETH). Mutación in situ de ``out``.
+
+        Determinista, post-pass sobre las decisiones ya clampadas:
+        - la dirección DOMINANTE del grupo la fija la exposición ABIERTA combinada
+          (suma de ``net_exposure_pct`` con signo de todos sus símbolos); si el
+          grupo está plano, gana la entrada aprobada de mayor confianza;
+        - toda entrada aprobada que vaya CONTRA esa dirección se veta (-> hold).
+
+        Nunca cierra ni toca posiciones abiertas (cada una tiene su propio Stop
+        Loss): solo bloquea ABRIR la pata opuesta del par."""
+        by_symbol = {d.get("symbol"): d for d in out}
+        seen: set = set()
+        for d in out:
+            sym = d.get("symbol")
+            bases = self._correlated_bases(sym)
+            if bases is None or sym in seen:
+                continue
+            members = [s for s in by_symbol if self._correlated_bases(s) == bases]
+            seen.update(members)
+            if len(members) < 2:
+                continue
+
+            # Dirección dominante por exposición ABIERTA combinada del grupo.
+            group_net = sum(float(symbols.get(m, {}).get("net_exposure_pct", 0.0) or 0.0)
+                            for m in members)
+            eps = 1e-9
+            group_dir = "LONG" if group_net > eps else "SHORT" if group_net < -eps else "FLAT"
+
+            # Entradas aprobadas del grupo con su dirección y confianza.
+            approved = []
+            for m in members:
+                if not by_symbol[m].get("approve"):
+                    continue
+                sig = signals.get(m) or {}
+                ent = self._side_to_net(str(sig.get("action", "")).upper())
+                if ent is not None:
+                    approved.append((m, ent, float(sig.get("confidence") or 0.0)))
+            if not approved:
+                continue
+
+            # El libro abierto manda; si está plano, gana la entrada más fiable.
+            if group_dir in ("LONG", "SHORT"):
+                winner = group_dir
+            else:
+                winner = max(approved, key=lambda x: x[2])[1]
+
+            for m, ent, _conf in approved:
+                if ent == winner:
+                    continue
+                dd = by_symbol[m]
+                dd["approve"] = False
+                others = ", ".join(sorted(x for x in members if x != m))
+                note = (f"grupo correlacionado ({'/'.join(bases)}): entrada {ent} "
+                        f"opuesta a la dirección {winner} del grupo [{others}] -> vetada")
+                dd["clamp"] = f"{dd['clamp']}; {note}" if dd.get("clamp") else note
 
 
 COORDINATOR_SYSTEM_PROMPT = """Eres el director de riesgo y capital de una mesa de trading (una \
@@ -566,6 +649,11 @@ Reglas:
   una dirección y la TENDENCIA del especialista gira en contra (marcado como ⚠ CONFLICTO), no
   añadas en esa dirección y protege la pérdida: usa "reduce"/"close" del lado perdedor, o "hedge"
   si conviene mantener las posiciones pero frenar la sangría.
+- SÍMBOLOS CORRELACIONADOS (BTCUSD y ETHUSD se mueven juntos): NO los abras en direcciones
+  opuestas a la vez (largo de uno y corto del otro). Es un pairs trade involuntario que paga doble
+  coste y queda medio cubierto. Si sus especialistas discrepan en dirección, aprueba SOLO el de
+  mayor confianza/mejor rendimiento y deja el otro en hold. (La capa de riesgo veta igualmente la
+  pata opuesta del par, pero decídelo tú primero.)
 - PIRAMIDAR GANADORES (add-to-winners): cuando un símbolo YA tiene posición neta EN GANANCIA y el
   especialista CONFIRMA la continuación de la tendencia en esa misma dirección, NO te quedes en
   "hold": considera APROBAR una entrada adicional a favor (piramidar) con una allocation_pct
@@ -588,13 +676,15 @@ Reglas:
 - Tus números son propuestas: una capa de riesgo posterior recortará lo que exceda los límites
   duros (incluidos topes de dirección neta y guardias de reversión). Aun así, respeta los topes
   que aparecen en el contexto.
+- IDIOMA: redacta SIEMPRE los textos libres ("rationale" y "reason") en español (castellano),
+  nunca en inglés.
 
 Responde SOLO con JSON válido, sin texto adicional:
 {
-  "rationale": "razón global breve de tus decisiones de cartera",
+  "rationale": "razón global breve EN ESPAÑOL de tus decisiones de cartera",
   "decisions": [
     {"symbol": "BTCUSD", "approve": true, "priority": 1, "allocation_pct": 0.25,
-     "position_action": "hold", "tp_rr": 1.5, "reason": "explicación breve"}
+     "position_action": "hold", "tp_rr": 1.5, "reason": "explicación breve EN ESPAÑOL"}
   ]
 }
 position_action admite: "hold" | "reduce" | "close" | "hedge". tp_rr es opcional (omítelo o 0

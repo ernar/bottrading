@@ -188,7 +188,7 @@ class OrgAssistant:
         )
         try:
             summary = self._call_llm(
-                "Eres un asistente que resume conversaciones de forma concisa.",
+                "Eres un asistente que resume conversaciones de forma concisa. Responde SIEMPRE en español.",
                 [{"role": "user", "content": prompt}])
             if summary:
                 sess["summary"] = summary.strip()

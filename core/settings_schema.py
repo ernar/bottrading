@@ -47,7 +47,11 @@ SETTINGS_SCHEMA: list[dict] = [
     {"key": "COORDINATOR_LLM_CAN_CLOSE", "label": "Gestión discrecional del LLM", "group": "Coordinador", "type": "bool", "secret": False, "hot": True,
      "help": "Si es false, la mesa solo cierra por fuerza mayor (hard-stop/reversión)."},
     {"key": "COORDINATOR_TEMPERATURE", "label": "Temperatura del director", "group": "Coordinador", "type": "float", "secret": False, "hot": True,
-     "help": "Temperatura del LLM coordinador. 0.2 por defecto."},
+     "help": "Aleatoriedad del LLM director al decidir la cartera. 0 = casi determinista y "
+             "repetible (mismas señales -> mismas decisiones, más disciplinado); subirla da más "
+             "variedad/creatividad pero menos consistencia y más riesgo de decisiones erráticas. "
+             "Rango útil 0.0-1.0. 0.2 por defecto (estable). No afecta a las guardias de riesgo, "
+             "que son deterministas pase lo que pase."},
 
     # --- Cadencias / ejecución (en caliente) ---
     {"key": "ROTATION_SECONDS", "label": "Rotación (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,

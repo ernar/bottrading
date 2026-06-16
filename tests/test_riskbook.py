@@ -422,6 +422,64 @@ def test_clamp_reversion_actua_pasada_la_gracia():
     assert out[0]["manage_direction"] == "BUY"
 
 
+# ----- Coherencia entre símbolos correlacionados (BTC/ETH) -----
+
+def _sig(action, confidence=0.6, trend=None):
+    return {"action": action, "confidence": confidence,
+            "trend": trend or ("bullish" if action == "BUY" else "bearish")}
+
+
+def test_clamp_veta_pata_opuesta_en_par_correlacionado():
+    # Grupo plano (sin posiciones): BTC BUY conf 0.8 vs ETH SELL conf 0.6.
+    # Gana la de mayor confianza (BTC BUY); la ETH SELL opuesta se veta.
+    rb = _rb(max_net=0.6)
+    snap = _snapshot(equity=10000, symbols={
+        "BTCUSD": _sym(remaining_pct=0.4), "ETHUSD": _sym(remaining_pct=0.4)})
+    signals = {"BTCUSD": _sig("BUY", 0.8), "ETHUSD": _sig("SELL", 0.6)}
+    out = rb.clamp([_decision("BTCUSD"), _decision("ETHUSD")], snap, signals)
+    by = {d["symbol"]: d for d in out}
+    assert by["BTCUSD"]["approve"] is True
+    assert by["ETHUSD"]["approve"] is False
+    assert "grupo correlacionado" in by["ETHUSD"]["clamp"]
+
+
+def test_clamp_permite_par_correlacionado_misma_direccion():
+    # Ambos en la misma dirección (BUY): no hay conflicto, se aprueban los dos.
+    rb = _rb(max_net=0.6)
+    snap = _snapshot(equity=10000, symbols={
+        "BTCUSD": _sym(remaining_pct=0.4), "ETHUSD": _sym(remaining_pct=0.4)})
+    signals = {"BTCUSD": _sig("BUY", 0.7), "ETHUSD": _sig("BUY", 0.6)}
+    out = rb.clamp([_decision("BTCUSD"), _decision("ETHUSD")], snap, signals)
+    assert all(d["approve"] for d in out)
+    assert all("grupo correlacionado" not in d["clamp"] for d in out)
+
+
+def test_clamp_par_correlacionado_respeta_libro_abierto():
+    # BTC ya tiene neto LONG abierto; ETH propone una entrada SELL. La dirección
+    # dominante del grupo la fija el libro abierto (LONG), así que la SELL se veta
+    # aunque su confianza sea alta.
+    rb = _rb(max_net=0.6)
+    snap = _snapshot(equity=10000, symbols={
+        "BTCUSD": _sym(net_direction="LONG", net_exposure_pct=0.3, open_positions=2),
+        "ETHUSD": _sym(remaining_pct=0.4)})
+    signals = {"BTCUSD": _sig("HOLD"), "ETHUSD": _sig("SELL", 0.9)}
+    out = rb.clamp([_decision("BTCUSD", approve=False),
+                    _decision("ETHUSD")], snap, signals)
+    by = {d["symbol"]: d for d in out}
+    assert by["ETHUSD"]["approve"] is False
+    assert "grupo correlacionado" in by["ETHUSD"]["clamp"]
+
+
+def test_clamp_par_correlacionado_no_afecta_a_simbolo_solo():
+    # Con un único símbolo del grupo presente, la guardia no hace nada.
+    rb = _rb(max_net=0.6)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(remaining_pct=0.4)})
+    signals = {"BTCUSD": _sig("BUY", 0.8)}
+    out = rb.clamp([_decision("BTCUSD")], snap, signals)
+    assert out[0]["approve"] is True
+    assert "grupo correlacionado" not in out[0]["clamp"]
+
+
 # ----- RiskBook.snapshot: cálculo del sesgo neto (con cliente mock) -----
 
 class _FakeInfo:

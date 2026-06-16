@@ -28,6 +28,11 @@ _assistant = None
 connected_clients = set()
 
 logging.basicConfig(level=logging.INFO)
+# El log de acceso de werkzeug imprime una línea INFO por cada petición HTTP
+# (el dashboard hace polling constante -> "INFO:werkzeug:127.0.0.1 ... GET /api/..."
+# que saturan la consola). Lo subimos a WARNING: desaparece el ruido de los 200
+# y el banner de "development server", pero se siguen viendo errores reales (4xx/5xx).
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 

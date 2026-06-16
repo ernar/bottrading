@@ -59,6 +59,7 @@ Reglas de análisis:
 - Si RSI está en zona extrema (>70 o <30), evita entrar a favor del movimiento agotado.
 - Aprende del rendimiento reciente: si tus últimas señales en este símbolo fallaron, sé más conservador.
 - Si no hay ventaja clara, devuelve "hold" con confianza baja. Un hold correcto es mejor que un trade malo.
+- IDIOMA: redacta SIEMPRE el campo "rationale" en español (castellano), nunca en inglés.
 
 Reglas de niveles:
 - entry: usa el precio actual (Ask para buy, Bid para sell).
@@ -76,7 +77,7 @@ Responde SOLO con JSON válido, sin texto adicional:
   "stop_loss": 0.0,
   "take_profit": 0.0,
   "risk_level": "low|medium|high",
-  "rationale": "explicación breve citando los indicadores que justifican la decisión"
+  "rationale": "explicación breve EN ESPAÑOL citando los indicadores que justifican la decisión"
 }
 confidence es un decimal entre 0.0 y 1.0."""
 
