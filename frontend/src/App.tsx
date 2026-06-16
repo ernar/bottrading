@@ -5,7 +5,6 @@ import { Navigation } from './components/Navigation'
 import { DuplicateInstanceModal } from './components/DuplicateInstanceModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { DashboardPage } from './pages/Dashboard'
-import { SignalsPage } from './pages/Signals'
 import { PositionsPage } from './pages/Positions'
 import { HistoryPage } from './pages/History'
 import { AgentsPage } from './pages/Agents'
@@ -28,7 +27,6 @@ function App() {
             <Route path="/" element={<DashboardPage state={state} />} />
             <Route path="/coordinator" element={<CoordinatorPage liveCoordination={coordination} />} />
             <Route path="/agents" element={<AgentsPage />} />
-            <Route path="/signals" element={<SignalsPage state={state} />} />
             <Route path="/positions" element={<PositionsPage state={state} />} />
             <Route path="/history" element={<HistoryPage state={state} />} />
             <Route path="/settings" element={<SettingsPage />} />

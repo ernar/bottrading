@@ -23,6 +23,8 @@ export interface Position {
   profit: number
   stop_loss?: number
   take_profit?: number
+  open_time?: number
+  open_time_str?: string
 }
 
 export interface Trade {
@@ -131,6 +133,8 @@ export interface CoordinatorSnapshot {
   max_symbol_loss_pct: number
   hedging: boolean
   daily_pnl_pct: number | null
+  daily_pnl_window_seconds: number | null
+  daily_pnl_since: string | null
   in_cooldown: boolean
   open_positions_total: number
   can_close: boolean

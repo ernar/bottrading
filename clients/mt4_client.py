@@ -330,6 +330,17 @@ class MT4Client(BaseMTClient):
         data.setdefault("stop_loss", data.get("sl", 0.0))
         data.setdefault("take_profit", data.get("tp", 0.0))
 
+        # Fecha de apertura legible para el dashboard. NO toca el epoch crudo
+        # (`open_time`) que usan orquestador/coordinador; añade un alias string
+        # con el mismo criterio que _record_closed_trade (datetime.fromtimestamp
+        # del epoch del bróker). Fail-safe: si no es un epoch válido, se omite.
+        ot = data.get("open_time")
+        if ot:
+            try:
+                data["open_time_str"] = datetime.fromtimestamp(int(ot)).isoformat(sep=" ")
+            except (ValueError, OSError, TypeError):
+                pass
+
     def _learn_commission(self, positions: List[dict]):
         """Deduce la comisión por lote de las posiciones reportadas y la cachea
         por símbolo: |comisión total| / volumen total del símbolo. Robusto frente

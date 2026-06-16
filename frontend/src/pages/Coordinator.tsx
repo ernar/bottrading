@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Coordination, CoordinatorDecision, CoordinatorOverview } from '../types/bot'
+import { Coordination, CoordinatorDecision, CoordinatorOverview, CoordinatorSnapshot } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 import { TradingProfiles } from '../components/RiskProfileSelector'
 
@@ -9,6 +9,34 @@ const pct = (n: number | null | undefined, dp = 1) =>
   n === null || n === undefined ? 'n/a' : `${(n * 100).toFixed(dp)}%`
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `$${n.toFixed(2)}`
+
+// Longitud de la ventana móvil de riesgo en formato corto ("6h", "30min").
+const windowLabel = (secs: number): string => {
+  const h = secs / 3600
+  if (h >= 1) return `${Number.isInteger(h) ? h : h.toFixed(1)}h`
+  return `${Math.round(secs / 60)}min`
+}
+
+// Rango temporal al que aplica el "P/L del día": NO es un día natural, sino la
+// ventana móvil de riesgo (RISK_LOSS_WINDOW_SECONDS) desde su último rearme.
+const dailyRangeSub = (s: CoordinatorSnapshot): string => {
+  if (!s.daily_pnl_window_seconds) return 'guardia de pérdida diaria desactivada'
+  const since = s.daily_pnl_since
+    ? ` · desde ${new Date(s.daily_pnl_since.replace(' ', 'T')).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : ''
+  return `ventana móvil ${windowLabel(s.daily_pnl_window_seconds)}${since}`
+}
+
+const dailyRangeHint = (s: CoordinatorSnapshot): string => {
+  if (!s.daily_pnl_window_seconds) {
+    return 'P/L del día desactivado: requiere MAX_DAILY_LOSS_PCT > 0 para fijar el equity de referencia.'
+  }
+  const win = windowLabel(s.daily_pnl_window_seconds)
+  const desde = s.daily_pnl_since
+    ? ` Inicio de la ventana actual: ${new Date(s.daily_pnl_since.replace(' ', 'T')).toLocaleString()}.`
+    : ''
+  return `P/L medido desde el equity al inicio de la ventana móvil de riesgo (se rearma cada ${win}), no desde la medianoche.${desde}`
+}
 
 export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordination | null }) {
   const [overview, setOverview] = useState<CoordinatorOverview | null>(null)
@@ -100,8 +128,9 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
             label="P/L del día"
             value={pct(snap.daily_pnl_pct, 2)}
             valueClass={(snap.daily_pnl_pct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}
-            sub={snap.in_cooldown ? '⚠ cooldown activo' : 'sin cooldown'}
+            sub={`${dailyRangeSub(snap)}${snap.in_cooldown ? ' · ⚠ cooldown activo' : ''}`}
             subClass={snap.in_cooldown ? 'text-yellow-400' : 'text-gray-500'}
+            hint={dailyRangeHint(snap)}
           />
         </section>
       ) : (
@@ -345,12 +374,12 @@ function FlowArrow({ label }: { label: string }) {
 }
 
 function Card({
-  label, value, sub, valueClass = 'text-white', subClass = 'text-gray-500',
+  label, value, sub, valueClass = 'text-white', subClass = 'text-gray-500', hint,
 }: {
-  label: string; value: string; sub?: string; valueClass?: string; subClass?: string
+  label: string; value: string; sub?: string; valueClass?: string; subClass?: string; hint?: string
 }) {
   return (
-    <div className="bg-gray-800 rounded-lg p-5 border border-gray-700">
+    <div className="bg-gray-800 rounded-lg p-5 border border-gray-700" title={hint}>
       <div className="text-xs text-gray-400">{label}</div>
       <div className={`text-2xl font-bold mt-1 ${valueClass}`}>{value}</div>
       {sub && <div className={`text-xs mt-1 ${subClass}`}>{sub}</div>}

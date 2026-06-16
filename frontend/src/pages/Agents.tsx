@@ -1,6 +1,12 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { AgentsOverview, AgentInfo } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
+import { useTableFilter, FilterText, FilterSelect, FilterBar, uniqueOptions, Accessors } from '../components/tableFilters'
+
+// Filtro de cabecera por columna (las numéricas no se filtran).
+const AGENT_FILTERS: Record<string, 'text' | 'select'> = {
+  name: 'text', symbol: 'select', model: 'text', enabled: 'select', market_open: 'select',
+}
 
 const API_URL = getApiUrl()
 
@@ -164,6 +170,14 @@ export function AgentsPage() {
     })
   }, [agents, sortKey, sortDir])
 
+  // Filtrado por columna desde la cabecera (compone con el orden).
+  const agentAcc: Accessors<AgentInfo> = {
+    name: a => a.name, symbol: a => a.symbol, model: a => `${a.provider}/${a.model}`,
+    enabled: a => (a.enabled === false ? 'OFF' : 'ON'),
+    market_open: a => (a.market_open === false ? 'Cerrado' : 'Abierto'),
+  }
+  const f = useTableFilter(sortedAgents, agentAcc, { exact: ['symbol', 'enabled', 'market_open'] })
+
   if (agents.length === 0) {
     return (
       <div className="p-4 sm:p-8">
@@ -207,6 +221,7 @@ export function AgentsPage() {
           </div>
         </div>
 
+        <FilterBar active={f.active} shown={f.filtered.length} total={agents.length} onClear={f.clear} />
         <div className="overflow-x-auto bg-gray-800 rounded-lg border border-gray-700">
           <table className="w-full text-sm">
             <thead>
@@ -229,9 +244,28 @@ export function AgentsPage() {
                   )
                 })}
               </tr>
+              <tr className="border-b border-gray-700 bg-gray-800/40">
+                {COLUMNS.map(col => {
+                  const kind = AGENT_FILTERS[col.key]
+                  return (
+                    <th key={col.key} className="px-3 py-1.5 font-normal">
+                      {kind === 'text' && (
+                        <FilterText value={f.filters[col.key]} onChange={v => f.setFilter(col.key, v)} />
+                      )}
+                      {kind === 'select' && (
+                        <FilterSelect
+                          value={f.filters[col.key]}
+                          onChange={v => f.setFilter(col.key, v)}
+                          options={uniqueOptions(agents, agentAcc[col.key])}
+                        />
+                      )}
+                    </th>
+                  )
+                })}
+              </tr>
             </thead>
             <tbody>
-              {sortedAgents.map(a => (
+              {f.filtered.map(a => (
                 <tr key={a.name} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-700/30">
                   <td className="px-3 py-2 font-bold text-cyan-300 whitespace-nowrap" title={a.description}>{a.name}</td>
                   <td className="px-3 py-2 font-mono text-gray-300 whitespace-nowrap">{a.symbol}</td>

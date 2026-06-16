@@ -6,15 +6,79 @@ const STREAM_URL = 'https://lofi.stream.laut.fm/lofi'
 
 const KEY_PLAY = 'lofiPlaying'
 const KEY_VOL = 'lofiVolume'
+const KEY_POS = 'lofiPos'
+
+type Pos = { x: number; y: number }
 
 export function LofiPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const [playing, setPlaying] = useState(false)
   const [blocked, setBlocked] = useState(false) // autoplay bloqueado por el navegador
   const [volume, setVolume] = useState(() => {
     const v = parseFloat(localStorage.getItem(KEY_VOL) || '')
     return Number.isFinite(v) ? v : 0.45
   })
+
+  // Posición del reproductor (esquina superior-izquierda en px). null = aún sin
+  // colocar a mano → usa la posición por defecto (abajo-izquierda) del CSS.
+  const [pos, setPos] = useState<Pos | null>(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(KEY_POS) || 'null')
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return p
+    } catch { /* sin posición guardada */ }
+    return null
+  })
+  const [dragging, setDragging] = useState(false)
+  // Offset entre el puntero y la esquina del widget al empezar a arrastrar.
+  const dragOffset = useRef<{ dx: number; dy: number } | null>(null)
+
+  // Acota la posición para que el widget no se salga de la ventana.
+  const clamp = (x: number, y: number): Pos => {
+    const el = containerRef.current
+    const w = el?.offsetWidth ?? 0
+    const h = el?.offsetHeight ?? 0
+    return {
+      x: Math.min(Math.max(0, x), Math.max(0, window.innerWidth - w)),
+      y: Math.min(Math.max(0, y), Math.max(0, window.innerHeight - h)),
+    }
+  }
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    // No arrastrar al pulsar los controles (play/pausa, volumen).
+    if ((e.target as HTMLElement).closest('button, input')) return
+    const el = containerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    dragOffset.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
+    setPos({ x: rect.left, y: rect.top }) // fija coords actuales antes de mover
+    setDragging(true)
+    el.setPointerCapture(e.pointerId)
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const off = dragOffset.current
+    if (!off) return
+    setPos(clamp(e.clientX - off.dx, e.clientY - off.dy))
+  }
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (!dragOffset.current) return
+    dragOffset.current = null
+    setDragging(false)
+    containerRef.current?.releasePointerCapture(e.pointerId)
+  }
+
+  // Persiste la posición y la reajusta si cambia el tamaño de la ventana.
+  useEffect(() => {
+    if (pos) localStorage.setItem(KEY_POS, JSON.stringify(pos))
+  }, [pos])
+
+  useEffect(() => {
+    const onResize = () => setPos(p => (p ? clamp(p.x, p.y) : p))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   // Crea el elemento de audio una sola vez.
   useEffect(() => {
@@ -76,7 +140,17 @@ export function LofiPlayer() {
   }, [volume])
 
   return (
-    <div className="fixed bottom-5 left-5 z-40 flex items-center gap-2 bg-gray-900/90 backdrop-blur border border-gray-700 rounded-full pl-2 pr-3 py-1.5 shadow-lg shadow-black/40">
+    <div
+      ref={containerRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      style={{ touchAction: 'none', ...(pos ? { left: pos.x, top: pos.y } : {}) }}
+      className={`fixed z-40 flex items-center gap-2 bg-gray-900/90 backdrop-blur border border-gray-700 rounded-full pl-2 pr-3 py-1.5 shadow-lg shadow-black/40 ${
+        pos ? '' : 'bottom-5 left-5'
+      } ${dragging ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
+    >
       <button
         onClick={toggle}
         title={playing ? 'Pausar LO-FI' : blocked ? 'Pulsa para activar la música' : 'Reproducir LO-FI'}

@@ -191,22 +191,25 @@ export function TradingProfiles({
   const isHotRisk = risk === 'aggressive' || risk === 'extreme'
 
   return (
-    <section className={`bg-gray-800/60 border border-gray-700 rounded-lg px-4 py-3 space-y-3 ${className}`}>
-      <ProfileSlider
-        label="Perfil de riesgo"
-        options={RISK_OPTIONS}
-        activeId={risk}
-        onSelect={(id) => post('/api/risk-profile', { profile: id })}
-        busy={busy}
-      />
-      <div className="border-t border-gray-700/60" />
-      <ProfileSlider
-        label="Horizonte"
-        options={HORIZON_OPTIONS}
-        activeId={horizon}
-        onSelect={(id) => post('/api/horizon', { horizon: id })}
-        busy={busy}
-      />
+    <section className={`inline-flex flex-col w-fit max-w-full bg-gray-800/60 border border-gray-700 rounded-lg px-4 py-3 gap-3 ${className}`}>
+      {/* Perfil de riesgo y Horizonte en una sola fila (cada uno: etiqueta — toggle) */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <ProfileSlider
+          label="Perfil de riesgo"
+          options={RISK_OPTIONS}
+          activeId={risk}
+          onSelect={(id) => post('/api/risk-profile', { profile: id })}
+          busy={busy}
+        />
+        <div className="self-stretch w-px bg-gray-700/60" />
+        <ProfileSlider
+          label="Horizonte"
+          options={HORIZON_OPTIONS}
+          activeId={horizon}
+          onSelect={(id) => post('/api/horizon', { horizon: id })}
+          busy={busy}
+        />
+      </div>
       {overview && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500 pt-2 border-t border-gray-700/60">
           <span>Exposición total máx. {pct(overview.max_total_exposure_pct)}</span>

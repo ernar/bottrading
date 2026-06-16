@@ -42,6 +42,17 @@ def set_orchestrator(orchestrator):
     _orchestrator = orchestrator
 
 
+def _tag_manual_close(symbol: str):
+    """Marca el motivo de un cierre manual (desde el dashboard) para que el
+    orquestador lo registre en el historial (_detect_closed_trades lo consume)."""
+    orch = _orchestrator
+    if orch is not None and hasattr(orch, "_pending_close_reasons"):
+        try:
+            orch._pending_close_reasons[symbol] = "Cierre manual"
+        except Exception:
+            pass
+
+
 def _api_token() -> str:
     """Token compartido leído en tiempo de request (el .env se carga después de
     importar este módulo, así que no se puede capturar en import)."""
@@ -705,6 +716,7 @@ def close_all_positions():
     from collections import Counter
     counts = Counter(str(p.get("symbol")) for p in positions if p.get("symbol"))
     for symbol, n in counts.items():
+        _tag_manual_close(symbol)
         for _ in range(n):
             try:
                 result = _mt_client.close_position(symbol)
@@ -729,6 +741,7 @@ def close_position(symbol):
     if _mt_client is None:
         return jsonify({"error": "MT client not connected"}), 503
     try:
+        _tag_manual_close(symbol)
         result = _mt_client.close_position(symbol)
         if result is None:
             return jsonify({"error": "No open position for symbol"}), 404

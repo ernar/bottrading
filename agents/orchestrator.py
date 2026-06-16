@@ -301,6 +301,12 @@ class AgentOrchestrator:
         # Última instantánea de posiciones por símbolo {symbol: {ticket: snap}}:
         # base para detectar cierres y registrarlos en el historial.
         self._prev_positions: dict = {}
+        # Motivo de cierre pendiente por símbolo {symbol: "Cierre mesa"|...}: lo fija
+        # el bot cuando cierra/reduce a propósito (gestión de la mesa), para que
+        # _detect_closed_trades lo registre en el historial el ciclo siguiente. Si
+        # no hay motivo pendiente, el cierre lo provocó el bróker (SL/TP) y se
+        # infiere por proximidad de precio.
+        self._pending_close_reasons: dict = {}
         # Posiciones a las que ya se les tomó beneficio parcial. La clave NO es el
         # ticket (MT4 reasigna ticket al remanente tras un cierre parcial) sino
         # symbol|dirección|entry, estable para el "linaje" de la posición, para no
@@ -441,8 +447,8 @@ class AgentOrchestrator:
         print("\n" + console.header("ARRANQUE — REVISIÓN DE LA MESA", char="#"))
         try:
             snap = self.risk_book.snapshot(
-                self.client, self.agents,
-                day_start_equity=self._window_start_equity, in_cooldown=False)
+                self.client, self.agents, in_cooldown=False,
+                **self._daily_pnl_kwargs())
             exp = snap.get("total_exposure_pct", 0)
             tope = snap.get("max_total_exposure_pct", 0)
             print(console.kv("Equity", console.money(snap.get("equity", 0))))
@@ -595,6 +601,26 @@ class AgentOrchestrator:
             return False
         return True
 
+    def _risk_window_start_wall(self):
+        """Epoch (reloj de pared) aproximado en que empezó la ventana de riesgo
+        actual, derivado del `monotonic` (que es lo que se persiste). None si la
+        ventana aún no se ha fijado (guardia apagada o primera vuelta)."""
+        if self._risk_window_start is None:
+            return None
+        return time.time() - (time.monotonic() - self._risk_window_start)
+
+    def _daily_pnl_kwargs(self) -> dict:
+        """Parámetros del 'P/L del día' para `snapshot()`: el equity de referencia
+        y el RANGO temporal al que aplica (la ventana móvil de riesgo). Con la
+        guardia de pérdida diaria apagada (MAX_DAILY_LOSS_PCT=0) no hay ventana,
+        así que no se reporta rango y el P/L del día queda en n/a."""
+        return {
+            "day_start_equity": self._window_start_equity,
+            "day_window_seconds": (self.risk_loss_window_seconds
+                                   if self.max_daily_loss_pct else None),
+            "day_window_start_ts": self._risk_window_start_wall(),
+        }
+
     def _throttled(self, symbol: str, interval: float) -> bool:
         """True si aún no han pasado `interval` segundos desde el último análisis
         del símbolo (sirve para espaciar análisis en máximo de posiciones/cooldown)."""
@@ -652,11 +678,25 @@ class AgentOrchestrator:
                 current[str(ticket)] = p
 
         prev = self._prev_positions.get(symbol, {})
-        for ticket, snap in prev.items():
-            if ticket not in current:
-                self._record_closed_trade(symbol, snap)
+        disappeared = [snap for ticket, snap in prev.items() if ticket not in current]
+        if disappeared:
+            # El motivo pendiente (si lo hay) lo fijó el bot al cerrar/reducir; se
+            # consume una vez y se aplica a todas las posiciones cerradas esta pasada.
+            pending = self._pending_close_reasons.pop(symbol, "")
+            for snap in disappeared:
+                self._record_closed_trade(symbol, snap, pending)
 
-        self._prev_positions[symbol] = {t: self._snapshot(p) for t, p in current.items()}
+        # Reconstruye la instantánea arrastrando `seen_at` (reloj de pared local
+        # del primer avistamiento) para medir la duración sin depender del epoch
+        # del bróker (otra zona horaria). Tickets nuevos: se sellan con "ahora".
+        rebuilt = {}
+        now = datetime.now()
+        for t, p in current.items():
+            snap = self._snapshot(p)
+            prev_snap = prev.get(t)
+            snap["seen_at"] = (prev_snap or {}).get("seen_at") or now
+            rebuilt[t] = snap
+        self._prev_positions[symbol] = rebuilt
 
     @staticmethod
     def _snapshot(pos) -> dict:
@@ -667,23 +707,52 @@ class AgentOrchestrator:
             "current_price": _pos_to_float(_pos_get(pos, "current_price")),
             "profit": _pos_to_float(_pos_get(pos, "profit")),
             "open_time": _pos_get(pos, "open_time"),
+            "sl": _pos_to_float(_pos_get(pos, "stop_loss", "sl")),
+            "tp": _pos_to_float(_pos_get(pos, "take_profit", "tp")),
         }
 
-    def _record_closed_trade(self, symbol: str, snap: dict):
+    @staticmethod
+    def _infer_close_reason(snap: dict, exit_price: float) -> str:
+        """Infiere el motivo de cierre comparando el último precio observado con
+        el SL/TP de la posición (con tolerancia para absorber el último tick).
+        Devuelve "Stop Loss" / "Take Profit" o "Cierre" (manual/bróker, desconocido)."""
+        direction = (snap.get("direction") or "").upper()
+        sl, tp = snap.get("sl"), snap.get("tp")
+        if not exit_price:
+            return "Cierre"
+        eps = abs(exit_price) * 0.0005  # ~5 pb de margen
+        if direction == "BUY":
+            if sl and exit_price <= sl + eps:
+                return "Stop Loss"
+            if tp and exit_price >= tp - eps:
+                return "Take Profit"
+        elif direction == "SELL":
+            if sl and exit_price >= sl - eps:
+                return "Stop Loss"
+            if tp and exit_price <= tp + eps:
+                return "Take Profit"
+        return "Cierre"
+
+    def _record_closed_trade(self, symbol: str, snap: dict, reason: str = ""):
         """Registra en el estado una posición que ya no aparece.
 
         El P/L es el último flotante observado antes de desaparecer (aprox. del
-        realizado; el broker podría diferir por el último tick/slippage)."""
-        open_iso, duration = "", None
-        open_time = snap.get("open_time")
-        if open_time:
-            try:
-                ot = datetime.fromtimestamp(int(open_time))
-                open_iso = ot.isoformat()
-                duration = int((datetime.now() - ot).total_seconds())
-            except (ValueError, OSError, TypeError):
-                pass
+        realizado; el broker podría diferir por el último tick/slippage). `reason`
+        viene de la mesa cuando el bot la cerró a propósito; si está vacío, el
+        cierre lo provocó el bróker y se infiere del SL/TP."""
+        # Apertura y duración ancladas al RELOJ LOCAL (primer avistamiento por el
+        # bot), NO al open_time del bróker: su epoch viene en la zona del servidor
+        # MT y, mezclado con datetime.now() local, daba horas desplazadas y
+        # duraciones NEGATIVAS (open posterior a close). Para posiciones ya
+        # abiertas al arrancar, seen_at = primer avistamiento (sesgo conservador),
+        # nunca una duración negativa.
+        now = datetime.now()
+        seen_at = snap.get("seen_at")
+        open_dt = seen_at if isinstance(seen_at, datetime) else now
+        open_iso = open_dt.isoformat()
+        duration = max(0, int((now - open_dt).total_seconds()))
         exit_price = snap.get("current_price") or snap.get("open_price") or 0
+        close_reason = reason or self._infer_close_reason(snap, exit_price)
         trade = Trade(
             symbol=symbol,
             action=snap.get("direction", "?"),
@@ -692,11 +761,11 @@ class AgentOrchestrator:
             volume=snap.get("volume", 0.0),
             pnl=snap.get("profit", 0.0),
             open_time=open_iso,
-            close_time=datetime.now().isoformat(),
+            close_time=now.isoformat(),
             duration_seconds=duration,
         )
         bot_state.add_closed_trade(trade)
-        # Persistir a CSV para que el rendimiento sobreviva al reinicio.
+        # Persistir en la DB para que el rendimiento sobreviva al reinicio.
         log_closed_trade(
             symbol=symbol,
             action=snap.get("direction", "?"),
@@ -706,10 +775,11 @@ class AgentOrchestrator:
             pnl=snap.get("profit", 0.0),
             commission=0.0,  # se rellenará cuando el broker lo devuelva
             duration_seconds=duration,
+            close_reason=close_reason,
             platform=self.platform,
         )
         print(f"  {console.accent('⟳ Cierre registrado')}: {console.side(trade.action)} "
-              f"{symbol} | P/L≈{console.pnl(trade.pnl)}")
+              f"{symbol} | P/L≈{console.pnl(trade.pnl)} | {console.dim(close_reason)}")
 
     def _print_positions_summary(self, symbol: str, positions: list):
         """Resumen de posiciones abiertas con su profit no realizado."""
@@ -1132,8 +1202,8 @@ class AgentOrchestrator:
         # Fase 2/3: coordinar. Snapshot determinista + decisión LLM + clamp duro.
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
-            self.client, self.agents,
-            day_start_equity=self._window_start_equity, in_cooldown=in_cooldown)
+            self.client, self.agents, in_cooldown=in_cooldown,
+            **self._daily_pnl_kwargs())
 
         has_positions = snapshot.get("open_positions_total", 0) > 0
         if not signals and not (has_positions and self.risk_book.can_close):
@@ -1237,6 +1307,9 @@ class AgentOrchestrator:
         if not positions:
             return
         tag = f" {direction}" if direction else ""
+        # Deja constancia del motivo para que _detect_closed_trades lo registre en
+        # el historial (el cierre real lo confirma el siguiente ciclo).
+        self._pending_close_reasons[symbol] = "Cierre mesa" if action == "close" else "Reducción mesa"
         if action == "close":
             print(f"  {console.warn('⊗ [Mesa] Cerrando')} {len(positions)} posición(es)"
                   f"{tag} de {symbol}: {console.dim(reason)}")
@@ -1492,8 +1565,8 @@ class AgentOrchestrator:
         signals = dict(state.get("signals", {}) or {})
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
-            self.client, self.agents,
-            day_start_equity=self._window_start_equity, in_cooldown=in_cooldown)
+            self.client, self.agents, in_cooldown=in_cooldown,
+            **self._daily_pnl_kwargs())
         result = self.coordinator.decide(
             snapshot, signals, self.agents_overview(),
             news_context=self._coordinator_news())
@@ -1511,8 +1584,8 @@ class AgentOrchestrator:
         viejas): para eso está la rotación."""
         in_cooldown = self._risk_cooldown_active()
         snapshot = self.risk_book.snapshot(
-            self.client, self.agents,
-            day_start_equity=self._window_start_equity, in_cooldown=in_cooldown)
+            self.client, self.agents, in_cooldown=in_cooldown,
+            **self._daily_pnl_kwargs())
 
         print("\n" + console.header("JUNTA DE LA MESA · revisión global del libro", char="#"))
         self.last_junta_at = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1538,8 +1611,8 @@ class AgentOrchestrator:
         try:
             snapshot = self.risk_book.snapshot(
                 self.client, self.agents,
-                day_start_equity=self._window_start_equity,
-                in_cooldown=self._risk_cooldown_active())
+                in_cooldown=self._risk_cooldown_active(),
+                **self._daily_pnl_kwargs())
         except Exception:  # noqa: BLE001 — el reporte nunca debe tumbar el bot
             snapshot = None
         state = bot_state.get_state()

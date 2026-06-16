@@ -16,6 +16,7 @@ Dos capas que cooperan:
 """
 import json
 import time
+from datetime import datetime
 from typing import Optional
 
 from core.models import BotConfig
@@ -158,12 +159,19 @@ class RiskBook:
         return 1.0
 
     def snapshot(self, client, agents: list, day_start_equity: float = None,
-                 in_cooldown: bool = False) -> dict:
+                 in_cooldown: bool = False, day_window_seconds: float = None,
+                 day_window_start_ts: float = None) -> dict:
         """Estado económico de la cartera para el dashboard y el coordinador.
 
         Exposición total = margen usado / equity (la restricción real del bróker).
         Exposición por símbolo = nocional aproximado (volume × precio × contrato)
-        sobre el equity, para repartir presupuesto."""
+        sobre el equity, para repartir presupuesto.
+
+        El "P/L del día" (``daily_pnl_pct``) NO es un día natural: se mide desde
+        ``day_start_equity`` (el equity al inicio de la ventana móvil de riesgo).
+        ``day_window_seconds`` (longitud de esa ventana) y ``day_window_start_ts``
+        (epoch en que empezó) se exponen para que el dashboard muestre el rango
+        temporal exacto al que aplica."""
         account = client.get_account_info() or {}
         equity = float(account.get("equity") or 0.0)
         balance = float(account.get("balance") or 0.0)
@@ -226,6 +234,14 @@ class RiskBook:
         daily_pnl_pct = None
         if day_start_equity and day_start_equity > 0:
             daily_pnl_pct = (equity - day_start_equity) / day_start_equity
+        # Rango temporal al que aplica el P/L del día (ventana móvil de riesgo).
+        daily_pnl_since = None
+        if day_window_start_ts:
+            try:
+                daily_pnl_since = datetime.fromtimestamp(
+                    day_window_start_ts).isoformat(sep=" ", timespec="seconds")
+            except (ValueError, OSError, TypeError):
+                daily_pnl_since = None
 
         # Factor margen/nocional: la exposición POR SÍMBOLO se mide en MARGEN
         # real (como la total = used_margin/equity), no en nocional bruto. El
@@ -297,6 +313,9 @@ class RiskBook:
             "min_hold_seconds": self.min_hold_seconds,
             "hedging": hedging,
             "daily_pnl_pct": round(daily_pnl_pct, 4) if daily_pnl_pct is not None else None,
+            "daily_pnl_window_seconds": (round(day_window_seconds)
+                                         if day_window_seconds else None),
+            "daily_pnl_since": daily_pnl_since,
             "in_cooldown": bool(in_cooldown),
             "open_positions_total": len(all_positions),
             "can_close": self.can_close,
