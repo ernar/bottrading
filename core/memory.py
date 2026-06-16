@@ -9,10 +9,11 @@ Persistencia en SQLite (tabla ``signal_memory`` vía ``core/db.py``). Antes era
 un JSON por agente; ahora cada instancia opera sobre un ``scope`` (el nombre del
 agente o "global") y comparte la misma tabla.
 """
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
+
+from core.clock import broker_now
 
 from core.db import ClosedTrade, SignalMemoryRecord, get_session, session_scope
 
@@ -59,7 +60,7 @@ class SignalMemory:
             session.add(SignalMemoryRecord(
                 scope=self._scope,
                 symbol=symbol,
-                timestamp=datetime.now(),
+                timestamp=broker_now(),
                 action=signal.get("action", "HOLD"),
                 confidence=signal.get("confidence", 0) or 0,
                 price=price,
@@ -96,7 +97,7 @@ class SignalMemory:
         del periodo en lugar de un instante arbitrario."""
         if not current_price:
             return
-        now = datetime.now()
+        now = broker_now()
         with session_scope() as session:
             for rec in self._records(session, symbol):
                 if rec.action not in ("BUY", "SELL") or self._is_final(rec):

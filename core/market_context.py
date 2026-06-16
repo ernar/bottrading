@@ -4,10 +4,10 @@ En lugar de volcar 100 velas crudas, calcula indicadores en Python y
 entrega un resumen compacto + las últimas velas. Menos tokens, análisis
 más fiable y rápido.
 """
-from datetime import datetime
 from typing import List, Optional
 
 from core import indicators as ta
+from core.clock import broker_dt_from_mt_epoch
 
 
 def _fmt(value: Optional[float], digits: int = 5) -> str:
@@ -19,7 +19,7 @@ def _fmt(value: Optional[float], digits: int = 5) -> str:
 def _candles_section(rates: List[dict], digits: int, last_n: int = 24) -> List[str]:
     lines = [f"Últimas {min(last_n, len(rates))} velas (time, open, high, low, close, volume):"]
     for r in rates[-last_n:]:
-        dt = datetime.fromtimestamp(r["time"]).strftime("%m-%d %H:%M")
+        dt = broker_dt_from_mt_epoch(r["time"]).strftime("%m-%d %H:%M")
         lines.append(
             f"{dt}, {r['open']:.{digits}f}, {r['high']:.{digits}f}, "
             f"{r['low']:.{digits}f}, {r['close']:.{digits}f}, {int(r['volume'])}"

@@ -5,9 +5,10 @@ Antes esto se volcaba a CSV en ``logs/{platform}/``; ahora va a SQLite vía
 ``log_equity``, ``log_closed_trade``, ``read_equity_series``) se mantienen
 estables para no propagar cambios a los llamantes (orquestador/coordinador).
 """
-from datetime import datetime
+from datetime import timedelta
 from typing import Optional
 
+from core.clock import broker_now
 from core.db import ClosedTrade, EquityPoint, Signal, Trade, session_scope
 
 
@@ -24,7 +25,7 @@ def _to_float(value) -> Optional[float]:
 def log_signal(signal: dict, platform: str = "mt4"):
     with session_scope() as s:
         s.add(Signal(
-            timestamp=datetime.now(),
+            timestamp=broker_now(),
             platform=platform.upper(),
             agent=signal.get("agent", ""),
             symbol=signal.get("symbol", ""),
@@ -46,7 +47,7 @@ def log_trade(symbol: str, action: str, volume: float, price: float,
               platform: str = "mt4"):
     with session_scope() as s:
         s.add(Trade(
-            timestamp=datetime.now(),
+            timestamp=broker_now(),
             platform=platform.upper(),
             symbol=symbol,
             action=action,
@@ -66,7 +67,7 @@ def log_equity(balance: float, equity: float, free_margin: float = 0.0,
     evolución en el dashboard. El llamante decide la cadencia (throttle)."""
     with session_scope() as s:
         s.add(EquityPoint(
-            timestamp=datetime.now(),
+            timestamp=broker_now(),
             platform=platform.upper(),
             balance=_to_float(balance),
             equity=_to_float(equity),
@@ -92,8 +93,8 @@ def read_equity_series(platform: str = "mt4", limit: int = 500,
             EquityPoint.platform == platform.upper()
         )
         if since_seconds and since_seconds > 0:
-            cutoff = datetime.now().timestamp() - since_seconds
-            q = q.filter(EquityPoint.timestamp >= datetime.fromtimestamp(cutoff))
+            cutoff = broker_now() - timedelta(seconds=since_seconds)
+            q = q.filter(EquityPoint.timestamp >= cutoff)
         rows = q.order_by(EquityPoint.timestamp.asc()).all()
     finally:
         session.close()
@@ -120,7 +121,7 @@ def log_closed_trade(symbol: str, action: str, volume: float, entry_price: float
     """Escribe un trade cerrado para que el rendimiento sobreviva al reinicio."""
     with session_scope() as s:
         s.add(ClosedTrade(
-            timestamp=datetime.now(),
+            timestamp=broker_now(),
             platform=platform.upper(),
             symbol=symbol,
             action=action,

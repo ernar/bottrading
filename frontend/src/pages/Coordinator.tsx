@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { Coordination, CoordinatorDecision, CoordinatorOverview, CoordinatorSnapshot } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 import { TradingProfiles } from '../components/RiskProfileSelector'
+import { formatBrokerClock, formatBrokerTime } from '../utils/format'
 
 const API_URL = getApiUrl()
 
@@ -22,7 +23,7 @@ const windowLabel = (secs: number): string => {
 const dailyRangeSub = (s: CoordinatorSnapshot): string => {
   if (!s.daily_pnl_window_seconds) return 'guardia de pérdida diaria desactivada'
   const since = s.daily_pnl_since
-    ? ` · desde ${new Date(s.daily_pnl_since.replace(' ', 'T')).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    ? ` · desde ${formatBrokerClock(s.daily_pnl_since)}`
     : ''
   return `ventana móvil ${windowLabel(s.daily_pnl_window_seconds)}${since}`
 }
@@ -33,7 +34,7 @@ const dailyRangeHint = (s: CoordinatorSnapshot): string => {
   }
   const win = windowLabel(s.daily_pnl_window_seconds)
   const desde = s.daily_pnl_since
-    ? ` Inicio de la ventana actual: ${new Date(s.daily_pnl_since.replace(' ', 'T')).toLocaleString()}.`
+    ? ` Inicio de la ventana actual: ${formatBrokerTime(s.daily_pnl_since)}.`
     : ''
   return `P/L medido desde el equity al inicio de la ventana móvil de riesgo (se rearma cada ${win}), no desde la medianoche.${desde}`
 }

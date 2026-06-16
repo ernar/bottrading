@@ -3,8 +3,8 @@ import time
 import threading
 import unicodedata
 from typing import Optional, List
-from datetime import datetime, timedelta
 from clients.base_client import BaseMTClient
+from core.clock import broker_dt_from_mt_epoch
 
 
 def _ascii_comment(text: str) -> str:
@@ -330,18 +330,15 @@ class MT4Client(BaseMTClient):
         data.setdefault("stop_loss", data.get("sl", 0.0))
         data.setdefault("take_profit", data.get("tp", 0.0))
 
-        # Fecha de apertura legible para el dashboard (hora LOCAL). El epoch del
-        # bróker viene en la zona del servidor MT; `datetime.fromtimestamp` le
-        # añade el offset local, dejándolo adelantado justo el offset GMT del
-        # servidor. Se corrige restando `MT_SERVER_GMT_OFFSET` (horas del servidor
-        # respecto a GMT; p. ej. 3 para un bróker en GMT+3). 0 = sin corrección.
+        # Fecha de apertura legible para el dashboard en HORA DEL BRÓKER (hora de
+        # pared del servidor MT). El epoch del bróker ya viene localizado en su
+        # zona, así que `broker_dt_from_mt_epoch` (utcfromtimestamp) recupera esa
+        # hora de pared directamente. El front le suma el offset fijo de display.
         # NO toca el epoch crudo (`open_time`) que usan orquestador/coordinador.
         ot = data.get("open_time")
         if ot:
             try:
-                gmt_off = float(os.getenv("MT_SERVER_GMT_OFFSET", "0") or 0)
-                dt = datetime.fromtimestamp(int(ot)) - timedelta(hours=gmt_off)
-                data["open_time_str"] = dt.isoformat(sep=" ")
+                data["open_time_str"] = broker_dt_from_mt_epoch(ot).isoformat(sep=" ")
             except (ValueError, OSError, TypeError):
                 pass
 
@@ -445,7 +442,7 @@ class MT4Client(BaseMTClient):
             for candle in resp[3:].split(";"):
                 parts = candle.split(",")
                 if len(parts) >= 6:
-                    dt = datetime.fromtimestamp(int(parts[0])).strftime("%Y-%m-%d %H:%M")
+                    dt = broker_dt_from_mt_epoch(parts[0]).strftime("%Y-%m-%d %H:%M")
                     lines.append(f"{dt},{parts[1]},{parts[2]},{parts[3]},{parts[4]},{parts[5]}")
         return "\n".join(lines)
 

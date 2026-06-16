@@ -1,8 +1,9 @@
 """Tests de la memoria de señales: evaluación provisional vs terminal."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 
+from core.clock import broker_now
 from core.db import SignalMemoryRecord, get_session, session_scope
 from core.memory import SignalMemory
 
@@ -33,7 +34,7 @@ def _backdate(seconds):
         rec = session.scalars(
             select(SignalMemoryRecord).order_by(SignalMemoryRecord.id.desc())
         ).first()
-        rec.timestamp = datetime.now() - timedelta(seconds=seconds)
+        rec.timestamp = broker_now() - timedelta(seconds=seconds)
 
 
 def test_no_evalua_antes_de_la_edad_minima():

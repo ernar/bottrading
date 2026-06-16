@@ -5,8 +5,9 @@ orquestador y devuelve un dict con `subject`, `text` y `html`. No hace E/S ni
 llamadas a red — eso lo hace `core/mailer.py`. Así es fácil de testear y de
 mostrar en consola/dashboard aunque el envío esté desactivado.
 """
-from datetime import datetime
 from typing import Optional
+
+from core.clock import broker_now
 
 
 def _pct(value, dp: int = 1) -> str:
@@ -51,7 +52,7 @@ def build_report(
 
     Devuelve {subject, text, html}. Tolerante a None / campos ausentes.
     """
-    ts = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts = generated_at or broker_now().strftime("%Y-%m-%d %H:%M:%S")
     snapshot = snapshot or {}
     account = account or {}
     coordination = coordination or {}

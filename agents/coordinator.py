@@ -16,9 +16,9 @@ Dos capas que cooperan:
 """
 import json
 import time
-from datetime import datetime
 from typing import Optional
 
+from core.clock import broker_dt_from_posix
 from core.models import BotConfig
 from core.strategy import StrategyEngine
 from agents.positions import _pos_get, _pos_to_float, _pos_direction
@@ -270,7 +270,7 @@ class RiskBook:
         daily_pnl_since = None
         if day_window_start_ts:
             try:
-                daily_pnl_since = datetime.fromtimestamp(
+                daily_pnl_since = broker_dt_from_posix(
                     day_window_start_ts).isoformat(sep=" ", timespec="seconds")
             except (ValueError, OSError, TypeError):
                 daily_pnl_since = None

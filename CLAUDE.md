@@ -61,6 +61,7 @@ El bucle (`run_forever`) corre en **un único proceso/hilo** (sin eventlet) con 
 - `order_type` debe normalizarse a mayúsculas en `place_order`.
 - Cerrar posiciones debe llamar a `client.close_position()`, no solo quitarla del estado.
 - El bucle respeta `bot_state.bot_running`; el dashboard puede pausar/reanudar vía API.
+- **Horarios:** una sola referencia, **hora del bróker**. Todo el backend sella sus marcas con `core/clock.py` (`broker_now()` = UTC del equipo + `MT_SERVER_GMT_OFFSET`; `broker_dt_from_mt_epoch()` para epochs de MT; `broker_dt_from_posix()` para valores de `time.time()`) — NUNCA `datetime.now()` local (mezclaba zonas y daba desfases/duraciones negativas). El front las muestra sumando un offset fijo (`DISPLAY_OFFSET_HOURS`, default +2 h, en `frontend/src/utils/format.ts`: `formatBrokerTime`/`formatBrokerClock`/`formatBrokerShort`, anclados en UTC para que el huso del navegador no las desplace otra vez). `time.monotonic` (duraciones, `_first_seen`, throttles) y `news.py` (UTC real para frescura RSS) quedan al margen.
 - Idioma del proyecto: comentarios, prompts y mensajes de CLI en **español**.
 
 ## Comandos útiles

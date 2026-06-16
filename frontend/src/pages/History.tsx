@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { BotState, Trade } from '../types/bot'
 import { getApiUrl, getApiHeaders } from '../config'
 import { useTableFilter, FilterText, FilterSelect, FilterBar, SortHeader, uniqueOptions, Accessors } from '../components/tableFilters'
-import { priceDecimals } from '../utils/format'
+import { priceDecimals, formatBrokerTime, brokerToDisplayMs } from '../utils/format'
 
 interface StoredTrade {
   timestamp: string
@@ -37,11 +37,13 @@ interface HistoryPageProps {
   state: BotState | null
 }
 
-const formatDate = (dateString: string | null) =>
-  dateString ? new Date(dateString.replace(' ', 'T')).toLocaleString() : 'N/A'
+// Las marcas llegan en hora del bróker; se muestran con el offset de display.
+const formatDate = (dateString: string | null) => formatBrokerTime(dateString)
 
-const dateValue = (dateString: string | null) =>
-  dateString ? new Date(dateString.replace(' ', 'T')).getTime() : -Infinity
+const dateValue = (dateString: string | null) => {
+  const ms = brokerToDisplayMs(dateString)
+  return Number.isNaN(ms) ? -Infinity : ms
+}
 
 const formatDuration = (seconds: number | null) => {
   if (!seconds) return 'N/A'
@@ -449,7 +451,7 @@ export function HistoryPage({ state }: HistoryPageProps) {
                   <tbody>
                     {log.filtered.map((t, i) => (
                       <tr key={i} className="border-b border-gray-700 hover:bg-gray-800">
-                        <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{t.timestamp}</td>
+                        <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{formatBrokerTime(t.timestamp)}</td>
                         <td className="px-4 py-3 font-semibold">{t.symbol}</td>
                         <td className="px-4 py-3">
                           <span className={t.action === 'BUY' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>{t.action}</span>

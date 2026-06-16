@@ -19,6 +19,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
+from core.clock import broker_now
+
 from sqlalchemy import (
     Boolean, DateTime, Float, Index, Integer, String, create_engine, event,
 )
@@ -57,7 +59,7 @@ class Signal(Base):
     __tablename__ = "signals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=broker_now)
     platform: Mapped[str] = mapped_column(String(16), default="MT4")
     agent: Mapped[str] = mapped_column(String(64), default="")
     symbol: Mapped[str] = mapped_column(String(32), default="")
@@ -78,7 +80,7 @@ class Trade(Base):
     __tablename__ = "trades"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=broker_now)
     platform: Mapped[str] = mapped_column(String(16), default="MT4")
     symbol: Mapped[str] = mapped_column(String(32), default="")
     action: Mapped[str] = mapped_column(String(8), default="")
@@ -96,7 +98,7 @@ class ClosedTrade(Base):
     __tablename__ = "closed_trades"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=broker_now)
     platform: Mapped[str] = mapped_column(String(16), default="MT4")
     symbol: Mapped[str] = mapped_column(String(32), default="")
     action: Mapped[str] = mapped_column(String(8), default="")
@@ -115,7 +117,7 @@ class EquityPoint(Base):
     __tablename__ = "equity"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=broker_now)
     platform: Mapped[str] = mapped_column(String(16), default="MT4")
     balance: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     equity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -130,7 +132,7 @@ class SignalMemoryRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scope: Mapped[str] = mapped_column(String(64), default="global")
     symbol: Mapped[str] = mapped_column(String(32), default="")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=broker_now)
     action: Mapped[str] = mapped_column(String(8), default="HOLD")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -162,7 +164,7 @@ class AgentStat(Base):
     signals: Mapped[int] = mapped_column(Integer, default=0)
     trades: Mapped[int] = mapped_column(Integer, default=0)
     holds: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=broker_now)
 
 
 # Índices por consulta habitual (plataforma + símbolo + tiempo).
@@ -267,6 +269,6 @@ def save_agent_stats(stats: dict) -> None:
                 row.signals = int(c.get("signals", 0) or 0)
                 row.trades = int(c.get("trades", 0) or 0)
                 row.holds = int(c.get("holds", 0) or 0)
-                row.updated_at = datetime.now()
+                row.updated_at = broker_now()
     except Exception:
         pass

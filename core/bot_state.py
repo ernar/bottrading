@@ -1,7 +1,7 @@
 import threading
 from typing import Dict, List, Optional
-from datetime import datetime
 from dataclasses import dataclass, asdict, is_dataclass
+from core.clock import broker_now
 from core.models import Position
 
 
@@ -54,7 +54,7 @@ class BotState:
         self.account_info: Optional[AccountInfo] = None
         self.bot_running = False
         self.connected = False
-        self.last_update = datetime.now().isoformat()
+        self.last_update = broker_now().isoformat()
 
     def update_signal(self, signal_dict: dict) -> None:
         with self._lock:
@@ -68,12 +68,12 @@ class BotState:
                 take_profit=signal_dict["take_profit"],
                 risk_level=signal_dict["risk_level"],
                 reason=signal_dict["reason"],
-                timestamp=datetime.now().isoformat(),
+                timestamp=broker_now().isoformat(),
                 platform=signal_dict.get("platform", "MT4"),
                 agent=signal_dict.get("agent", ""),
             )
             self.signals[signal.symbol] = signal
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     @staticmethod
     def _pos_field(position, field: str):
@@ -102,7 +102,7 @@ class BotState:
             }
             for position in positions or []:
                 self.positions[self._pos_key(symbol, position)] = position
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     def sync_all_positions(self, positions: list) -> None:
         """Reemplaza TODAS las posiciones (de todos los símbolos) por la lista
@@ -114,12 +114,12 @@ class BotState:
                 self._pos_key(self._pos_field(p, "symbol"), p): p
                 for p in (positions or [])
             }
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     def update_position(self, symbol: str, position) -> None:
         with self._lock:
             self.positions[self._pos_key(symbol, position)] = position
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     def remove_position(self, symbol: str) -> None:
         """Quita del estado las posiciones del símbolo dado (se resincroniza
@@ -130,12 +130,12 @@ class BotState:
             for k in keys:
                 del self.positions[k]
             if keys:
-                self.last_update = datetime.now().isoformat()
+                self.last_update = broker_now().isoformat()
 
     def add_closed_trade(self, trade: Trade) -> None:
         with self._lock:
             self.closed_trades.append(trade)
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     def update_account(self, account_dict: dict) -> None:
         with self._lock:
@@ -148,17 +148,17 @@ class BotState:
                 leverage=account_dict.get("leverage", 1),
                 platform=account_dict.get("platform", "MT4"),
             )
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     def set_bot_running(self, running: bool) -> None:
         with self._lock:
             self.bot_running = running
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     def set_connected(self, connected: bool) -> None:
         with self._lock:
             self.connected = connected
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()
 
     def get_state(self) -> dict:
         with self._lock:
@@ -191,4 +191,4 @@ class BotState:
             self.positions.clear()
             self.closed_trades.clear()
             self.account_info = None
-            self.last_update = datetime.now().isoformat()
+            self.last_update = broker_now().isoformat()

@@ -4,8 +4,9 @@ from flask_socketio import SocketIO, emit
 import functools
 import logging
 import os
-from datetime import date, datetime
+from datetime import datetime
 from core.state import bot_state
+from core.clock import broker_now
 from core.llm_config import available_providers
 
 app = Flask(__name__)
@@ -318,7 +319,8 @@ def get_stats():
     from core.memory import WIN_OUTCOMES
 
     platform = request.args.get("platform", "mt4").upper()
-    today_start = datetime.combine(date.today(), datetime.min.time())
+    # "Hoy" en el día del BRÓKER, coherente con las marcas almacenadas.
+    today_start = datetime.combine(broker_now().date(), datetime.min.time())
 
     stats = {
         "signals_total": 0,

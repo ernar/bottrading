@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { formatBrokerShort } from '../utils/format'
 
 export interface EquityPoint {
   t: string
@@ -112,13 +113,13 @@ export function PortfolioChart({ points, height = 220, rangeLabel, field = 'equi
     `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   // Money con signo delante del símbolo: +$50.00 / -$50.00.
   const signed = (n: number) => `${n >= 0 ? '+' : '-'}${fmt(Math.abs(n))}`
-  // Fecha legible de un punto para el tooltip ("now" = momento actual).
+  // Fecha legible de un punto para el tooltip ("now" = momento actual). Se
+  // formatea desde la marca original (hora del bróker) con el offset de display.
   const fmtDate = (i: number) => {
-    const t = times[i]
-    if (!Number.isFinite(t)) return ''
-    return new Date(t).toLocaleString('es-ES', {
-      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-    })
+    const p = data[i]
+    if (!p) return ''
+    if (p.t === 'now') return 'ahora'
+    return formatBrokerShort(p.t)
   }
 
   // Localiza el punto cuyo X en píxeles es el más cercano a la posición del

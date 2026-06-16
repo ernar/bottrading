@@ -2,26 +2,23 @@ import { BotState, Position, Coordination } from '../types/bot'
 import { useApi } from '../hooks/useApi'
 import { useTableFilter, FilterSelect, FilterBar, SortHeader, uniqueOptions, Accessors } from '../components/tableFilters'
 import { LastDeskDecision } from '../components/LastDeskDecision'
-import { priceDecimals } from '../utils/format'
+import { priceDecimals, formatBrokerTime, brokerToDisplayMs } from '../utils/format'
 
 interface PositionsPageProps {
   state: BotState | null
   coordination?: Coordination | null
 }
 
-// Fecha de apertura: el backend manda `open_time_str` ("YYYY-MM-DD HH:MM:SS"
-// local) y, como respaldo, el epoch crudo del bróker en `open_time` (segundos).
-const formatOpenTime = (str?: unknown, epoch?: unknown): string => {
-  if (str) return new Date(String(str).replace(' ', 'T')).toLocaleString()
-  const n = epoch == null ? NaN : Number(epoch)
-  return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : 'N/A'
-}
+// Fecha de apertura: el backend manda `open_time_str` ("YYYY-MM-DD HH:MM:SS" en
+// hora del bróker) y, como respaldo, el epoch crudo del bróker en `open_time`
+// (segundos). Ambos se muestran con el offset fijo de display.
+const formatOpenTime = (str?: unknown, epoch?: unknown): string =>
+  formatBrokerTime((str ? String(str) : epoch) as string | number | null | undefined)
 
 // Valor temporal (ms) para ordenar la columna Open Time cronológicamente.
 const openTimeValue = (str?: unknown, epoch?: unknown): number => {
-  if (str) return new Date(String(str).replace(' ', 'T')).getTime()
-  const n = epoch == null ? NaN : Number(epoch)
-  return Number.isFinite(n) && n > 0 ? n * 1000 : -Infinity
+  const ms = brokerToDisplayMs((str ? String(str) : epoch) as string | number | null | undefined)
+  return Number.isNaN(ms) ? -Infinity : ms
 }
 
 // Fila ya normalizada (valores compartidos entre filtros y celdas).

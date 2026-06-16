@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from core import console
+from core.clock import broker_now
 from core.state import bot_state
 from core.bot_state import Trade
 from core.logger import log_trade, log_closed_trade, log_equity
@@ -690,7 +691,7 @@ class AgentOrchestrator:
         # del primer avistamiento) para medir la duración sin depender del epoch
         # del bróker (otra zona horaria). Tickets nuevos: se sellan con "ahora".
         rebuilt = {}
-        now = datetime.now()
+        now = broker_now()
         for t, p in current.items():
             snap = self._snapshot(p)
             prev_snap = prev.get(t)
@@ -746,7 +747,7 @@ class AgentOrchestrator:
         # duraciones NEGATIVAS (open posterior a close). Para posiciones ya
         # abiertas al arrancar, seen_at = primer avistamiento (sesgo conservador),
         # nunca una duración negativa.
-        now = datetime.now()
+        now = broker_now()
         seen_at = snap.get("seen_at")
         open_dt = seen_at if isinstance(seen_at, datetime) else now
         open_iso = open_dt.isoformat()
