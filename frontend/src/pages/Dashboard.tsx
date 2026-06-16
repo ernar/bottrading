@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { BotState } from '../types/bot'
 import { PortfolioChart } from '../components/PortfolioChart'
 import type { EquityPoint } from '../components/PortfolioChart'
-import { NewsSlider } from '../components/NewsSlider'
+import { NewsTicker } from '../components/NewsTicker'
 import { TradingProfiles } from '../components/RiskProfileSelector'
 import { getApiUrl, getApiHeaders } from '../config'
 import { brokerToDisplayMs, nowDisplayMs } from '../utils/format'
@@ -147,7 +147,7 @@ export function DashboardPage({ state }: DashboardPageProps) {
         </div>
       </section>
 
-      <NewsSlider />
+      <NewsTicker />
 
       <section>
         <h2 className="text-xl font-bold mb-4">Resumen</h2>

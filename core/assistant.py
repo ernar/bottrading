@@ -64,6 +64,20 @@ def _openai_chat(model: str, system: str, history: list, temperature: float = 0.
     return (resp.choices[0].message.content or "").strip()
 
 
+def _deepseek_chat(model: str, system: str, history: list, temperature: float = 0.4) -> str:
+    """Texto conversacional vía DeepSeek (API compatible con OpenAI)."""
+    from openai import OpenAI
+    client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
+                    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+    messages = [{"role": "system", "content": system}]
+    for m in history:
+        role = "assistant" if m["role"] == "model" else "user"
+        messages.append({"role": role, "content": m["content"]})
+    resp = client.chat.completions.create(
+        model=model, messages=messages, temperature=temperature)
+    return (resp.choices[0].message.content or "").strip()
+
+
 def _ollama_chat(model: str, system: str, history: list, temperature: float = 0.4) -> str:
     """Fallback Ollama local (texto conversacional)."""
     import ollama
@@ -203,6 +217,8 @@ class OrgAssistant:
             return _gemini_chat(self.model, system, history, self.temperature)
         if self.provider == "openai":
             return _openai_chat(self.model, system, history, self.temperature)
+        if self.provider == "deepseek":
+            return _deepseek_chat(self.model, system, history, self.temperature)
         return _ollama_chat(self.model, system, history, self.temperature)
 
     def _build_system(self, sess: dict) -> str:
@@ -237,8 +253,10 @@ class OrgAssistant:
         try:
             raw = self._call_llm(system, convo)
         except Exception as e:  # noqa: BLE001 — fail-safe conversacional
+            key_hint = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
+                        "deepseek": "DEEPSEEK_API_KEY"}.get(self.provider, "la API key del proveedor")
             return {"reply": (f"Ahora mismo no puedo responder: el modelo ({self.provider}/{self.model}) "
-                              f"no está disponible ({e}). Revisa que la GEMINI_API_KEY esté configurada "
+                              f"no está disponible ({e}). Revisa que {key_hint} esté configurada "
                               f"en Ajustes."),
                     "suggestions": []}
 

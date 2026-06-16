@@ -79,14 +79,20 @@ SETTINGS_SCHEMA: list[dict] = [
     # --- Asistente (responsable de la organización) ---
     {"key": "GEMINI_API_KEY", "label": "Token Gemini (API key)", "group": "Asistente", "type": "str", "secret": True, "hot": True,
      "help": "Clave de Google Gemini. La usa el asistente del dashboard (y los agentes Gemini). Se guarda solo si escribes una nueva."},
+    {"key": "DEEPSEEK_API_KEY", "label": "Token DeepSeek (API key)", "group": "Asistente", "type": "str", "secret": True, "hot": True,
+     "help": "Clave de DeepSeek (api.deepseek.com). Habilita el proveedor 'deepseek' en el selector de modelo de los agentes, la mesa y el asistente. Se guarda solo si escribes una nueva."},
+    {"key": "DEEPSEEK_MODEL", "label": "Modelo DeepSeek por defecto", "group": "Asistente", "type": "str", "secret": False, "hot": True,
+     "help": "Modelo DeepSeek que encabeza el selector (deepseek-chat / deepseek-reasoner). Por defecto deepseek-chat."},
     {"key": "ASSISTANT_PROVIDER", "label": "Proveedor LLM asistente", "group": "Asistente", "type": "str", "secret": False, "hot": True,
-     "help": "gemini / openai / ollama. Por defecto gemini."},
+     "help": "gemini / openai / deepseek / ollama. Por defecto gemini."},
     {"key": "ASSISTANT_MODEL", "label": "Modelo del asistente", "group": "Asistente", "type": "str", "secret": False, "hot": True,
      "help": "Modelo conversacional del asistente. Por defecto gemini-3.5-flash."},
 
     # --- Noticias ---
     {"key": "NEWS_ENABLED", "label": "Noticias activas", "group": "Noticias", "type": "bool", "secret": False, "hot": False,
      "help": "Calendario económico + titulares en el prompt. Requiere reinicio."},
+    {"key": "NEWS_MAX_AGE_HOURS", "label": "Antigüedad máx. titulares (h)", "group": "Noticias", "type": "int", "secret": False, "hot": False,
+     "help": "Descarta titulares más viejos que esto (teletipo y prompt). Default 48. Requiere reinicio."},
 
     # --- Conexión / credenciales (requieren reinicio) ---
     {"key": "MT4_LOGIN", "label": "MT4 login", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Número de cuenta MT4."},

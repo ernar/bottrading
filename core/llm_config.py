@@ -1,8 +1,9 @@
 """Catálogo de proveedores y modelos LLM disponibles, leído del .env.
 
 Permite que el menú de selección de agentes ofrezca elegir provider/modelo
-(ollama, openai, gemini) según las claves realmente configuradas. Sin clave,
-un proveedor de pago no aparece en el menú (así no se elige algo que fallaría).
+(ollama, openai, deepseek, gemini) según las claves realmente configuradas. Sin
+clave, un proveedor de pago no aparece en el menú (así no se elige algo que
+fallaría).
 """
 import os
 import sys
@@ -98,6 +99,7 @@ def available_providers() -> dict[str, list[str]]:
     - ollama: local; modelos de OLLAMA_MODELS (o MODEL). Se puede desactivar con
       OLLAMA_ENABLED=false (útil en un VPS que trabaja solo con APIs en la nube).
     - openai: solo si OPENAI_API_KEY; OPENAI_MODEL + sugeridos.
+    - deepseek: solo si DEEPSEEK_API_KEY; DEEPSEEK_MODEL + deepseek-chat/reasoner.
     - gemini: solo si GEMINI_API_KEY; modelos consultados en vivo a la API.
 
     El primer modelo de cada lista es el por defecto leído del .env.
@@ -111,6 +113,10 @@ def available_providers() -> dict[str, list[str]]:
     if os.getenv("OPENAI_API_KEY", "").strip():
         default = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         providers["openai"] = _dedup([default, "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini"])
+
+    if os.getenv("DEEPSEEK_API_KEY", "").strip():
+        default = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        providers["deepseek"] = _dedup([default, "deepseek-chat", "deepseek-reasoner"])
 
     if os.getenv("GEMINI_API_KEY", "").strip():
         default = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")

@@ -28,6 +28,26 @@ def _call_openai(model: str, system: str, user: str, temperature: float = 0.2) -
     return response.choices[0].message.content
 
 
+def _call_deepseek(model: str, system: str, user: str, temperature: float = 0.2) -> Optional[str]:
+    # DeepSeek expone una API compatible con OpenAI: reutilizamos el SDK de OpenAI
+    # apuntando a su base_url y su clave (DEEPSEEK_API_KEY).
+    from openai import OpenAI
+    client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
+                    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+    kwargs = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": temperature,
+    }
+    # deepseek-chat soporta JSON mode; deepseek-reasoner (R1) NO acepta
+    # response_format ni temperature, así que solo forzamos JSON fuera del reasoner
+    # (el parseo de generate_signal extrae el JSON aunque venga con texto alrededor).
+    if "reasoner" not in model.lower():
+        kwargs["response_format"] = {"type": "json_object"}
+    response = client.chat.completions.create(**kwargs)
+    return response.choices[0].message.content
+
+
 def _call_gemini(model: str, system: str, user: str, temperature: float = 0.2) -> Optional[str]:
     # SDK nuevo `google-genai` (el antiguo `google.generativeai` está deprecado).
     from google import genai
@@ -120,6 +140,8 @@ class StrategyEngine:
         try:
             if self.provider == "openai":
                 return _call_openai(model, system, user, self.temperature)
+            if self.provider == "deepseek":
+                return _call_deepseek(model, system, user, self.temperature)
             if self.provider == "gemini":
                 return _call_gemini(model, system, user, self.temperature)
             response = self._ollama.chat(

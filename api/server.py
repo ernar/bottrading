@@ -313,11 +313,11 @@ def get_equity():
 
 @app.route("/api/news", methods=["GET"])
 def get_news():
-    """Titulares recientes (Yahoo Finance RSS) de los símbolos que opera el bot,
-    para el slider de noticias del dashboard. Caché de 15 min en NewsProvider;
-    fail-safe (lista vacía ante errores de red o con NEWS_ENABLED=false). Los
-    símbolos salen de los agentes cargados; si el orquestador aún no está listo,
-    caen a la lista SYMBOLS del entorno."""
+    """Titulares recientes (varios feeds RSS por símbolo) de los símbolos que opera
+    el bot, para el teletipo de noticias del dashboard. Caché de 15 min en
+    NewsProvider; fail-safe (lista vacía ante errores de red o con
+    NEWS_ENABLED=false). Los símbolos salen de los agentes cargados; si el
+    orquestador aún no está listo, caen a la lista SYMBOLS del entorno."""
     from core.news import news_provider
     symbols = []
     if _orchestrator is not None:
@@ -331,14 +331,44 @@ def get_news():
     per_symbol = [(sym, items) for sym in ordered
                   if (items := news_provider.get_headlines(sym))]
 
-    # Intercalado round-robin: que los slides consecutivos sean de símbolos
-    # distintos en vez de agotar uno antes de pasar al siguiente.
-    flat = []
+    # Reparto equitativo de titulares entre símbolos. Varios símbolos de la misma
+    # clase comparten feeds (BTC/ETH comparten las fuentes de crypto; EURUSD/GBPUSD
+    # comparten FXStreet...), así que un mismo titular lo traen varios. Si el primer
+    # símbolo se quedara TODOS los compartidos, los demás saldrían vacíos. En su
+    # lugar, cada titular único se asigna al símbolo —de los que lo traen— con menos
+    # titulares hasta el momento (empate -> orden de aparición). Así las noticias
+    # compartidas se reparten, todos los símbolos tienen voz y nada se repite.
+    def _key(h):
+        return h["title"].strip().lower()
+
+    carriers: dict = {}  # título -> [símbolos que lo traen]
+    for sym, items in per_symbol:
+        for h in items:
+            carriers.setdefault(_key(h), []).append(sym)
+
+    order = {sym: i for i, (sym, _) in enumerate(per_symbol)}
+    assigned: dict = {sym: [] for sym, _ in per_symbol}
+    claimed: set = set()
     depth = max((len(items) for _, items in per_symbol), default=0)
+    # Recorre por recencia (los feeds vienen ya ordenados) e intercalando símbolos.
     for i in range(depth):
         for sym, items in per_symbol:
-            if i < len(items):
-                flat.append({"symbol": sym, **items[i]})
+            if i >= len(items):
+                continue
+            key = _key(items[i])
+            if key in claimed:
+                continue
+            claimed.add(key)
+            target = min(carriers[key], key=lambda s: (len(assigned[s]), order[s]))
+            assigned[target].append(items[i])
+
+    # Aplanado round-robin: titulares consecutivos de símbolos distintos.
+    flat = []
+    depth2 = max((len(v) for v in assigned.values()), default=0)
+    for i in range(depth2):
+        for sym, _ in per_symbol:
+            if i < len(assigned[sym]):
+                flat.append({"symbol": sym, **assigned[sym][i]})
 
     return jsonify({"enabled": news_provider.enabled, "headlines": flat}), 200
 

@@ -6,9 +6,11 @@ export function priceDecimals(symbol: string | null | undefined): number {
 
 // --- Horarios ---------------------------------------------------------------
 // El backend sella TODAS sus marcas en HORARIO DEL BRÓKER (hora de pared del
-// servidor MT, sin zona). El dashboard las muestra sumando este desplazamiento
-// fijo (la zona del usuario). Cambiar aquí si el bróker cambia de huso.
-export const DISPLAY_OFFSET_HOURS = 2
+// servidor MT, sin zona). El dashboard las muestra aplicando este desplazamiento
+// fijo = (tu zona) − (zona del bróker). El bróker va 1 h por delante (bróker UTC+3,
+// equipo UTC+2), así que se RESTA 1 h para ver tu hora local. Ajusta si cambia el
+// horario de verano o la diferencia con el bróker.
+export const DISPLAY_OFFSET_HOURS = -1
 
 const OFFSET_MS = DISPLAY_OFFSET_HOURS * 3600 * 1000
 
