@@ -94,6 +94,8 @@ SETTINGS_SCHEMA: list[dict] = [
     {"key": "MT4_SERVER", "label": "MT4 servidor", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Servidor del broker (relogin auto-login)."},
     {"key": "MT4_TERMINAL_PATH", "label": "Ruta terminal.exe (relogin)", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Ruta a terminal.exe. Si se define, main.py reinicia el terminal con auto-login al arrancar."},
     {"key": "MT4_RELOGIN_WAIT", "label": "Espera relogin (s)", "group": "Conexión / credenciales", "type": "int", "secret": False, "hot": False, "help": "Segundos a esperar tras relanzar el terminal. Default 12."},
+    {"key": "MT_SERVER_GMT_OFFSET", "label": "Offset GMT del servidor MT (h)", "group": "Conexión / credenciales", "type": "float", "secret": False, "hot": True,
+     "help": "Horas GMT del servidor del bróker (p. ej. 3 = GMT+3). Corrige la hora de apertura mostrada para que salga en hora local. 0 = sin corrección."},
     {"key": "MODEL", "label": "Modelo LLM por defecto", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Modelo base de los agentes. Requiere reinicio."},
     {"key": "SYMBOLS", "label": "Símbolos", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "Lista de símbolos (coma). Requiere reinicio."},
     {"key": "API_HOST", "label": "API host", "group": "Conexión / credenciales", "type": "str", "secret": False, "hot": False, "help": "127.0.0.1 (local) o 0.0.0.0 (red, exige API_TOKEN)."},

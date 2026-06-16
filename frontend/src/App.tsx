@@ -27,7 +27,7 @@ function App() {
             <Route path="/" element={<DashboardPage state={state} />} />
             <Route path="/coordinator" element={<CoordinatorPage liveCoordination={coordination} />} />
             <Route path="/agents" element={<AgentsPage />} />
-            <Route path="/positions" element={<PositionsPage state={state} />} />
+            <Route path="/positions" element={<PositionsPage state={state} coordination={coordination} />} />
             <Route path="/history" element={<HistoryPage state={state} />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

@@ -3,7 +3,7 @@ import time
 import threading
 import unicodedata
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from clients.base_client import BaseMTClient
 
 
@@ -330,14 +330,18 @@ class MT4Client(BaseMTClient):
         data.setdefault("stop_loss", data.get("sl", 0.0))
         data.setdefault("take_profit", data.get("tp", 0.0))
 
-        # Fecha de apertura legible para el dashboard. NO toca el epoch crudo
-        # (`open_time`) que usan orquestador/coordinador; añade un alias string
-        # con el mismo criterio que _record_closed_trade (datetime.fromtimestamp
-        # del epoch del bróker). Fail-safe: si no es un epoch válido, se omite.
+        # Fecha de apertura legible para el dashboard (hora LOCAL). El epoch del
+        # bróker viene en la zona del servidor MT; `datetime.fromtimestamp` le
+        # añade el offset local, dejándolo adelantado justo el offset GMT del
+        # servidor. Se corrige restando `MT_SERVER_GMT_OFFSET` (horas del servidor
+        # respecto a GMT; p. ej. 3 para un bróker en GMT+3). 0 = sin corrección.
+        # NO toca el epoch crudo (`open_time`) que usan orquestador/coordinador.
         ot = data.get("open_time")
         if ot:
             try:
-                data["open_time_str"] = datetime.fromtimestamp(int(ot)).isoformat(sep=" ")
+                gmt_off = float(os.getenv("MT_SERVER_GMT_OFFSET", "0") or 0)
+                dt = datetime.fromtimestamp(int(ot)) - timedelta(hours=gmt_off)
+                data["open_time_str"] = dt.isoformat(sep=" ")
             except (ValueError, OSError, TypeError):
                 pass
 

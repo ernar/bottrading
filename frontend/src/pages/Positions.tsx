@@ -1,10 +1,12 @@
-import { BotState, Position } from '../types/bot'
+import { BotState, Position, Coordination } from '../types/bot'
 import { useApi } from '../hooks/useApi'
 import { useTableFilter, FilterSelect, FilterBar, SortHeader, uniqueOptions, Accessors } from '../components/tableFilters'
+import { LastDeskDecision } from '../components/LastDeskDecision'
 import { priceDecimals } from '../utils/format'
 
 interface PositionsPageProps {
   state: BotState | null
+  coordination?: Coordination | null
 }
 
 // Fecha de apertura: el backend manda `open_time_str` ("YYYY-MM-DD HH:MM:SS"
@@ -40,7 +42,7 @@ interface PosRow {
 const fix = (v: number, d: number) => (Number.isFinite(v) ? v.toFixed(d) : 'N/A')
 const thf = 'px-6 py-2'
 
-export function PositionsPage({ state }: PositionsPageProps) {
+export function PositionsPage({ state, coordination }: PositionsPageProps) {
   const api = useApi()
   const positions = state?.positions || {}
 
@@ -108,28 +110,31 @@ export function PositionsPage({ state }: PositionsPageProps) {
     },
   })
 
-  if (Object.keys(positions).length === 0) {
-    return (
-      <div className="p-4 sm:p-8">
-        <h2 className="text-xl font-bold mb-4">Open Positions</h2>
+  const hasPositions = Object.keys(positions).length > 0
+
+  return (
+    <div className="p-4 sm:p-8 space-y-6">
+      {/* Última decisión de la mesa, encima de Open Positions */}
+      <LastDeskDecision live={coordination} />
+
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">Open Positions</h2>
+        {hasPositions && (
+          <button
+            onClick={handleCloseAll}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white text-sm font-bold"
+          >
+            CLOSE ALL
+          </button>
+        )}
+      </div>
+
+      {!hasPositions ? (
         <div className="bg-gray-800 text-gray-400 p-8 rounded text-center">
           No open positions
         </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold">Open Positions</h2>
-        <button
-          onClick={handleCloseAll}
-          className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white text-sm font-bold"
-        >
-          CLOSE ALL
-        </button>
-      </div>
+      ) : (
+      <>
       <FilterBar active={f.active} shown={f.filtered.length} total={rows.length} onClear={f.clear} />
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-left text-gray-300">
@@ -193,6 +198,8 @@ export function PositionsPage({ state }: PositionsPageProps) {
           </tbody>
         </table>
       </div>
+      </>
+      )}
     </div>
   )
 }
