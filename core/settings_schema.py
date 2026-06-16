@@ -56,8 +56,6 @@ SETTINGS_SCHEMA: list[dict] = [
     # --- Cadencias / ejecución (en caliente) ---
     {"key": "ROTATION_SECONDS", "label": "Rotación (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,
      "help": "Tick base del bucle: cada cuánto se analiza/coordina. 60 por defecto."},
-    {"key": "AT_MAX_ANALYSIS_INTERVAL", "label": "Reanálisis al máximo (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,
-     "help": "Con el símbolo en su máximo de posiciones, cada cuánto se reanaliza. 900 = 15 min."},
     {"key": "NEWS_POLL_SECONDS", "label": "Sonda de noticias (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,
      "help": "Cada cuánto se sondean noticias RED. 1800 = 30 min."},
     {"key": "JUNTA_INTERVAL_SECONDS", "label": "Junta global (s)", "group": "Cadencias", "type": "int", "secret": False, "hot": True,

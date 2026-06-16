@@ -13,6 +13,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from typing import Optional
 
 from core import console
 from core.clock import broker_now
@@ -22,6 +23,7 @@ from core.logger import log_trade, log_closed_trade, log_equity
 from core.trade_metrics import calc_trade_metrics
 from agents.base_agent import AgentParams
 from agents.positions import _pos_get, _pos_to_float, _pos_direction
+from clients.mt4_client import describe_mt_error
 
 
 # Límites de seguridad para que la optimización no deje a un agente en una
@@ -33,11 +35,6 @@ PARAM_BOUNDS = {
     "atr_tp_mult": (1.5, 5.0),
 }
 MIN_SAMPLES_TO_TUNE = 5   # nº mínimo de señales evaluadas para ajustar
-
-# Con el símbolo en su máximo de posiciones, el análisis se espacia a este
-# intervalo (en vez de cada ciclo) para no gastar llamadas al LLM sin poder
-# operar. Una señal de confianza >= 90% se salta igualmente el límite.
-AT_MAX_ANALYSIS_INTERVAL = 15 * 60
 
 # Tras tocar el límite de pérdida diaria el bot NO se detiene: entra en cooldown,
 # deja de abrir operaciones y espacia el análisis a este intervalo para no perder
@@ -256,10 +253,6 @@ class AgentOrchestrator:
         # tiempo (time.monotonic) comparando contra su último disparo.
         self.schedule_cfg = schedule_cfg or {}
         self.rotation_seconds = self.schedule_cfg.get("rotation_seconds", 60)
-        # Con el símbolo en su máximo de posiciones, cada cuánto se vuelve a
-        # analizar (configurable; los perfiles agresivos lo bajan).
-        self.at_max_analysis_interval = self.schedule_cfg.get(
-            "at_max_analysis_interval", AT_MAX_ANALYSIS_INTERVAL)
         self.news_poll_seconds = self.schedule_cfg.get("news_poll_seconds", 30 * 60)
         self.junta_interval_seconds = self.schedule_cfg.get("junta_interval_seconds", 60 * 60)
         self.report_interval_seconds = self.schedule_cfg.get("report_interval_seconds", 2 * 60 * 60)
@@ -628,13 +621,25 @@ class AgentOrchestrator:
         return (time.time() - self._last_analysis_at.get(symbol, 0)) < interval
 
     @staticmethod
-    def _is_trade_disabled_error(result: dict) -> bool:
-        """True si el resultado de place_order es un rechazo 133 (TRADE_DISABLED).
-        El EA devuelve el error del broker como 'ERROR|OrderSend failed, error=133'."""
+    def _disabled_error_code(result: dict) -> Optional[str]:
+        """Devuelve el código del error si place_order fue rechazado por una causa
+        de configuración RECUPERABLE que conviene aparcar (no reintentar cada
+        rotación): 133 (TRADE_DISABLED, símbolo no operable) o 4109 (TRADE_NOT_ALLOWED,
+        trading automático apagado en el terminal MT4). None en otro caso.
+        El EA devuelve el error crudo como 'ERROR|OrderSend failed, error=NNNN'."""
         if not result or result.get("success"):
-            return False
+            return None
         err = str(result.get("error") or "")
-        return "error=133" in err
+        for code in ("133", "4109"):
+            if f"error={code}" in err:
+                return code
+        return None
+
+    @classmethod
+    def _is_trade_disabled_error(cls, result: dict) -> bool:
+        """True si place_order fue rechazado por una causa de configuración que se
+        aparca con back-off (133 símbolo no operable o 4109 AutoTrading apagado)."""
+        return cls._disabled_error_code(result) is not None
 
     def _trade_disabled_remaining(self, symbol: str) -> float:
         """Segundos restantes del back-off por error 133 del símbolo (0 si no hay)."""
@@ -647,15 +652,26 @@ class AgentOrchestrator:
             return 0.0
         return remaining
 
-    def _mark_trade_disabled(self, symbol: str) -> None:
-        """Aparca el símbolo tras un error 133: deja de analizarlo durante el
-        back-off para no malgastar LLM ni inundar el log reintentando."""
+    def _mark_trade_disabled(self, symbol: str, code: str = "133") -> None:
+        """Aparca el símbolo tras un rechazo de configuración (133/4109): deja de
+        analizarlo durante el back-off para no malgastar LLM ni inundar el log
+        reintentando. El mensaje distingue la causa (símbolo vs terminal)."""
         self._trade_disabled_until[symbol] = (
             time.monotonic() + TRADE_DISABLED_BACKOFF_SECONDS)
-        print("  " + console.warn(
-            f"⏸ {symbol}: el broker rechazó la orden (133 TRADE_DISABLED). "
-            f"Símbolo aparcado {TRADE_DISABLED_BACKOFF_SECONDS // 60} min "
-            f"(reactívalo desde el dashboard para reintentar antes)."))
+        mins = TRADE_DISABLED_BACKOFF_SECONDS // 60
+        if code == "4109":
+            # Config del TERMINAL (afecta a toda la cuenta), no del símbolo: el
+            # arreglo es activar AutoTrading, no esperar a una sesión de mercado.
+            print("  " + console.warn(
+                f"⏸ {symbol}: trading automático DESHABILITADO en MT4 (4109). "
+                f"Activa el botón «AutoTrading» (Ctrl+E) y marca «Allow live "
+                f"trading» en las propiedades del EA (F7 → Common). Símbolo "
+                f"aparcado {mins} min (reactívalo desde el dashboard al corregirlo)."))
+        else:
+            print("  " + console.warn(
+                f"⏸ {symbol}: el broker rechazó la orden (133 TRADE_DISABLED). "
+                f"Símbolo aparcado {mins} min "
+                f"(reactívalo desde el dashboard para reintentar antes)."))
 
     def _spread_points(self, symbol: str, tick) -> float:
         """Spread actual en puntos, o None si no se puede calcular."""
@@ -902,27 +918,24 @@ class AgentOrchestrator:
         bot_state.sync_positions(symbol, positions)
         self._print_positions_summary(symbol, positions)
 
-        # Estados que espacian el análisis y bloquean abrir nuevas operaciones:
-        #  - cooldown por pérdida diaria: esperamos a que las posiciones abiertas
-        #    se cierren sin asumir más riesgo, pero seguimos analizando de vez en
-        #    cuando para no perder contexto/memoria.
-        #  - símbolo en su máximo de posiciones: igual, salvo señal de conf >=90%.
+        # SIEMPRE se analiza (salvo cooldown): sin análisis no hay confianza con la
+        # que decidir, así que NO se omite por estar "al máximo de posiciones". El nº
+        # máximo de posiciones lo gobierna ahora la MESA (RiskBook.max_open_positions,
+        # derivado del perfil de riesgo + horizonte): el especialista propone su señal
+        # cada rotación y la mesa decide si abre, mantiene o gestiona dentro de ese
+        # tope. Único espaciado vigente: el cooldown por pérdida diaria, donde NO se
+        # abre nada de todos modos, así que reanalizar a cada tick sería malgastar LLM;
+        # se sigue mirando de vez en cuando para no perder contexto/memoria.
         in_cooldown = self._risk_cooldown_active()
-        max_pos = agent.params.max_open_positions
-        at_max = bool(max_pos) and len(positions) >= max_pos
-        if (in_cooldown or at_max) and not force:
-            interval = (RISK_COOLDOWN_ANALYSIS_INTERVAL if in_cooldown
-                        else self.at_max_analysis_interval)
-            if self._throttled(symbol, interval):
-                if in_cooldown:
-                    print(console.dim(f"  ⏸ Cooldown por pérdida diaria; análisis aplazado "
-                                      f"(cada {interval // 60} min, esperando el cierre de posiciones)."))
-                else:
-                    print(console.dim(f"  ⏸ {len(positions)} posiciones abiertas (máx {max_pos}); "
-                                      f"análisis aplazado (cada {interval // 60} min salvo conf>=90%)."))
+        if in_cooldown and not force:
+            if self._throttled(symbol, RISK_COOLDOWN_ANALYSIS_INTERVAL):
+                print(console.dim(
+                    f"  ⏸ Cooldown por pérdida diaria; análisis aplazado "
+                    f"(cada {RISK_COOLDOWN_ANALYSIS_INTERVAL // 60} min, "
+                    f"esperando el cierre de posiciones)."))
                 return None
-        elif force and (in_cooldown or at_max):
-            print("  " + console.warn("⚡ análisis forzado por noticia pese al throttle "
+        elif force and in_cooldown:
+            print("  " + console.warn("⚡ análisis forzado por noticia pese al cooldown "
                                        "(la ejecución sigue sujeta a validación/mesa)."))
 
         with _Spinner("  Generando análisis" + (" (forzado por noticia)" if force else "")):
@@ -1168,14 +1181,17 @@ class AgentOrchestrator:
             print("  " + console.warn("[!] TIMEOUT esperando al EA: la orden NO se confirmó."))
             print(console.dim("      La orden PUEDE haberse ejecutado igualmente. Revisa MT4"))
             print(console.dim("      antes de que el orquestador reintente en el próximo ciclo."))
-        elif self._is_trade_disabled_error(result):
-            # El broker no acepta aperturas en este símbolo: aparcarlo en vez de
-            # reintentar cada rotación (sesión cerrada / close-only / rollover).
-            print("  " + console.err(f"✗ Error al ejecutar orden: {result.get('error')}"))
-            self._mark_trade_disabled(symbol)
+        elif self._disabled_error_code(result):
+            # Rechazo de configuración recuperable (133 símbolo no operable / 4109
+            # AutoTrading apagado): aparcar el símbolo en vez de reintentar cada
+            # rotación. El mensaje del aparcado ya explica la causa y el arreglo.
+            code = self._disabled_error_code(result)
+            print("  " + console.err(
+                f"✗ Error al ejecutar orden: {describe_mt_error(result.get('error'))}"))
+            self._mark_trade_disabled(symbol, code)
         else:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
-            print("  " + console.err(f"✗ Error al ejecutar orden: {err}"))
+            print("  " + console.err(f"✗ Error al ejecutar orden: {describe_mt_error(err)}"))
         return False
 
     # ----- Ciclo coordinado (mesa de dirección) -----
@@ -1380,7 +1396,7 @@ class AgentOrchestrator:
                   f"{console.dim('@')} {result.get('price')}")
         else:
             err = (result or {}).get("error") or (result or {}).get("comment") or "sin respuesta"
-            print("    " + console.err(f"✗ No se pudo cubrir: {err}"))
+            print("    " + console.err(f"✗ No se pudo cubrir: {describe_mt_error(err)}"))
 
     # ----- Gestión dinámica de posición (trailing stop / cierre parcial) -----
 
@@ -1472,7 +1488,7 @@ class AgentOrchestrator:
                                 continue
                             else:
                                 err = (res or {}).get("error") or "sin respuesta"
-                                print("    " + console.warn(f"no se pudo parcializar: {err}"))
+                                print("    " + console.warn(f"no se pudo parcializar: {describe_mt_error(err)}"))
 
                 # ----- Trailing stop -----
                 if p.use_trailing_stop and atr > 0:
@@ -1490,7 +1506,7 @@ class AgentOrchestrator:
                                       f"SL {cur_sl or '—'} → {new_sl}")
                             else:
                                 err = (res or {}).get("error") or "sin respuesta"
-                                print("    " + console.warn(f"no se pudo mover el SL: {err}"))
+                                print("    " + console.warn(f"no se pudo mover el SL: {describe_mt_error(err)}"))
 
         # Poda: olvida los linajes que ya no tienen posición abierta.
         self._partial_taken &= current_keys
@@ -1727,6 +1743,16 @@ class AgentOrchestrator:
         print(f"  [{name}] modelo cambiado a {provider.upper()}/{model}")
         return {"name": name, "provider": provider, "model": model}
 
+    def set_coordinator_model(self, provider: str, model: str) -> dict:
+        """Cambia el provider/modelo LLM del director (mesa de dirección) en
+        caliente. Reconstruye el motor del coordinador (ver
+        `CoordinatorAgent.set_model`); surte efecto en la próxima coordinación.
+        Lanza ValueError si faltan datos."""
+        result = self.coordinator.set_model(provider, model)
+        print(f"  [mesa] director LLM cambiado a "
+              f"{result['provider'].upper()}/{result['model']}")
+        return result
+
     # Parámetros editables a mano desde el dashboard (umbrales de señal). Se
     # acotan con PARAM_BOUNDS para no dejar al agente en una config absurda.
     EDITABLE_PARAMS = ("min_confidence", "min_rr", "atr_sl_mult", "atr_tp_mult")
@@ -1917,8 +1943,6 @@ class AgentOrchestrator:
         sched = get_schedule_config()
         self.schedule_cfg = sched  # el reporte (SMTP) lee de aquí
         self.rotation_seconds = sched.get("rotation_seconds", self.rotation_seconds)
-        self.at_max_analysis_interval = sched.get(
-            "at_max_analysis_interval", self.at_max_analysis_interval)
         self.news_poll_seconds = sched.get("news_poll_seconds", self.news_poll_seconds)
         self.junta_interval_seconds = sched.get("junta_interval_seconds", self.junta_interval_seconds)
         self.report_interval_seconds = sched.get("report_interval_seconds", self.report_interval_seconds)
@@ -1941,6 +1965,10 @@ class AgentOrchestrator:
         self.risk_book.reversal_drawdown_pct = float(cfg["reversal_drawdown_pct"])
         self.risk_book.max_symbol_loss_pct = float(cfg["max_symbol_loss_pct"])
         self.risk_book.min_hold_seconds = float(cfg["min_hold_seconds"])
+        # Nº máximo de posiciones por símbolo: lo mueven el perfil de riesgo (base)
+        # y el horizonte (multiplicador), ambos del front. Recalculado en
+        # get_coordinator_config a partir de ambos ejes.
+        self.risk_book.max_open_positions = int(cfg["max_open_positions"])
         # Rango del R:R objetivo (lo mueve el selector de horizonte).
         self.risk_book.tp_rr_min = float(cfg["tp_rr_min"])
         self.risk_book.tp_rr_max = float(cfg["tp_rr_max"])
@@ -1984,6 +2012,8 @@ class AgentOrchestrator:
             "reversal_drawdown_pct": self.risk_book.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.risk_book.max_symbol_loss_pct,
             "min_hold_seconds": self.risk_book.min_hold_seconds,
+            # Nº máximo de posiciones por símbolo que gobierna la mesa (riesgo×horizonte).
+            "max_open_positions": self.risk_book.max_open_positions,
             # Perfil de riesgo y horizonte activos (selectores del dashboard).
             "risk_profile": os.getenv("RISK_PROFILE", "moderate").strip() or "moderate",
             "horizon": os.getenv("HORIZON", "medio").strip() or "medio",
@@ -1995,7 +2025,6 @@ class AgentOrchestrator:
             "last_junta_at": self.last_junta_at,
             "last_report_at": self.last_report_at,
             "rotation_seconds": self.rotation_seconds,
-            "at_max_analysis_interval": self.at_max_analysis_interval,
             "news_poll_seconds": self.news_poll_seconds,
             "junta_interval_seconds": self.junta_interval_seconds,
             "report_interval_seconds": self.report_interval_seconds,

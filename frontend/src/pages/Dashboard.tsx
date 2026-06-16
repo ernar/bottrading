@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { BotState } from '../types/bot'
 import { PortfolioChart } from '../components/PortfolioChart'
 import type { EquityPoint } from '../components/PortfolioChart'
+import { NewsSlider } from '../components/NewsSlider'
 import { TradingProfiles } from '../components/RiskProfileSelector'
 import { getApiUrl, getApiHeaders } from '../config'
+import { brokerToDisplayMs, nowDisplayMs } from '../utils/format'
 
 const API_URL = getApiUrl()
 
@@ -69,9 +71,12 @@ export function DashboardPage({ state }: DashboardPageProps) {
         .then(r => r.json())
         .then((pts: EquityPoint[]) => {
           if (Array.isArray(pts) && pts.length > 0) {
-            const oldest = new Date(pts[0].t.replace(' ', 'T')).getTime()
+            // Misma escala UTC-anclada que el gráfico: comparar la marca del bróker
+            // con nowDisplayMs (no Date.now() crudo) para que el span no se desvíe
+            // las horas del huso del navegador y habilite/atenúe bien los rangos.
+            const oldest = brokerToDisplayMs(pts[0].t)
             if (!Number.isNaN(oldest)) {
-              setSpanSeconds(Math.max(0, (Date.now() - oldest) / 1000))
+              setSpanSeconds(Math.max(0, (nowDisplayMs() - oldest) / 1000))
             }
           }
         })
@@ -141,6 +146,8 @@ export function DashboardPage({ state }: DashboardPageProps) {
           <PortfolioChart points={equitySeries} rangeLabel={range.desc} field="balance" />
         </div>
       </section>
+
+      <NewsSlider />
 
       <section>
         <h2 className="text-xl font-bold mb-4">Resumen</h2>

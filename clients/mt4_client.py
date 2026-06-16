@@ -1,10 +1,52 @@
 import os
+import re
 import time
 import threading
 import unicodedata
 from typing import Optional, List
 from clients.base_client import BaseMTClient
 from core.clock import broker_dt_from_mt_epoch
+
+
+# Códigos de error de OrderSend/OrderClose/OrderModify de MT4 más habituales, con
+# una explicación ACCIONABLE en español. El EA los devuelve crudos como
+# 'ERROR|OrderSend failed, error=NNNN' (ver PythonBridge.mq4); el helper
+# describe_mt_error los enriquece para el log en vez de mostrar solo el número.
+MT4_ERROR_HINTS = {
+    "4109": ("trading automático deshabilitado en el terminal MT4 — activa el "
+             "botón «AutoTrading» (Ctrl+E) y marca «Allow live trading» en las "
+             "propiedades del EA (F7 → pestaña Common)."),
+    "4110": ("«long trading» deshabilitado para el EA — marca «Allow live "
+             "trading» en las propiedades del EA (F7 → Common)."),
+    "4111": ("«short trading» deshabilitado para el EA — marca «Allow live "
+             "trading» en las propiedades del EA (F7 → Common)."),
+    "133": ("trading deshabilitado para este símbolo (sesión cerrada / "
+            "close-only / rollover)."),
+    "134": "fondos insuficientes (margen) para el volumen solicitado.",
+    "131": "volumen inválido (incumple el paso/lote mínimo del símbolo).",
+    "130": "stops inválidos (SL/TP demasiado cerca del precio o mal redondeados).",
+    "132": "mercado cerrado.",
+    "136": "sin precios (off quotes): el broker no devolvió cotización; reintenta.",
+    "138": "requote: el precio se movió antes de ejecutar; reintenta.",
+    "146": "subsistema de trading ocupado; reintenta.",
+}
+
+_MT_ERR_RE = re.compile(r"error=(\d+)")
+
+
+def describe_mt_error(err) -> str:
+    """Enriquece el mensaje crudo del EA con una pista accionable cuando el código
+    de error es conocido. P. ej. 'ERROR|OrderSend failed, error=4109' ->
+    '...error=4109 (trading automático deshabilitado…)'. Si no hay código o no se
+    reconoce, devuelve el texto original sin tocar."""
+    if not err:
+        return err
+    text = str(err)
+    m = _MT_ERR_RE.search(text)
+    if not m:
+        return text
+    hint = MT4_ERROR_HINTS.get(m.group(1))
+    return f"{text} ({hint})" if hint else text
 
 
 def _ascii_comment(text: str) -> str:

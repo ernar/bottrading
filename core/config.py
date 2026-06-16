@@ -198,8 +198,10 @@ def get_coordinator_config() -> dict:
     reparte capital y decide go/no-go por símbolo. La mesa está SIEMPRE activa
     (todo el flujo es coordinado; no existe ruta clásica). Variables soportadas:
 
-    - COORDINATOR_PROVIDER / COORDINATOR_MODEL: LLM del coordinador. Si están
-      vacíos, en main.py se hereda el LLM del primer agente como default.
+    - COORDINATOR_PROVIDER / COORDINATOR_MODEL: LLM del coordinador (director de
+      la mesa). Se elige y se cambia EN CALIENTE desde el dashboard (pestaña
+      "Mesa" -> POST /api/coordinator/model), que persiste la elección aquí. Si
+      están vacíos, en main.py se usa gemini-3.5-flash por defecto.
     - COORDINATOR_CAN_CLOSE (bool, default True): permite cerrar/reducir
       posiciones abiertas. Kill-switch del cierre automático (si es False, ni
       siquiera las guardias deterministas cierran).
@@ -248,7 +250,21 @@ def get_coordinator_config() -> dict:
       rango; el ajuste por margen libre y los topes de exposición recortan el lote
       final, así que size_mult nunca sobrepasa los límites duros. Sin size_mult
       informado (0/ausente) se respeta el lote base del especialista (×1).
+
+    Nº máximo de posiciones abiertas POR SÍMBOLO (lo gobierna la mesa):
+    - MAX_OPEN_POSITIONS_DEFAULT (int, default 3): nº BASE de posiciones que fija
+      el perfil de RIESGO.
+    - MAX_POSITIONS_HORIZON_MULT (float, default 1.0): multiplicador del HORIZONTE
+      sobre ese base (corto = más concurrentes, largo = menos). El producto
+      (redondeado, mínimo 1) es el tope DURO por símbolo que el RiskBook impone en
+      clamp(): una entrada aprobada que dejaría el símbolo por encima se veta.
+      0 en el base = sin tope (la mesa gobierna solo por exposición).
     """
+    # Tope de posiciones por símbolo: base del perfil de RIESGO × multiplicador
+    # del HORIZONTE (ambos ejes del front). 0 en el base = sin tope.
+    pos_base = _env_int("MAX_OPEN_POSITIONS_DEFAULT", 3)
+    pos_mult = _env_float("MAX_POSITIONS_HORIZON_MULT", 1.0)
+    max_open_positions = max(1, int(pos_base * pos_mult + 0.5)) if pos_base > 0 else 0
     return {
         "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
         "model": os.getenv("COORDINATOR_MODEL", "").strip(),
@@ -273,6 +289,8 @@ def get_coordinator_config() -> dict:
         # el lote base del especialista por convicción/piramidación.
         "size_mult_min": _env_float("COORDINATOR_SIZE_MULT_MIN", 0.5),
         "size_mult_max": _env_float("COORDINATOR_SIZE_MULT_MAX", 2.0),
+        # Tope DURO de posiciones abiertas por símbolo (perfil de riesgo × horizonte).
+        "max_open_positions": max_open_positions,
         # Registro persistente de antigüedad de posiciones (período de gracia):
         # {ticket: epoch del primer avistamiento}, guardado en la DB (tabla
         # risk_first_seen). Se recarga al arrancar para que la gracia NO se
@@ -297,11 +315,6 @@ def get_schedule_config() -> dict:
       no haya tenido actividad.
     - REPORT_INTERVAL_SECONDS (int, default 7200 = 2 h): cada cuánto se genera el
       reporte y se intenta enviar por correo.
-    - AT_MAX_ANALYSIS_INTERVAL (int, default 900 = 15 min): con el símbolo en su
-      máximo de posiciones, cada cuánto se vuelve a analizar (en vez de cada
-      rotación) para no gastar llamadas al LLM sin poder operar. Una señal de
-      confianza >= 90% se salta el límite. Los perfiles agresivos lo bajan para
-      detectar antes oportunidades de piramidar/reentrar.
 
     Reporte / email (ver core/mailer.py). El envío real está APAGADO por defecto
     (SMTP_ENABLED=false): el reporte se genera y se muestra, pero no se manda
@@ -315,7 +328,6 @@ def get_schedule_config() -> dict:
     """
     return {
         "rotation_seconds": _env_int("ROTATION_SECONDS", 60),
-        "at_max_analysis_interval": _env_int("AT_MAX_ANALYSIS_INTERVAL", 15 * 60),
         "news_poll_seconds": _env_int("NEWS_POLL_SECONDS", 30 * 60),
         "junta_interval_seconds": _env_int("JUNTA_INTERVAL_SECONDS", 60 * 60),
         "report_interval_seconds": _env_int("REPORT_INTERVAL_SECONDS", 2 * 60 * 60),

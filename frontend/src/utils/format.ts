@@ -27,6 +27,17 @@ export function brokerToDisplayMs(value: string | number | null | undefined): nu
   return Number.isNaN(base) ? NaN : base + OFFSET_MS
 }
 
+// Instante ACTUAL en la misma escala que brokerToDisplayMs (ms UTC-anclados +
+// offset de display), para colocar el punto "en vivo" del gráfico sobre el mismo
+// eje que las marcas del bróker. Mezclar Date.now() (epoch real) con marcas
+// ancladas a UTC metía una cola plana fantasma del ancho del huso del navegador.
+// Equivale a brokerToDisplayMs("hora bróker ahora"): la hora de pared LOCAL
+// reinterpretada como UTC (bajo el contrato de que DISPLAY_OFFSET_HOURS mapea
+// bróker -> hora local del usuario).
+export function nowDisplayMs(): number {
+  return Date.now() - new Date().getTimezoneOffset() * 60000
+}
+
 // `timeZone: 'UTC'` es deliberado: la marca ya viene desplazada en brokerToDisplayMs,
 // así que formateamos sus componentes tal cual, sin que el navegador reaplique su huso.
 const _fmtFull = new Intl.DateTimeFormat('es-ES', {

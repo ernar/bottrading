@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { formatBrokerShort } from '../utils/format'
+import { formatBrokerShort, brokerToDisplayMs, nowDisplayMs } from '../utils/format'
 
 export interface EquityPoint {
   t: string
@@ -80,10 +80,13 @@ export function PortfolioChart({ points, height = 220, rangeLabel, field = 'equi
   // Eje X proporcional al TIEMPO real (no al índice): si el bot se detuvo y
   // reanudó, los huecos temporales deben verse como huecos, no como tramos
   // equiespaciados que deforman la curva. Fallback a índice si no hay timestamps.
+  // IMPORTANTE: todas las marcas se llevan a la MISMA escala (brokerToDisplayMs,
+  // UTC-anclada) y el punto en vivo a nowDisplayMs en esa escala; mezclar marcas
+  // ancladas a UTC con Date.now() crudo descuadraba el eje y metía una cola plana
+  // del ancho del huso del navegador.
   const times = data.map(p => {
-    if (p.t === 'now') return Date.now()
-    const ms = new Date(p.t.replace(' ', 'T')).getTime()
-    return Number.isFinite(ms) ? ms : NaN
+    if (p.t === 'now') return nowDisplayMs()
+    return brokerToDisplayMs(p.t)
   })
   const tValid = times.every(t => Number.isFinite(t))
   const t0 = tValid ? times[0] : 0

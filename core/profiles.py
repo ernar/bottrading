@@ -1,9 +1,12 @@
 """Perfiles de trading: dos ejes independientes que el dashboard mueve en vivo.
 
 - **Riesgo** (conservative/moderate/aggressive/extreme): apetito, exposición y
-  selectividad. Cuántas operaciones se abren y cuánto capital se arriesga.
+  selectividad. Cuántas operaciones se abren y cuánto capital se arriesga. Fija
+  además el nº BASE de posiciones abiertas por símbolo (MAX_OPEN_POSITIONS_DEFAULT)
+  que gobierna la mesa.
 - **Horizonte** (corto/medio/largo): duración de las operaciones. Distancia del
-  TP, periodo de gracia, trailing/parcial y cadencia de reanálisis.
+  TP, periodo de gracia, trailing/parcial y el multiplicador del nº máximo de
+  posiciones (MAX_POSITIONS_HORIZON_MULT: corto abre más concurrentes, largo menos).
 
 Cada perfil es un conjunto coherente de claves `.env` (las escribe el endpoint
 correspondiente con `write_env`) MÁS una **directiva de prompt**: el texto que se
@@ -95,7 +98,8 @@ HORIZON_PROFILES: dict[str, dict[str, str]] = {
         "TRAILING_BREAKEVEN_ATR_MULT_DEFAULT": "0.6",
         "TRAILING_STEP_ATR_MULT_DEFAULT": "0.4",
         "PARTIAL_PROFIT_TRIGGER_PCT_DEFAULT": "0.3",
-        "AT_MAX_ANALYSIS_INTERVAL": "180",
+        # Más posiciones concurrentes: el scalping abre y cierra mucho.
+        "MAX_POSITIONS_HORIZON_MULT": "1.5",
     },
     "medio": {
         "COORDINATOR_TP_RR_MIN": "1.0", "COORDINATOR_TP_RR_MAX": "4.0",
@@ -104,7 +108,7 @@ HORIZON_PROFILES: dict[str, dict[str, str]] = {
         "TRAILING_BREAKEVEN_ATR_MULT_DEFAULT": "1.0",
         "TRAILING_STEP_ATR_MULT_DEFAULT": "0.6",
         "PARTIAL_PROFIT_TRIGGER_PCT_DEFAULT": "0.5",
-        "AT_MAX_ANALYSIS_INTERVAL": "600",
+        "MAX_POSITIONS_HORIZON_MULT": "1.0",
     },
     "largo": {
         "COORDINATOR_TP_RR_MIN": "1.5", "COORDINATOR_TP_RR_MAX": "8.0",
@@ -113,7 +117,8 @@ HORIZON_PROFILES: dict[str, dict[str, str]] = {
         "TRAILING_BREAKEVEN_ATR_MULT_DEFAULT": "1.6",
         "TRAILING_STEP_ATR_MULT_DEFAULT": "1.0",
         "PARTIAL_PROFIT_TRIGGER_PCT_DEFAULT": "0.7",
-        "AT_MAX_ANALYSIS_INTERVAL": "1200",
+        # Menos posiciones concurrentes: el swing mantiene pocas y grandes.
+        "MAX_POSITIONS_HORIZON_MULT": "0.6",
     },
 }
 

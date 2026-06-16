@@ -5,11 +5,12 @@ from agents.coordinator import RiskBook, CoordinatorAgent
 
 def _rb(can_close=True, max_total=0.5, max_symbol=0.4, max_net=0.6,
         max_pyramid=None, reversal=0.015, symbol_loss=0.0, min_hold=0.0,
-        llm_can_close=True) -> RiskBook:
+        llm_can_close=True, max_open_positions=0) -> RiskBook:
     # min_hold por defecto 0 (gracia off) y llm_can_close=True (gestión
     # discrecional permitida) para no alterar los tests existentes; el default
     # real de producción es llm_can_close=False (solo fuerza mayor).
     # max_pyramid None => igual a max_net (sin piramidación extra), como el default.
+    # max_open_positions 0 => sin tope de recuento (no altera los tests previos).
     cfg = {"max_total_exposure_pct": max_total,
            "max_symbol_allocation_pct": max_symbol,
            "can_close": can_close,
@@ -17,7 +18,8 @@ def _rb(can_close=True, max_total=0.5, max_symbol=0.4, max_net=0.6,
            "reversal_drawdown_pct": reversal,
            "max_symbol_loss_pct": symbol_loss,
            "min_hold_seconds": min_hold,
-           "llm_can_close": llm_can_close}
+           "llm_can_close": llm_can_close,
+           "max_open_positions": max_open_positions}
     if max_pyramid is not None:
         cfg["max_pyramid_direction_pct"] = max_pyramid
     return RiskBook(cfg)
@@ -112,6 +114,44 @@ def test_clamp_no_toca_decision_valida():
     assert out[0]["clamp"] == ""
 
 
+# ----- Tope de nº de posiciones por símbolo (gobernado por la mesa) -----
+
+def test_clamp_veta_entrada_si_simbolo_en_su_maximo():
+    # max_open_positions=3 y el símbolo ya tiene 3 abiertas: la entrada se veta.
+    rb = _rb(max_open_positions=3)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        remaining_pct=0.4, open_positions=3)})
+    out = rb.clamp([_decision(alloc=0.2)], snap)
+    assert out[0]["approve"] is False
+    assert "máximo de posiciones" in out[0]["clamp"]
+
+
+def test_clamp_permite_entrada_si_queda_hueco():
+    # max_open_positions=3 con 2 abiertas: aún cabe una más.
+    rb = _rb(max_open_positions=3)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        remaining_pct=0.4, open_positions=2)})
+    out = rb.clamp([_decision(alloc=0.2)], snap)
+    assert out[0]["approve"] is True
+    assert "máximo de posiciones" not in out[0]["clamp"]
+
+
+def test_clamp_max_posiciones_off_no_veta():
+    # max_open_positions=0 (sin tope): no veta por recuento aunque haya muchas.
+    rb = _rb(max_open_positions=0)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        remaining_pct=0.4, open_positions=9)})
+    out = rb.clamp([_decision(alloc=0.2)], snap)
+    assert out[0]["approve"] is True
+
+
+def test_snapshot_expone_max_open_positions():
+    rb = _rb(max_open_positions=5)
+    client = _FakeClient(_account(), [])
+    snap = rb.snapshot(client, [_FakeAgent("BTCUSD")])
+    assert snap["max_open_positions"] == 5
+
+
 # ----- R:R objetivo (tp_rr) gobernado por la mesa -----
 
 def test_clamp_tp_rr_dentro_de_rango_no_se_toca():
@@ -189,6 +229,36 @@ def test_parse_json_valido():
 def test_parse_json_invalido_devuelve_none():
     c = _coord()
     assert c._parse("aquí no hay json") is None
+
+
+def test_set_model_cambia_provider_y_modelo_en_caliente():
+    c = _coord()
+    engine_antes = c.engine
+    temp_antes = c.engine.temperature
+    result = c.set_model("openai", "gpt-4o-mini")
+    assert result == {"provider": "openai", "model": "gpt-4o-mini"}
+    assert c.provider == "openai"
+    assert c.model == "gpt-4o-mini"
+    # Reconstruye el motor (provider en el engine, modelo en su BotConfig) y
+    # preserva la temperatura.
+    assert c.engine is not engine_antes
+    assert c.engine.provider == "openai"
+    assert c.engine.config.model == "gpt-4o-mini"
+    assert c.engine.temperature == temp_antes
+
+
+def test_set_model_normaliza_y_exige_datos():
+    c = _coord()
+    # Normaliza mayúsculas/espacios.
+    c.set_model("  OpenAI ", "  gpt-4o ")
+    assert c.provider == "openai"
+    assert c.model == "gpt-4o"
+    # provider/model vacíos => error.
+    import pytest
+    with pytest.raises(ValueError):
+        c.set_model("", "gpt-4o")
+    with pytest.raises(ValueError):
+        c.set_model("openai", "  ")
 
 
 def test_parse_extrae_size_mult():

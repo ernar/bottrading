@@ -72,6 +72,12 @@ class RiskBook:
         # abajo: el size_mult nunca puede reventarlos.
         self.size_mult_min = float(config.get("size_mult_min", 0.5))
         self.size_mult_max = float(config.get("size_mult_max", 2.0))
+        # Nº máximo de posiciones abiertas POR SÍMBOLO que tolera la mesa (0 = sin
+        # tope). Lo GOBIERNA la mesa: deriva del perfil de RIESGO (cuántas) modulado
+        # por el HORIZONTE (corto = más concurrentes, largo = menos), ambos del
+        # front. Es un tope DURO: una entrada aprobada que dejaría el símbolo por
+        # encima se veta en clamp() (el LLM lo ve en el prompt y razona dentro de él).
+        self.max_open_positions = int(config.get("max_open_positions", 0) or 0)
         # Período de gracia para posiciones recién abiertas (segundos). Mientras la
         # posición más joven de un símbolo no lo supere, las guardias deterministas
         # de reversión y los cierres/reducciones que proponga el LLM se aplazan
@@ -347,6 +353,7 @@ class RiskBook:
             "max_pyramid_direction_pct": self.max_pyramid_direction_pct,
             "size_mult_min": self.size_mult_min,
             "size_mult_max": self.size_mult_max,
+            "max_open_positions": self.max_open_positions,
             "reversal_drawdown_pct": self.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.max_symbol_loss_pct,
             "min_hold_seconds": self.min_hold_seconds,
@@ -374,6 +381,9 @@ class RiskBook:
         - en cooldown por pérdida diaria no se aprueban entradas;
         - si la exposición total ya alcanza el tope, no se aprueban entradas;
         - si el símbolo ya está en su tope de asignación, no se aprueban entradas;
+        - si el símbolo ya está en su máximo de posiciones (``max_open_positions``,
+          que gobierna la mesa según perfil de riesgo × horizonte), no se aprueba
+          una entrada más;
         - NO se apila en la dirección ya saturada (``max_net_direction_pct``).
 
         Gestión de posiciones abiertas. Por defecto la mesa solo cierra por
@@ -545,6 +555,16 @@ class RiskBook:
                 notes.append("símbolo en su tope de asignación: entrada vetada")
                 approve = False
 
+            # Tope DURO de nº de posiciones por símbolo (lo gobierna la mesa, deriva
+            # del perfil de riesgo × horizonte): no se abre una más si el símbolo ya
+            # está en su máximo. Es un guardarraíl de recuento (independiente de la
+            # exposición): el LLM lo ve en el prompt y decide dentro de él.
+            if (approve and self.max_open_positions > 0
+                    and open_positions >= self.max_open_positions):
+                notes.append(f"símbolo en su máximo de posiciones "
+                             f"({open_positions}/{self.max_open_positions}): entrada vetada")
+                approve = False
+
             # Anti-apilamiento: no añadir más en la dirección neta ya saturada.
             # EXCEPCIÓN (piramidar ganadores / add-to-winners): si la posición neta
             # del símbolo va en GANANCIA y la tendencia del especialista CONFIRMA la
@@ -682,6 +702,11 @@ Reglas:
 - Reparte el capital, no lo concentres todo en un símbolo, pero tener margen libre disponible es
   una oportunidad desaprovechada: usa una allocation_pct acorde a la confianza de la señal en vez
   de asignar de menos por defecto.
+- Nº MÁXIMO DE POSICIONES POR SÍMBOLO: el contexto indica el tope de posiciones abiertas que
+  toleras en cada símbolo (lo fija tu configuración de riesgo y horizonte). NO apruebes una entrada
+  nueva en un símbolo que ya esté en ese máximo (marcado "EN SU MÁXIMO"): primero tendría que
+  cerrarse alguna. Mientras quede hueco, el recuento no es razón para vetar. (La capa de riesgo
+  veta igualmente la entrada que rebase el tope, pero respétalo tú primero.)
 - Prioriza señales de mayor confianza y mejor relación riesgo/beneficio, y los agentes con mejor
   rendimiento reciente.
 - CONCENTRACIÓN DIRECCIONAL: vigila el "sesgo abierto" (neto LONG/SHORT) de cada símbolo. NO
@@ -750,6 +775,26 @@ class CoordinatorAgent:
         # fija el orquestador (_refresh_trading_directives); vacía = sin sesgo.
         self.risk_directive = ""
 
+    def set_model(self, provider: str, model: str) -> dict:
+        """Cambia el provider/modelo LLM del director EN CALIENTE.
+
+        El provider vive en el StrategyEngine y el modelo en su BotConfig
+        (``_call_ai`` lee ``config.model``), así que reconstruimos el motor —igual
+        que ``SymbolAgent.apply_params`` con los agentes— preservando la temperatura
+        actual. La ``risk_directive`` vive en este objeto y se re-inyecta sola en
+        ``decide()``, no se pierde. Surte efecto en la próxima coordinación. Lanza
+        ValueError si faltan datos."""
+        provider = (provider or "").lower().strip()
+        model = (model or "").strip()
+        if not provider or not model:
+            raise ValueError("provider y model son obligatorios")
+        temperature = getattr(self.engine, "temperature", 0.2)
+        config = BotConfig(model=model, debug_mode=self.debug_mode)
+        self.engine = StrategyEngine(config, provider=provider, temperature=temperature)
+        self.provider = provider
+        self.model = model
+        return {"provider": provider, "model": model}
+
     # ----- API principal -----
 
     def decide(self, snapshot: dict, signals: dict, agents_overview: dict,
@@ -807,6 +852,10 @@ class CoordinatorAgent:
                      f"(tope {snapshot.get('max_total_exposure_pct', 0):.0%})")
         lines.append(f"Tope de asignación por símbolo: {snapshot.get('max_symbol_allocation_pct', 0):.0%}"
                      f" | Tope de dirección neta por símbolo: {snapshot.get('max_net_direction_pct', 0):.0%}")
+        max_pos = snapshot.get("max_open_positions", 0) or 0
+        if max_pos > 0:
+            lines.append(f"Máximo de posiciones abiertas POR SÍMBOLO: {max_pos} "
+                         f"(tope duro; no apruebes una entrada en un símbolo que ya esté en su máximo)")
         lines.append(f"Multiplicador de lote (size_mult) permitido: "
                      f"{snapshot.get('size_mult_min', 0.5):.2f}x – {snapshot.get('size_mult_max', 2.0):.2f}x "
                      f"(1x = lote base del especialista)")
@@ -834,9 +883,12 @@ class CoordinatorAgent:
             reason = str(sig.get("reason", ""))[:200]
             if reason:
                 lines.append(f"  Razón especialista: {reason}")
+            open_pos = si.get("open_positions", 0) or 0
+            pos_label = f"{open_pos}/{max_pos} pos" if max_pos > 0 else f"{open_pos} pos"
+            at_max_tag = " ⛔ EN SU MÁXIMO (no abrir más)" if (max_pos > 0 and open_pos >= max_pos) else ""
             lines.append(f"  Exposición actual: {self._pct(si.get('exposure_pct'))} "
-                         f"({si.get('open_positions', 0)} pos, "
-                         f"P/L flotante {si.get('floating_pnl', 0):+.2f}) | "
+                         f"({pos_label}, "
+                         f"P/L flotante {si.get('floating_pnl', 0):+.2f}){at_max_tag} | "
                          f"margen para asignar: {self._pct(si.get('remaining_pct'))}")
             # Antigüedad de las posiciones abiertas: la mesa avisa de las recién
             # abiertas (en gracia) para no cerrarlas antes de que evolucionen.

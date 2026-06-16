@@ -235,8 +235,9 @@ cd frontend && npm install && npm run dev
    - Calcula el volumen: lote fijo, o por riesgo hasta el SL si `use_risk_sizing` está activo.
    - Ejecuta orden si pasa validación.
    - Registra la señal en la DB (`logs/bot.db`) y en la memoria del agente (tabla `signal_memory`, scope por agente).
-   - **Throttle**: con el símbolo en su máximo de posiciones, el análisis se espacia a 15 min
-     (no se consulta al LLM cada ciclo si no se va a poder operar, salvo señal de conf ≥ 90%).
+   - El especialista se analiza **cada rotación** (sin análisis no hay confianza con la que
+     decidir). El nº máximo de posiciones por símbolo lo gobierna la **mesa**
+     (`RiskBook.max_open_positions` = perfil de riesgo × horizonte), no un throttle de análisis.
 5. **Cooldown por pérdida diaria**: si la pérdida del día supera `MAX_DAILY_LOSS_PCT`, el bot
    **no se detiene**; deja de abrir nuevas operaciones y espacia el análisis (para no perder
    contexto/memoria) a la espera de que las posiciones abiertas se cierren. Se rearma al
@@ -298,8 +299,7 @@ POST /api/positions/{symbol}/close  Cerrar posición
 | Riesgo por trade | 2% del balance |
 | Confianza mínima | 60% |
 | R:R mínimo | 1:1 |
-| Máx. posiciones abiertas (global) | 5 (btc-agent: 3) |
-| Override de posiciones por confianza | ≥ 90% |
+| Máx. posiciones por símbolo (mesa) | perfil de riesgo × horizonte (p. ej. moderate+medio = 3) |
 | SL automático | 1.5 × ATR H1 |
 | TP automático | 2.0 × ATR H1 |
 | Filtro de spread | 2.0 puntos |

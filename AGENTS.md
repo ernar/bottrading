@@ -56,7 +56,9 @@ Copia `.env.example` a `.env` y rellena valores. Variables clave:
   `MIN_CONFIDENCE_BTCUSD`). Lista completa en `.env.example` y `.env.example.advanced`.
 - **Coordinador** (siempre activo): `MAX_TOTAL_EXPOSURE_PCT`,
   `MAX_SYMBOL_ALLOCATION_PCT`, `MAX_NET_DIRECTION_PCT`, `REVERSAL_DRAWDOWN_PCT`,
-  `MAX_SYMBOL_LOSS_PCT`, `MIN_HOLD_SECONDS` (default 300).
+  `MAX_SYMBOL_LOSS_PCT`, `MIN_HOLD_SECONDS` (default 300), y el nº máximo de
+  posiciones por símbolo = `MAX_OPEN_POSITIONS_DEFAULT` (riesgo) ×
+  `MAX_POSITIONS_HORIZON_MULT` (horizonte).
 - **Cadencias (segundos):** `ROTATION_SECONDS` (60), `NEWS_POLL_SECONDS` (1800),
   `JUNTA_INTERVAL_SECONDS` (3600), `REPORT_INTERVAL_SECONDS` (7200).
 - **Reporte/email:** `SMTP_ENABLED` (default false), `REPORT_EMAIL_TO`, config SMTP.
@@ -122,8 +124,10 @@ se queda sin datos.
 - `orchestrator.py` → `AgentOrchestrator` corre el loop y ejecuta señales válidas. `optimize()`
   (basado en reglas, no ML) ajusta los `AgentParams` según rendimiento, con límites en
   `PARAM_BOUNDS`; se llama cada 20 ciclos (`optimize_every_cycles`). También: cooldown de pérdida
-  diaria (`_check_daily_loss_guard`), registro de cierres (`_detect_closed_trades`) y throttle al
-  máximo de posiciones (`AT_MAX_ANALYSIS_INTERVAL`, 15 min).
+  diaria (`_check_daily_loss_guard`) y registro de cierres (`_detect_closed_trades`). El
+  especialista se analiza CADA rotación (sin análisis no hay confianza con la que decidir): el
+  nº máximo de posiciones lo gobierna la mesa (`RiskBook.max_open_positions`, ver coordinador),
+  no un throttle de análisis. Único espaciado: el cooldown por pérdida diaria.
 - `positions.py` → helpers `_pos_*` compartidos entre orquestador y coordinador.
 
 **Gestión de riesgo en señales** (`validate_trade` / `AgentParams`): filtro de spread
@@ -138,7 +142,8 @@ ruta clásica — `AgentOrchestrator` exige `coordinator` y `risk_book`). Dos pa
 
 - **`RiskBook`** (determinista, "tesorería"): `snapshot()` calcula equity/exposición por símbolo
   (nocional `volume×precio×contract_size`) y total (`used_margin/equity`); `clamp()` impone topes
-  duros (`MAX_TOTAL_EXPOSURE_PCT`, `MAX_SYMBOL_ALLOCATION_PCT`, cooldown). No depende del LLM.
+  duros (`MAX_TOTAL_EXPOSURE_PCT`, `MAX_SYMBOL_ALLOCATION_PCT`, **nº máx. de posiciones por
+  símbolo** = riesgo×horizonte, cooldown). No depende del LLM.
 - **`CoordinatorAgent`** (LLM, "director"): `decide()` recibe snapshot + señales de especialistas +
   rendimiento + noticias y devuelve por símbolo `approve`/`priority`/`allocation_pct`/
   `position_action` (hold/reduce/close/hedge). **Fail-safe**: si el LLM falla, cae a una decisión

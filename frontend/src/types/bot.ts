@@ -133,6 +133,7 @@ export interface CoordinatorSnapshot {
   max_net_direction_pct: number
   size_mult_min?: number
   size_mult_max?: number
+  max_open_positions?: number
   reversal_drawdown_pct: number
   max_symbol_loss_pct: number
   hedging: boolean
@@ -176,6 +177,7 @@ export interface CoordinatorOverview {
   reversal_drawdown_pct?: number
   max_symbol_loss_pct?: number
   min_hold_seconds?: number
+  max_open_positions?: number
   risk_profile?: RiskProfile
   horizon?: Horizon
   tp_rr_min?: number
@@ -185,7 +187,6 @@ export interface CoordinatorOverview {
   last_junta_at?: string | null
   last_report_at?: string | null
   rotation_seconds?: number
-  at_max_analysis_interval?: number
   news_poll_seconds?: number
   junta_interval_seconds?: number
   report_interval_seconds?: number

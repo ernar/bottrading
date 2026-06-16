@@ -215,6 +215,9 @@ export function TradingProfiles({
           <span>Exposición total máx. {pct(overview.max_total_exposure_pct)}</span>
           <span>Sesgo neto máx. {pct(overview.max_net_direction_pct)}</span>
           <span>Piramidar hasta {pct(overview.max_pyramid_direction_pct)}</span>
+          {overview.max_open_positions != null && (
+            <span>Posiciones máx./símbolo {overview.max_open_positions || '∞'}</span>
+          )}
           <span>R:R objetivo {overview.tp_rr_min ?? '?'}–{overview.tp_rr_max ?? '?'}</span>
           <span>Gracia {overview.min_hold_seconds != null ? `${Math.round(overview.min_hold_seconds / 60)} min` : 'n/a'}</span>
           {isHotRisk && <span className="text-amber-300">⚠ mayor drawdown posible</span>}

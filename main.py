@@ -150,20 +150,28 @@ def select_agents() -> list:
     return agents
 
 
-# El coordinador (mesa de dirección) usa SIEMPRE este LLM, sin preguntar.
-COORDINATOR_PROVIDER = "gemini"
-COORDINATOR_MODEL = "gemini-3.5-flash"
+# LLM por defecto del coordinador si no hay preferencia guardada en .env.
+DEFAULT_COORDINATOR_PROVIDER = "gemini"
+DEFAULT_COORDINATOR_MODEL = "gemini-3.5-flash"
 
 
 def select_coordinator_llm(agents: list, cfg: dict) -> tuple:
-    """LLM del coordinador (mesa de dirección): SIEMPRE gemini-3.5-flash.
+    """LLM del coordinador (mesa de dirección).
 
-    La mesa está siempre activa y su director es fijo (no se pregunta ni se
-    hereda del agente). Devuelve siempre (gemini, gemini-3.5-flash)."""
+    El director se elige y se cambia EN CALIENTE desde el dashboard (pestaña
+    "Mesa" -> POST /api/coordinator/model), que persiste la elección en .env como
+    COORDINATOR_PROVIDER/COORDINATOR_MODEL. Aquí se lee esa preferencia para
+    arrancar con el mismo director; si no está configurada, cae al default
+    gemini-3.5-flash. La mesa está siempre activa (no se pregunta por consola)."""
+    provider = (cfg.get("provider") or "").strip().lower()
+    model = (cfg.get("model") or "").strip()
+    if not provider or not model:
+        provider, model = DEFAULT_COORDINATOR_PROVIDER, DEFAULT_COORDINATOR_MODEL
     print("\n" + console.header("LLM DEL COORDINADOR (MESA DE DIRECCIÓN)"))
     print(f"  {console.ok('✓')} Coordinador usará "
-          f"{console.bold(f'{COORDINATOR_PROVIDER.upper()}/{COORDINATOR_MODEL}')} (fijo)")
-    return COORDINATOR_PROVIDER, COORDINATOR_MODEL
+          f"{console.bold(f'{provider.upper()}/{model}')}")
+    print(console.dim("  (cámbialo en caliente desde el dashboard -> pestaña Mesa)"))
+    return provider, model
 
 
 def _is_port_in_use(port: int) -> bool:

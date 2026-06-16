@@ -41,6 +41,7 @@ const dailyRangeHint = (s: CoordinatorSnapshot): string => {
 
 export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordination | null }) {
   const [overview, setOverview] = useState<CoordinatorOverview | null>(null)
+  const [models, setModels] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
@@ -52,6 +53,11 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
 
   useEffect(() => {
     load()
+    // Catálogo de proveedores/modelos para el selector del director (mismo que agentes).
+    fetch(`${API_URL}/api/models`, { headers: getApiHeaders() })
+      .then(r => r.json())
+      .then(setModels)
+      .catch(() => {})
     const id = setInterval(load, 10000)
     return () => clearInterval(id)
   }, [load])
@@ -59,6 +65,20 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
   const forceDecision = () => {
     setBusy(true)
     fetch(`${API_URL}/api/coordinator/decide`, { method: 'POST', headers: getApiHeaders() })
+      .then(r => r.json())
+      .then(() => load())
+      .catch(() => {})
+      .finally(() => setBusy(false))
+  }
+
+  // Cambia el LLM del director en caliente; el backend lo persiste en .env.
+  const changeDirectorModel = (provider: string, model: string) => {
+    setBusy(true)
+    fetch(`${API_URL}/api/coordinator/model`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getApiHeaders() },
+      body: JSON.stringify({ provider, model }),
+    })
       .then(r => r.json())
       .then(() => load())
       .catch(() => {})
@@ -97,12 +117,19 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
             Forzar decisión (dry-run)
           </button>
         </div>
-        <p className="text-xs text-gray-500">
-          Director LLM: <span className="text-gray-300">{overview?.provider?.toUpperCase()}/{overview?.model}</span>
-          {' · '}cierre automático: {overview?.can_close ? 'activado' : 'desactivado'}
-          {' · '}cobertura (hedge): {snap?.hedging ? <span className="text-gray-300">disponible</span> : <span className="text-gray-400">no disponible</span>}
-          {overview?.last_coordination_at ? ` · última: ${overview.last_coordination_at}` : ' · aún sin coordinar'}
-        </p>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+          <span>Director LLM:</span>
+          <DirectorModelSelector
+            provider={overview?.provider}
+            model={overview?.model}
+            models={models}
+            disabled={busy}
+            onChange={changeDirectorModel}
+          />
+          <span>· cierre automático: {overview?.can_close ? 'activado' : 'desactivado'}</span>
+          <span>· cobertura (hedge): {snap?.hedging ? <span className="text-gray-300">disponible</span> : <span className="text-gray-400">no disponible</span>}</span>
+          <span>{overview?.last_coordination_at ? `· última: ${overview.last_coordination_at}` : '· aún sin coordinar'}</span>
+        </div>
         <p className="text-xs text-gray-500">
           Junta horaria: <span className="text-gray-300">{overview?.last_junta_at || 'pendiente'}</span>
           {' · '}último reporte: <span className="text-gray-300">{overview?.last_report_at || 'pendiente'}</span>
@@ -423,6 +450,44 @@ function AllocationBar({ used, cap }: { used: number; cap: number }) {
     <div className="w-full bg-gray-900 rounded h-2 overflow-hidden">
       <div className={`h-2 ${color}`} style={{ width: `${Math.min(100, ratio * 100)}%` }} />
     </div>
+  )
+}
+
+// Selector del LLM del director (mesa). Reusa el catálogo de /api/models (mismo
+// que el de agentes): lista plana "provider/model". Al cambiar, el backend lo
+// aplica en caliente y lo persiste en .env (COORDINATOR_PROVIDER/MODEL).
+function DirectorModelSelector({
+  provider, model, models, disabled, onChange,
+}: {
+  provider?: string
+  model?: string
+  models: Record<string, string[]>
+  disabled: boolean
+  onChange: (provider: string, model: string) => void
+}) {
+  const current = provider && model ? `${provider}/${model}` : ''
+  const options = Object.entries(models).flatMap(([prov, list]) =>
+    list.map(m => `${prov}/${m}`)
+  )
+  // El director actual puede no estar en la lista (clave retirada): lo añadimos.
+  if (current && !options.includes(current)) options.unshift(current)
+
+  return (
+    <select
+      value={current}
+      disabled={disabled || options.length === 0}
+      title="Cambia el LLM del director en caliente; se guarda para el próximo arranque"
+      onChange={e => {
+        const [p, ...rest] = e.target.value.split('/')
+        onChange(p, rest.join('/'))
+      }}
+      className="bg-gray-900 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-200 disabled:opacity-50"
+    >
+      {current === '' && <option value="">—</option>}
+      {options.map(opt => (
+        <option key={opt} value={opt}>{opt.toUpperCase()}</option>
+      ))}
+    </select>
   )
 }
 

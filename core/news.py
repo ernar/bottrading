@@ -50,6 +50,22 @@ def _fetch(url: str, timeout: float = 10.0) -> bytes:
         return resp.read()
 
 
+def _humanize_age(published_ts) -> str:
+    """Antigüedad legible ('hace <1h' / 'hace 2h' / 'hace 3d') a partir de un
+    epoch UTC. '' si falta o es futura. Se calcula al leer (no se cachea) para
+    que no se quede congelada dentro de la ventana de caché de titulares."""
+    if not published_ts:
+        return ""
+    hours = (time.time() - published_ts) / 3600
+    if hours < 0:
+        return ""
+    if hours < 1:
+        return "hace <1h"
+    if hours < 24:
+        return f"hace {hours:.0f}h"
+    return f"hace {hours / 24:.0f}d"
+
+
 class NewsProvider:
 
     def __init__(self):
@@ -60,7 +76,10 @@ class NewsProvider:
 
     # ----- Titulares (Yahoo Finance RSS) -----
 
-    def _get_headlines(self, ticker: str) -> list:
+    def _get_headline_items(self, ticker: str) -> list:
+        """Titulares del ticker como lista de dicts {title, link, published_ts}.
+        Cacheado HEADLINES_TTL. La edad NO se cachea: se deriva al leer con
+        `_humanize_age` para que no se congele dentro de la ventana de caché."""
         now = time.time()
         with self._lock:
             cached = self._headlines_cache.get(ticker)
@@ -69,28 +88,27 @@ class NewsProvider:
         try:
             raw = _fetch(YAHOO_RSS_URL.format(ticker=ticker))
             root = ET.fromstring(raw)
-            lines = []
+            items = []
             for item in root.iter("item"):
                 title = (item.findtext("title") or "").strip()
                 if not title:
                     continue
-                age = ""
+                link = (item.findtext("link") or "").strip()
+                published_ts = None
                 pub = item.findtext("pubDate")
                 if pub:
                     try:
-                        dt = parsedate_to_datetime(pub)
-                        hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
-                        age = f" (hace {hours:.0f}h)" if hours >= 1 else " (hace <1h)"
+                        published_ts = parsedate_to_datetime(pub).timestamp()
                     except (ValueError, TypeError):
                         pass
-                lines.append(f"- {title}{age}")
-                if len(lines) >= MAX_HEADLINES:
+                items.append({"title": title, "link": link, "published_ts": published_ts})
+                if len(items) >= MAX_HEADLINES:
                     break
         except Exception:
-            lines = []
+            items = []
         with self._lock:
-            self._headlines_cache[ticker] = (now, lines)
-        return lines
+            self._headlines_cache[ticker] = (now, items)
+        return items
 
     # ----- Calendario económico (ForexFactory) -----
 
@@ -202,14 +220,32 @@ class NewsProvider:
             sections.append(f"Eventos económicos próximos ({'/'.join(currencies)}, impacto medio/alto):")
             sections.extend(events)
 
-        headlines = self._get_headlines(ticker)
-        if headlines:
+        items = self._get_headline_items(ticker)
+        if items:
             if sections:
                 sections.append("")
             sections.append("Titulares recientes:")
-            sections.extend(headlines)
+            for it in items:
+                age = _humanize_age(it["published_ts"])
+                sections.append(f"- {it['title']}" + (f" ({age})" if age else ""))
 
         return "\n".join(sections)
+
+    def get_headlines(self, symbol: str) -> list:
+        """Titulares recientes del símbolo como lista de dicts {title, link, age},
+        para el slider de noticias del dashboard. Fail-safe: lista vacía si las
+        noticias están desactivadas, el símbolo no está mapeado o el feed falla."""
+        if not self.enabled:
+            return []
+        mapping = SYMBOL_NEWS_MAP.get(symbol.upper())
+        if not mapping:
+            return []
+        ticker = mapping[0]
+        return [{
+            "title": it["title"],
+            "link": it["link"],
+            "age": _humanize_age(it["published_ts"]),
+        } for it in self._get_headline_items(ticker)]
 
 
 # Instancia compartida (caché común para todos los símbolos)

@@ -49,6 +49,28 @@ def test_tablas_tienen_los_cuatro_y_tres_niveles():
     assert set(HORIZON_PROFILES) == {"corto", "medio", "largo"}
 
 
+def test_horizonte_define_multiplicador_de_posiciones():
+    # Cada horizonte fija el multiplicador del nº máximo de posiciones; corto abre
+    # más concurrentes que largo.
+    mult = {h: float(HORIZON_PROFILES[h]["MAX_POSITIONS_HORIZON_MULT"])
+            for h in ("corto", "medio", "largo")}
+    assert mult["corto"] > mult["medio"] > mult["largo"]
+
+
+def test_max_posiciones_combina_riesgo_y_horizonte(monkeypatch):
+    # El nº máximo de posiciones por símbolo que gobierna la mesa = base del perfil
+    # de RIESGO (MAX_OPEN_POSITIONS_DEFAULT) × multiplicador del HORIZONTE.
+    from core.config import get_coordinator_config
+    monkeypatch.setenv("MAX_OPEN_POSITIONS_DEFAULT", "4")
+    monkeypatch.setenv("MAX_POSITIONS_HORIZON_MULT", "1.5")
+    assert get_coordinator_config()["max_open_positions"] == 6   # round(4 × 1.5)
+    monkeypatch.setenv("MAX_POSITIONS_HORIZON_MULT", "0.6")
+    assert get_coordinator_config()["max_open_positions"] == 2   # round(4 × 0.6 = 2.4)
+    # Suelo en 1 aunque el producto redondee por debajo.
+    monkeypatch.setenv("MAX_OPEN_POSITIONS_DEFAULT", "1")
+    assert get_coordinator_config()["max_open_positions"] == 1
+
+
 def test_horizonte_mueve_params_de_gestion(monkeypatch):
     # El horizonte "corto" escribe estas claves _DEFAULT; get_agent_param_overrides
     # debe devolverlas para que apply_params las propague a los agentes.

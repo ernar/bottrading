@@ -311,6 +311,38 @@ def get_equity():
     return jsonify(read_equity_series(platform, limit, since_seconds)), 200
 
 
+@app.route("/api/news", methods=["GET"])
+def get_news():
+    """Titulares recientes (Yahoo Finance RSS) de los símbolos que opera el bot,
+    para el slider de noticias del dashboard. Caché de 15 min en NewsProvider;
+    fail-safe (lista vacía ante errores de red o con NEWS_ENABLED=false). Los
+    símbolos salen de los agentes cargados; si el orquestador aún no está listo,
+    caen a la lista SYMBOLS del entorno."""
+    from core.news import news_provider
+    symbols = []
+    if _orchestrator is not None:
+        symbols = [a.symbol for a in getattr(_orchestrator, "agents", [])]
+    if not symbols:
+        symbols = [s.strip().upper() for s in os.getenv("SYMBOLS", "").split(",") if s.strip()]
+    # Dedup conservando el orden de aparición.
+    seen = set()
+    ordered = [s for s in symbols if not (s in seen or seen.add(s))]
+
+    per_symbol = [(sym, items) for sym in ordered
+                  if (items := news_provider.get_headlines(sym))]
+
+    # Intercalado round-robin: que los slides consecutivos sean de símbolos
+    # distintos en vez de agotar uno antes de pasar al siguiente.
+    flat = []
+    depth = max((len(items) for _, items in per_symbol), default=0)
+    for i in range(depth):
+        for sym, items in per_symbol:
+            if i < len(items):
+                flat.append({"symbol": sym, **items[i]})
+
+    return jsonify({"enabled": news_provider.enabled, "headlines": flat}), 200
+
+
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """Estadísticas agregadas de señales y memoria de resultados (consultas SQL)."""
@@ -394,6 +426,32 @@ def coordinator_decide():
         return jsonify({"error": "coordinator not running"}), 503
     result = _orchestrator.coordinate_now()
     return jsonify(result), 200
+
+
+@app.route("/api/coordinator/model", methods=["POST"])
+@require_token
+def set_coordinator_model():
+    """Cambia el provider/modelo LLM del director (mesa de dirección) EN CALIENTE
+    y lo persiste en .env (COORDINATOR_PROVIDER/COORDINATOR_MODEL) para reusarlo en
+    el próximo arranque. Body: {"provider": "gemini", "model": "gemini-3.5-flash"}."""
+    if _orchestrator is None or getattr(_orchestrator, "coordinator", None) is None:
+        return jsonify({"error": "coordinator not running"}), 503
+    body = request.get_json(silent=True) or {}
+    provider, model = body.get("provider"), body.get("model")
+    # Validar contra lo realmente disponible (clave configurada + modelo listado).
+    providers = available_providers()
+    if provider not in providers or model not in providers.get(provider, []):
+        return jsonify({"error": f"provider/modelo no disponible: {provider}/{model}"}), 400
+    try:
+        result = _orchestrator.set_coordinator_model(provider, model)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    # Persistir en .env (y os.environ) para que la elección sobreviva al reinicio.
+    from core.settings_schema import write_env
+    write_env({"COORDINATOR_PROVIDER": result["provider"],
+               "COORDINATOR_MODEL": result["model"]})
+    socketio.emit("coordinator_model_changed", result)
+    return jsonify({"status": "ok", **result}), 200
 
 
 def _apply_profile(table: dict, level: str, marker_key: str,
