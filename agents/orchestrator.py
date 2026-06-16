@@ -19,7 +19,7 @@ from core import console
 from core.clock import broker_now
 from core.state import bot_state
 from core.bot_state import Trade
-from core.logger import log_trade, log_closed_trade, log_equity
+from core.logger import log_trade, log_closed_trade, log_equity, read_close_stats
 from core.trade_metrics import calc_trade_metrics
 from agents.base_agent import AgentParams
 from agents.positions import _pos_get, _pos_to_float, _pos_direction
@@ -1905,6 +1905,9 @@ class AgentOrchestrator:
                 },
                 "stats": self.stats[agent.name],
                 "performance": agent.memory.get_performance(agent.symbol),
+                # P/L medio real (pnl) de los trades cerrados del símbolo +
+                # cuántos lo promedian. Lo muestra la pestaña Agentes.
+                "closes": read_close_stats(agent.symbol, platform=self.platform),
             })
         # Agentes del catálogo que NO están cargados: se ofrecen para activarlos
         # en caliente desde el dashboard (participarán en la siguiente rotación).

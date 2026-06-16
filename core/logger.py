@@ -114,6 +114,35 @@ def read_equity_series(platform: str = "mt4", limit: int = 500,
     return points
 
 
+def read_close_stats(symbol: str, platform: str = "mt4") -> dict:
+    """Estadísticas de cierre REAL por símbolo desde ``closed_trades``: P/L medio
+    por operación cerrada (``pnl``) y nº de cierres que lo promedian.
+
+    Devuelve ``{"avg_pnl": float|None, "closed_count": int}``. Solo cuenta cierres
+    con ``pnl`` informado. Lo consume ``agents_overview`` para mostrarlo por agente
+    en el dashboard."""
+    from sqlalchemy import func
+    from core.db import get_session
+
+    session = get_session()
+    try:
+        avg_pnl, count = session.query(
+            func.avg(ClosedTrade.pnl),
+            func.count(ClosedTrade.id),
+        ).filter(
+            ClosedTrade.platform == platform.upper(),
+            ClosedTrade.symbol == symbol,
+            ClosedTrade.pnl.isnot(None),
+        ).one()
+    finally:
+        session.close()
+
+    return {
+        "avg_pnl": round(float(avg_pnl), 2) if avg_pnl is not None else None,
+        "closed_count": int(count or 0),
+    }
+
+
 def log_closed_trade(symbol: str, action: str, volume: float, entry_price: float,
                      exit_price: float, pnl: float, commission: float = 0.0,
                      duration_seconds: int = None, trade_id: str = "",

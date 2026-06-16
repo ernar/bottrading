@@ -30,14 +30,20 @@ def _env_bool(name: str, default: bool) -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off")
 
 
-# Lista estática de respaldo si no se puede consultar la API en vivo (sin red,
-# error de SSL, etc.). Incluye los modelos Gemini de uso habitual.
-_GEMINI_FALLBACK = [
+# Modelos Gemini RECOMENDADOS (curados, en orden de preferencia). Solo estos se
+# ofrecen en el selector — para los agentes (señales) y para la mesa (director) —
+# en vez del catálogo completo de la API, que lista decenas de variantes. El
+# listado en vivo se INTERSECTA con esta allowlist (así solo se ofrece lo que la
+# cuenta realmente tiene Y está recomendado); si la consulta falla, se usa esta
+# lista tal cual. Ampliable/forzable con GEMINI_MODELS (coma) en el .env.
+#   - gemini-3.5-flash: rápido y potente, buen equilibrio (señales y mesa).
+#   - gemini-2.5-pro:   razonamiento más fuerte, ideal para la mesa.
+#   - gemini-2.5-flash / gemini-2.0-flash: rápidos y económicos para señales.
+_GEMINI_RECOMMENDED = [
     "gemini-3.5-flash",
-    "gemini-2.5-flash",
     "gemini-2.5-pro",
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-pro",
 ]
 
 # Subcadenas que descartan modelos NO aptos para análisis de texto/trading:
@@ -53,11 +59,18 @@ _gemini_live_cache: list[str] | None = None
 
 
 def _gemini_models(default: str) -> list[str]:
-    """Modelos Gemini disponibles, con el `default` (del .env) en primer lugar.
+    """Modelos Gemini RECOMENDADOS, con el `default` (del .env) en primer lugar.
 
-    Intenta consultar TODOS los modelos que soportan generateContent en la API
-    real. Si la consulta falla, usa la lista estática de respaldo. El resultado
-    en vivo se cachea para no repetir la llamada de red."""
+    Consulta los modelos reales de la cuenta (los que soportan generateContent) y
+    los INTERSECTA con la allowlist `_GEMINI_RECOMMENDED`: así el selector solo
+    ofrece modelos curados que además existen para la API key. Si la consulta
+    falla, usa la lista recomendada tal cual. `GEMINI_MODELS` (coma) en el .env
+    fuerza una lista manual y se salta el filtro. El listado en vivo se cachea."""
+    # Override manual: si GEMINI_MODELS está puesto, manda esa lista tal cual.
+    override = _split(os.getenv("GEMINI_MODELS"))
+    if override:
+        return _dedup([default] + override)
+
     global _gemini_live_cache
 
     if _gemini_live_cache is None:
@@ -86,11 +99,14 @@ def _gemini_models(default: str) -> list[str]:
                   file=sys.stderr)
             print(f"   - API key válida (GEMINI_API_KEY en .env)",
                   file=sys.stderr)
-            _gemini_live_cache = None  # fuerza usar fallback
+            _gemini_live_cache = None  # fuerza usar la lista recomendada
 
-    # Si la consulta falló o devolvió lista vacía, usa el fallback.
-    models = _gemini_live_cache if _gemini_live_cache else _GEMINI_FALLBACK
-    return _dedup([default] + list(models))
+    # Filtra a los recomendados: si la API devolvió modelos, intersecta con la
+    # allowlist (manteniendo el orden de preferencia de _GEMINI_RECOMMENDED); si
+    # la consulta falló o ninguno coincide, usa la lista recomendada completa.
+    live = _gemini_live_cache or []
+    models = [m for m in _GEMINI_RECOMMENDED if m in live] or _GEMINI_RECOMMENDED
+    return _dedup([default] + models)
 
 
 def available_providers() -> dict[str, list[str]]:
@@ -99,8 +115,10 @@ def available_providers() -> dict[str, list[str]]:
     - ollama: local; modelos de OLLAMA_MODELS (o MODEL). Se puede desactivar con
       OLLAMA_ENABLED=false (útil en un VPS que trabaja solo con APIs en la nube).
     - openai: solo si OPENAI_API_KEY; OPENAI_MODEL + sugeridos.
-    - deepseek: solo si DEEPSEEK_API_KEY; DEEPSEEK_MODEL + deepseek-chat/reasoner.
-    - gemini: solo si GEMINI_API_KEY; modelos consultados en vivo a la API.
+    - deepseek: solo si DEEPSEEK_API_KEY; DEEPSEEK_MODEL + DEEPSEEK_MODELS (extra) +
+      deepseek-v4-flash/pro y deepseek-chat/reasoner.
+    - gemini: solo si GEMINI_API_KEY; modelos recomendados (allowlist curada
+      intersectada con los reales de la cuenta), o GEMINI_MODELS si se fuerza.
 
     El primer modelo de cada lista es el por defecto leído del .env.
     """
@@ -115,8 +133,15 @@ def available_providers() -> dict[str, list[str]]:
         providers["openai"] = _dedup([default, "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini"])
 
     if os.getenv("DEEPSEEK_API_KEY", "").strip():
+        # Catálogo estático (como OpenAI). deepseek-chat/reasoner quedan obsoletos
+        # el 2026/07/24; deepseek-v4-flash/pro son los sucesores. Extra modelos
+        # vía DEEPSEEK_MODELS (coma) para no tocar código si DeepSeek añade más.
         default = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-        providers["deepseek"] = _dedup([default, "deepseek-chat", "deepseek-reasoner"])
+        extra = _split(os.getenv("DEEPSEEK_MODELS"))
+        providers["deepseek"] = _dedup([default] + extra + [
+            "deepseek-v4-flash", "deepseek-v4-pro",
+            "deepseek-chat", "deepseek-reasoner",
+        ])
 
     if os.getenv("GEMINI_API_KEY", "").strip():
         default = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")

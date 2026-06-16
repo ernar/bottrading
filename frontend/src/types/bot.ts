@@ -76,6 +76,8 @@ export interface AgentInfo {
   params: AgentParams
   stats: { signals: number; trades: number; holds: number }
   performance: AgentPerformance
+  // P/L medio real (pnl) de los trades cerrados del símbolo.
+  closes: { avg_pnl: number | null; closed_count: number }
 }
 
 export interface OptimizationEntry {

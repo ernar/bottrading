@@ -82,7 +82,7 @@ SETTINGS_SCHEMA: list[dict] = [
     {"key": "DEEPSEEK_API_KEY", "label": "Token DeepSeek (API key)", "group": "Asistente", "type": "str", "secret": True, "hot": True,
      "help": "Clave de DeepSeek (api.deepseek.com). Habilita el proveedor 'deepseek' en el selector de modelo de los agentes, la mesa y el asistente. Se guarda solo si escribes una nueva."},
     {"key": "DEEPSEEK_MODEL", "label": "Modelo DeepSeek por defecto", "group": "Asistente", "type": "str", "secret": False, "hot": True,
-     "help": "Modelo DeepSeek que encabeza el selector (deepseek-chat / deepseek-reasoner). Por defecto deepseek-chat."},
+     "help": "Modelo DeepSeek que encabeza el selector. Opciones: deepseek-v4-flash / deepseek-v4-pro (actuales) o deepseek-chat / deepseek-reasoner (obsoletos el 2026/07/24). Por defecto deepseek-chat."},
     {"key": "ASSISTANT_PROVIDER", "label": "Proveedor LLM asistente", "group": "Asistente", "type": "str", "secret": False, "hot": True,
      "help": "gemini / openai / deepseek / ollama. Por defecto gemini."},
     {"key": "ASSISTANT_MODEL", "label": "Modelo del asistente", "group": "Asistente", "type": "str", "secret": False, "hot": True,

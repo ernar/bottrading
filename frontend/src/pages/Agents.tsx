@@ -15,7 +15,7 @@ const API_URL = getApiUrl()
 type SortKey =
   | 'name' | 'symbol' | 'model' | 'enabled' | 'market_open'
   | 'signals' | 'trades' | 'holds'
-  | 'win_rate' | 'sl_hit_rate' | 'tp_hit_rate' | 'avg_move_pct'
+  | 'win_rate' | 'sl_hit_rate' | 'tp_hit_rate' | 'avg_move_pct' | 'avg_pnl'
   | 'min_confidence' | 'min_rr' | 'atr_sl_mult' | 'lot_size'
 
 const COLUMNS: { key: SortKey; label: string; align: 'left' | 'right'; get: (a: AgentInfo) => number | string }[] = [
@@ -31,6 +31,7 @@ const COLUMNS: { key: SortKey; label: string; align: 'left' | 'right'; get: (a: 
   { key: 'sl_hit_rate', label: 'SL%', align: 'right', get: a => a.performance.sl_hit_rate },
   { key: 'tp_hit_rate', label: 'TP%', align: 'right', get: a => a.performance.tp_hit_rate },
   { key: 'avg_move_pct', label: 'Mov. medio', align: 'right', get: a => a.performance.avg_move_pct },
+  { key: 'avg_pnl', label: 'P/L medio', align: 'right', get: a => a.closes?.avg_pnl ?? 0 },
   { key: 'min_confidence', label: 'Conf. mín.', align: 'right', get: a => a.params.min_confidence },
   { key: 'min_rr', label: 'R:R mín.', align: 'right', get: a => a.params.min_rr },
   { key: 'atr_sl_mult', label: 'ATR SL/TP', align: 'right', get: a => a.params.atr_sl_mult },
@@ -311,6 +312,12 @@ export function AgentsPage() {
                   <td className="px-3 py-2 text-right tabular-nums">{pct(a.performance.tp_hit_rate)}</td>
                   <td className={`px-3 py-2 text-right tabular-nums ${a.performance.avg_move_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                     {a.performance.avg_move_pct >= 0 ? '+' : ''}{a.performance.avg_move_pct}%
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${
+                        a.closes?.avg_pnl == null ? 'text-gray-300'
+                          : a.closes.avg_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}
+                      title={`P/L medio sobre ${a.closes?.closed_count ?? 0} cierre(s) reales`}>
+                    {a.closes?.avg_pnl != null ? `$${a.closes.avg_pnl.toFixed(2)}` : '—'}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{pct(a.params.min_confidence)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
