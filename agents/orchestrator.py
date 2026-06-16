@@ -1003,10 +1003,13 @@ class AgentOrchestrator:
         print(f"  Razón: {signal['reason']}")
 
     def _scale_volume(self, symbol: str, base_volume: float, scale: float) -> float:
-        """Escala el lote base por `scale` (0..1) y lo redondea al step del
-        símbolo, con suelo en el volumen mínimo. Permite que la asignación de
-        capital del coordinador module el tamaño sin romper el step del bróker."""
-        scale = max(0.1, min(1.0, scale))
+        """Escala el lote base por `scale` y lo redondea al step del símbolo, con
+        suelo en el volumen mínimo. La asignación de capital module a la baja
+        (scale<1) y el size_mult de la mesa puede modular al alza (scale>1). El
+        techo real lo ponen el size_mult_max del RiskBook y el ajuste por margen
+        libre (_fit_volume_to_margin) aguas abajo; aquí solo se evita un lote
+        degenerado (~0) con un suelo en 0.1x."""
+        scale = max(0.1, scale)
         sym = self.client.get_symbol_info(symbol)
         vmin = getattr(sym, "volume_min", 0.01) or 0.01
         vstep = getattr(sym, "volume_step", 0.01) or 0.01
@@ -1090,8 +1093,9 @@ class AgentOrchestrator:
     def _open_from_signal(self, agent, signal, scale: float = 1.0,
                           enforce_max_positions: bool = True,
                           min_rr_override: float = None) -> bool:
-        """Valida y ejecuta una entrada a partir de la señal. `scale` (0..1)
-        reduce el lote base según la asignación del coordinador. `enforce_max_positions`
+        """Valida y ejecuta una entrada a partir de la señal. `scale` modula el lote
+        base según la asignación del coordinador y su size_mult: <1 lo reduce, >1 lo
+        agranda (entrada de convicción / piramidación). `enforce_max_positions`
         en False (ruta coordinada) delega el límite global de número de posiciones a
         la mesa, que ya gobierna la exposición real (RiskBook) y puede abrir más si lo
         considera necesario. `min_rr_override` (ruta coordinada) exige ese R:R en la
@@ -1099,7 +1103,10 @@ class AgentOrchestrator:
         especialista. Devuelve True si la orden se ejecutó."""
         symbol = agent.symbol
         base_volume = agent.resolve_volume(self.client, signal)
-        volume = base_volume if scale >= 1.0 else self._scale_volume(symbol, base_volume, scale)
+        # Solo el lote base exacto (scale == 1) evita el redondeo al step; cualquier
+        # otra escala —a la baja por asignación o al alza por size_mult— se aplica.
+        volume = (base_volume if abs(scale - 1.0) < 1e-9
+                  else self._scale_volume(symbol, base_volume, scale))
 
         # Contexto extra para la validación: spread actual (filtro de coste) y
         # nº de posiciones de TODA la cuenta (límite global, no por símbolo).
@@ -1274,11 +1281,22 @@ class AgentOrchestrator:
                     print(console.dim(f"     TP mesa: {old_tp} → {signal['take_profit']} "
                                       f"(R:R objetivo 1:{tp_rr:.2f})"))
             self._print_signal_details(agent, signal)
+            # Escala del lote: la asignación (presupuesto) modula a la baja vía
+            # _alloc_to_scale, y el size_mult de la mesa la modula EXPLÍCITAMENTE
+            # (puede subirla por encima de 1 para entradas de convicción / piramidar).
+            # 0/ausente = lote base ×1. Los topes de margen/exposición recortan después.
+            base_scale = self._alloc_to_scale(alloc)
+            size_mult = decision.get("size_mult") or 0.0
+            scale = base_scale * size_mult if size_mult > 0 else base_scale
+            if size_mult > 0 and abs(size_mult - 1.0) > 1e-9:
+                verbo = "agranda" if size_mult > 1 else "reduce"
+                print(console.dim(f"     Lote mesa: size_mult {size_mult:.2f}x {verbo} "
+                                  f"el lote base (escala total {scale:.2f}x)"))
             # La mesa ya aprobó: el límite global de número de posiciones lo decide
             # ella (gobierna la exposición real vía RiskBook), no el filtro per-agente.
             # Si la mesa fijó un tp_rr, la entrada se valida contra ese R:R (el TP
             # más corto es decisión deliberada de la mesa, no del especialista).
-            self._open_from_signal(agent, signal, scale=self._alloc_to_scale(alloc),
+            self._open_from_signal(agent, signal, scale=scale,
                                    enforce_max_positions=False,
                                    min_rr_override=(tp_rr if tp_rr > 0 else None))
         else:
@@ -1510,8 +1528,8 @@ class AgentOrchestrator:
             return
 
         sym_info = snapshot.get("symbols", {})
-        headers = ["Símbolo", "Señal", "Neto", "Veredicto", "Prio", "Asig", "TP obj.", "Gestión", "Motivo/clamp"]
-        aligns = ["<", "<", "<", "<", ">", ">", ">", "<", "<"]
+        headers = ["Símbolo", "Señal", "Neto", "Veredicto", "Prio", "Asig", "Lote×", "TP obj.", "Gestión", "Motivo/clamp"]
+        aligns = ["<", "<", "<", "<", ">", ">", ">", ">", "<", "<"]
         rows = []
         for d in sorted(decisions, key=lambda x: x.get("priority", 99)):
             sym = d.get("symbol")
@@ -1527,6 +1545,8 @@ class AgentOrchestrator:
             motivo = d.get("clamp") or ""
             tp_rr = d.get("tp_rr") or 0.0
             tp_cell = f"1:{tp_rr:.2f}" if tp_rr > 0 else console.dim("—")
+            size_mult = d.get("size_mult") or 0.0
+            mult_cell = f"{size_mult:.2f}x" if size_mult > 0 else console.dim("—")
             rows.append([
                 sym,
                 (sig_action, console.side),
@@ -1534,6 +1554,7 @@ class AgentOrchestrator:
                 verdict,
                 str(d.get("priority", "")),
                 f"{d.get('allocation_pct', 0):.0%}",
+                mult_cell,
                 tp_cell,
                 (pos_cell, pos_style),
                 (motivo, console.dim) if motivo else "",

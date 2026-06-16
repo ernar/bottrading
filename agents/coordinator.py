@@ -63,6 +63,15 @@ class RiskBook:
         # de la operación). Se acota en clamp().
         self.tp_rr_min = float(config.get("tp_rr_min", 1.0))
         self.tp_rr_max = float(config.get("tp_rr_max", 4.0))
+        # Rango del multiplicador de lote (size_mult) que la mesa puede aplicar sobre
+        # el lote BASE del especialista por convicción/piramidación. Es un lever
+        # EXPLÍCITO, separado de allocation_pct (presupuesto): >1 agranda la entrada,
+        # <1 la encoge. Se acota en clamp() a [min, max]. Vacío/0 => se respeta el
+        # lote base del especialista (×1). Los topes duros de margen/exposición
+        # (_fit_volume_to_margin, exposición total/asignación) siguen mandando aguas
+        # abajo: el size_mult nunca puede reventarlos.
+        self.size_mult_min = float(config.get("size_mult_min", 0.5))
+        self.size_mult_max = float(config.get("size_mult_max", 2.0))
         # Período de gracia para posiciones recién abiertas (segundos). Mientras la
         # posición más joven de un símbolo no lo supere, las guardias deterministas
         # de reversión y los cierres/reducciones que proponga el LLM se aplazan
@@ -218,6 +227,7 @@ class RiskBook:
                 "long_notional": 0.0, "short_notional": 0.0,
                 "long_vol": 0.0, "short_vol": 0.0,
                 "long_count": 0, "short_count": 0,
+                "long_profit": 0.0, "short_profit": 0.0,
                 "newest_age": None, "oldest_age": None,
             })
             d["notional"] += notional
@@ -237,10 +247,12 @@ class RiskBook:
                 d["long_notional"] += notional
                 d["long_vol"] += vol
                 d["long_count"] += 1
+                d["long_profit"] += profit
             elif direction == "SELL":
                 d["short_notional"] += notional
                 d["short_vol"] += vol
                 d["short_count"] += 1
+                d["short_profit"] += profit
 
         # Poda: olvida la edad de los tickets que ya no están abiertos.
         self._first_seen = {t: s for t, s in self._first_seen.items()
@@ -281,6 +293,7 @@ class RiskBook:
         empty = {"notional": 0.0, "profit": 0.0, "count": 0,
                  "long_notional": 0.0, "short_notional": 0.0,
                  "long_vol": 0.0, "short_vol": 0.0, "long_count": 0, "short_count": 0,
+                 "long_profit": 0.0, "short_profit": 0.0,
                  "newest_age": None, "oldest_age": None}
         symbols = {}
         for agent in agents:
@@ -309,6 +322,10 @@ class RiskBook:
                 "long_positions": ps["long_count"],
                 "short_positions": ps["short_count"],
                 "floating_pnl": round(ps["profit"], 2),
+                # P/L flotante DESGLOSADO por lado: en un libro cubierto (largos y
+                # cortos a la vez) el neto oculta qué pata sangra y cuál sostiene.
+                "long_pnl": round(ps["long_profit"], 2),
+                "short_pnl": round(ps["short_profit"], 2),
                 "open_positions": ps["count"],
                 "newest_position_age": (round(ps["newest_age"], 1)
                                         if ps.get("newest_age") is not None else None),
@@ -328,6 +345,8 @@ class RiskBook:
             "max_symbol_allocation_pct": self.max_symbol_allocation_pct,
             "max_net_direction_pct": self.max_net_direction_pct,
             "max_pyramid_direction_pct": self.max_pyramid_direction_pct,
+            "size_mult_min": self.size_mult_min,
+            "size_mult_max": self.size_mult_max,
             "reversal_drawdown_pct": self.reversal_drawdown_pct,
             "max_symbol_loss_pct": self.max_symbol_loss_pct,
             "min_hold_seconds": self.min_hold_seconds,
@@ -391,6 +410,7 @@ class RiskBook:
             alloc = float(d.get("allocation_pct") or 0.0)
             manage_direction = d.get("manage_direction")
             tp_rr = float(d.get("tp_rr") or 0.0)
+            size_mult = float(d.get("size_mult") or 0.0)
 
             sym_info = symbols.get(sym, {})
             net_direction = sym_info.get("net_direction", "FLAT")
@@ -425,6 +445,16 @@ class RiskBook:
                     notes.append(f"tp_rr 1:{tp_rr:.2f}->1:{clamped_rr:.2f} "
                                  f"(rango {self.tp_rr_min:.1f}-{self.tp_rr_max:.1f})")
                 tp_rr = clamped_rr
+
+            # 1c) Multiplicador de lote (size_mult): si la mesa lo informó (>0),
+            # acotarlo al rango configurado. 0 => no ajustar (lote base ×1). Los
+            # topes de margen/exposición aguas abajo siguen mandando.
+            if size_mult > 0:
+                clamped_mult = min(max(size_mult, self.size_mult_min), self.size_mult_max)
+                if clamped_mult != size_mult:
+                    notes.append(f"size_mult {size_mult:.2f}x->{clamped_mult:.2f}x "
+                                 f"(rango {self.size_mult_min:.2f}-{self.size_mult_max:.2f})")
+                size_mult = clamped_mult
 
             # --- Guardias deterministas sobre las posiciones abiertas ---
             forced = False
@@ -544,6 +574,7 @@ class RiskBook:
             d["allocation_pct"] = round(alloc, 4)
             d["position_action"] = action
             d["tp_rr"] = round(tp_rr, 2) if tp_rr > 0 else 0.0
+            d["size_mult"] = round(size_mult, 2) if size_mult > 0 else 0.0
             if manage_direction:
                 d["manage_direction"] = manage_direction
             d["clamp"] = "; ".join(notes)
@@ -633,6 +664,15 @@ Reglas:
   Stop Loss. Si buscas rotar rápido y la tendencia es de corto recorrido, usa valores bajos
   (~1.0–1.5); si hay un movimiento amplio y claro a favor, súbelo. Si lo dejas vacío (o 0) se
   respeta el TP del especialista. El SL NO se toca; tp_rr solo mueve el objetivo de beneficio.
+- TAMAÑO DE POSICIÓN (size_mult): para una entrada que apruebas puedes fijar size_mult = un
+  multiplicador EXPLÍCITO sobre el lote base que calcula el especialista. >1 agranda la entrada
+  (más convicción / piramidar una tendencia ganadora), <1 la encoge (menos convicción, mercado
+  dudoso). 1 (o vacío/0) = lote base sin tocar. Es independiente de allocation_pct: allocation_pct
+  es el PRESUPUESTO de equity que reservas al símbolo; size_mult es el TAMAÑO de esta entrada en
+  concreto. Súbelo cuando la señal es de alta confianza, el rendimiento del agente es bueno y/o
+  piramidas un ganador a favor; bájalo en señales flojas o cartera ya tensionada. Una capa de
+  riesgo posterior lo acota al rango permitido y, pase lo que pase, el margen libre y los topes de
+  exposición recortan el lote final: nunca podrás sobrepasar los límites duros con size_mult.
 - APETITO POR DEFECTO: una señal accionable (buy/sell) que te llega YA pasó los filtros de
   confianza y riesgo/beneficio del especialista; representa una ventaja real. Tu postura por
   defecto ante ella es APROBAR. No la rechaces por cautela genérica: solo di no si hay una razón
@@ -657,7 +697,7 @@ Reglas:
 - PIRAMIDAR GANADORES (add-to-winners): cuando un símbolo YA tiene posición neta EN GANANCIA y el
   especialista CONFIRMA la continuación de la tendencia en esa misma dirección, NO te quedes en
   "hold": considera APROBAR una entrada adicional a favor (piramidar) con una allocation_pct
-  incremental, y sube el tp_rr para dejar correr la tendencia. Es la forma de exprimir una
+  incremental y un size_mult > 1, y sube el tp_rr para dejar correr la tendencia. Es la forma de exprimir una
   tendencia clara. Disciplina estricta: solo se piramida lo que va en GANANCIA y A FAVOR; nunca se
   añade a una posición en pérdida ni contra la tendencia. La capa de riesgo tolera este apilamiento
   hasta un tope superior solo en ese caso (ganador + tendencia confirma).
@@ -684,11 +724,13 @@ Responde SOLO con JSON válido, sin texto adicional:
   "rationale": "razón global breve EN ESPAÑOL de tus decisiones de cartera",
   "decisions": [
     {"symbol": "BTCUSD", "approve": true, "priority": 1, "allocation_pct": 0.25,
-     "position_action": "hold", "tp_rr": 1.5, "reason": "explicación breve EN ESPAÑOL"}
+     "position_action": "hold", "tp_rr": 1.5, "size_mult": 1.2,
+     "reason": "explicación breve EN ESPAÑOL"}
   ]
 }
 position_action admite: "hold" | "reduce" | "close" | "hedge". tp_rr es opcional (omítelo o 0
-para respetar el TP del especialista)."""
+para respetar el TP del especialista). size_mult es opcional (omítelo o 1 para el lote base del
+especialista; >1 agranda, <1 encoge)."""
 
 
 class CoordinatorAgent:
@@ -765,6 +807,9 @@ class CoordinatorAgent:
                      f"(tope {snapshot.get('max_total_exposure_pct', 0):.0%})")
         lines.append(f"Tope de asignación por símbolo: {snapshot.get('max_symbol_allocation_pct', 0):.0%}"
                      f" | Tope de dirección neta por símbolo: {snapshot.get('max_net_direction_pct', 0):.0%}")
+        lines.append(f"Multiplicador de lote (size_mult) permitido: "
+                     f"{snapshot.get('size_mult_min', 0.5):.2f}x – {snapshot.get('size_mult_max', 2.0):.2f}x "
+                     f"(1x = lote base del especialista)")
         lines.append(f"Cobertura (hedge) disponible en la cuenta: {'sí' if snapshot.get('hedging') else 'no'}")
         if not self.risk_book.llm_can_close:
             lines.append("POLÍTICA: la mesa solo cierra por fuerza mayor. Tus reduce/close/hedge "
@@ -806,9 +851,17 @@ class CoordinatorAgent:
                             if oldest is not None and oldest != age else ""))
                 lines.append(f"  Antigüedad posiciones: {rango}{grace}")
             nd = si.get("net_direction", "FLAT")
-            lines.append(f"  Sesgo abierto: {si.get('long_positions', 0)}L / "
-                         f"{si.get('short_positions', 0)}S · neto {nd} "
+            long_pos = si.get("long_positions", 0) or 0
+            short_pos = si.get("short_positions", 0) or 0
+            lines.append(f"  Sesgo abierto: {long_pos}L / "
+                         f"{short_pos}S · neto {nd} "
                          f"({self._pct(si.get('net_exposure_pct'))})")
+            # P/L por lado: solo informativo en libro CUBIERTO (largos y cortos a la
+            # vez); con un solo lado el P/L flotante total ya coincide con ese lado.
+            if long_pos and short_pos:
+                lines.append(f"  P/L por lado: largos {si.get('long_pnl', 0):+.2f} / "
+                             f"cortos {si.get('short_pnl', 0):+.2f} "
+                             f"(neto {si.get('floating_pnl', 0):+.2f})")
             trend_dir = RiskBook._trend_dir(sig.get("trend"))
             if nd in ("LONG", "SHORT") and trend_dir and trend_dir != nd:
                 lines.append(f"  ⚠ CONFLICTO: libro {nd} vs tendencia {sig.get('trend')} "
@@ -890,6 +943,9 @@ class CoordinatorAgent:
                 # R:R objetivo opcional para recortar/ampliar el TP del especialista.
                 # 0/ausente => no ajustar (se respeta el TP del especialista).
                 "tp_rr": self._to_float(d.get("tp_rr"), 0.0),
+                # Multiplicador de lote opcional sobre el lote base del especialista.
+                # 0/ausente => lote base (×1).
+                "size_mult": self._to_float(d.get("size_mult"), 0.0),
                 "reason": str(d.get("reason", "")),
             })
         return str(data.get("rationale", "")), decisions

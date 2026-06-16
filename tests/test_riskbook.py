@@ -53,9 +53,11 @@ def _sym(remaining_pct=0.4, net_direction="FLAT", net_exposure_pct=0.0,
     }
 
 
-def _decision(symbol="BTCUSD", approve=True, alloc=0.2, action="hold", tp_rr=0.0):
+def _decision(symbol="BTCUSD", approve=True, alloc=0.2, action="hold", tp_rr=0.0,
+              size_mult=0.0):
     return {"symbol": symbol, "approve": approve, "priority": 1,
-            "allocation_pct": alloc, "position_action": action, "tp_rr": tp_rr}
+            "allocation_pct": alloc, "position_action": action, "tp_rr": tp_rr,
+            "size_mult": size_mult}
 
 
 # ----- RiskBook.clamp: topes duros -----
@@ -138,6 +140,34 @@ def test_clamp_tp_rr_ausente_queda_en_cero():
     assert out[0]["tp_rr"] == 0.0
 
 
+# ----- Multiplicador de lote (size_mult) gobernado por la mesa -----
+
+def test_clamp_size_mult_dentro_de_rango_no_se_toca():
+    rb = _rb()  # size_mult_min=0.5, size_mult_max=2.0 por defecto
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    out = rb.clamp([_decision(size_mult=1.5)], snap)
+    assert out[0]["size_mult"] == 1.5
+    assert "size_mult" not in out[0]["clamp"]
+
+
+def test_clamp_size_mult_acota_por_arriba_y_por_abajo():
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    alto = rb.clamp([_decision(size_mult=5.0)], snap)
+    assert alto[0]["size_mult"] == 2.0
+    assert "size_mult" in alto[0]["clamp"]
+    bajo = rb.clamp([_decision(size_mult=0.1)], snap)
+    assert bajo[0]["size_mult"] == 0.5
+    assert "size_mult" in bajo[0]["clamp"]
+
+
+def test_clamp_size_mult_ausente_queda_en_cero():
+    rb = _rb()
+    snap = _snapshot(symbols={"BTCUSD": {"remaining_pct": 0.4}})
+    out = rb.clamp([_decision()], snap)  # size_mult=0 (lote base ×1)
+    assert out[0]["size_mult"] == 0.0
+
+
 # ----- CoordinatorAgent: parseo y fallback -----
 
 def _coord(max_symbol=0.4) -> CoordinatorAgent:
@@ -159,6 +189,22 @@ def test_parse_json_valido():
 def test_parse_json_invalido_devuelve_none():
     c = _coord()
     assert c._parse("aquí no hay json") is None
+
+
+def test_parse_extrae_size_mult():
+    c = _coord()
+    raw = ('{"rationale": "ok", "decisions": [{"symbol": "BTCUSD", "approve": true, '
+           '"allocation_pct": 0.2, "size_mult": 1.5}]}')
+    _, decisions = c._parse(raw)
+    assert decisions[0]["size_mult"] == 1.5
+
+
+def test_parse_size_mult_ausente_es_cero():
+    c = _coord()
+    raw = ('{"rationale": "ok", "decisions": [{"symbol": "BTCUSD", "approve": true, '
+           '"allocation_pct": 0.2}]}')
+    _, decisions = c._parse(raw)
+    assert decisions[0]["size_mult"] == 0.0
 
 
 def test_fallback_aprueba_solo_accionables_con_reparto():
@@ -528,6 +574,31 @@ def test_snapshot_calcula_direccion_neta_long():
     assert s["net_direction"] == "LONG"
     assert round(s["net_volume"], 6) == 0.2  # (0.2 + 0.1) - 0.1
     assert snap["hedging"] is True
+
+
+def test_snapshot_desglosa_pnl_por_lado():
+    # Libro cubierto: los largos pierden y el corto gana. El P/L por lado revela lo
+    # que el neto (suma) oculta.
+    rb = _rb()
+    positions = [
+        {"symbol": "BTCUSD", "direction": "BUY", "volume": 0.2, "current_price": 50000, "profit": -40.0},
+        {"symbol": "BTCUSD", "direction": "BUY", "volume": 0.1, "current_price": 50000, "profit": -10.0},
+        {"symbol": "BTCUSD", "direction": "SELL", "volume": 0.1, "current_price": 50000, "profit": 52.0},
+    ]
+    client = _FakeClient(_account(hedging=True), positions)
+    snap = rb.snapshot(client, [_FakeAgent("BTCUSD")])
+    s = snap["symbols"]["BTCUSD"]
+    assert s["long_pnl"] == -50.0
+    assert s["short_pnl"] == 52.0
+    assert s["floating_pnl"] == 2.0
+
+
+def test_snapshot_expone_rango_size_mult():
+    rb = RiskBook({"size_mult_min": 0.5, "size_mult_max": 2.0})
+    client = _FakeClient(_account(), [])
+    snap = rb.snapshot(client, [_FakeAgent("BTCUSD")])
+    assert snap["size_mult_min"] == 0.5
+    assert snap["size_mult_max"] == 2.0
 
 
 def test_snapshot_neto_flat_cuando_se_netea():

@@ -161,6 +161,19 @@ export function CoordinatorPage({ liveCoordination }: { liveCoordination: Coordi
                     </span>
                   </span>
                 </div>
+                {/* P/L desglosado por lado: solo informativo en libro cubierto (largos
+                    y cortos a la vez), donde el neto oculta qué pata sangra. */}
+                {s.long_positions > 0 && s.short_positions > 0 &&
+                 s.long_pnl !== undefined && s.short_pnl !== undefined && (
+                  <div className="flex gap-3 text-xs text-gray-400 mb-1">
+                    <span>
+                      largos <span className={s.long_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>{money(s.long_pnl)}</span>
+                    </span>
+                    <span>
+                      cortos <span className={s.short_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>{money(s.short_pnl)}</span>
+                    </span>
+                  </div>
+                )}
                 <AllocationBar used={s.exposure_pct} cap={s.max_allocation_pct} />
                 <div className="flex justify-between text-xs text-gray-500 mt-1">
                   <span>Exposición {pct(s.exposure_pct)}</span>
@@ -443,6 +456,14 @@ function DecisionCard({ d }: { d: CoordinatorDecision }) {
       <div className="flex flex-wrap gap-2 mt-2 text-xs">
         <span className="px-2 py-0.5 rounded bg-gray-900 text-gray-300">prioridad {d.priority}</span>
         <span className="px-2 py-0.5 rounded bg-gray-900 text-gray-300">asignación {pct(d.allocation_pct, 0)}</span>
+        {d.approve && !!d.size_mult && d.size_mult > 0 && (
+          <span className={`px-2 py-0.5 rounded ${d.size_mult > 1 ? 'bg-emerald-900 text-emerald-200' : 'bg-amber-900 text-amber-200'}`}>
+            lote {d.size_mult.toFixed(2)}×
+          </span>
+        )}
+        {d.approve && !!d.tp_rr && d.tp_rr > 0 && (
+          <span className="px-2 py-0.5 rounded bg-gray-900 text-gray-300">TP obj. 1:{d.tp_rr.toFixed(2)}</span>
+        )}
         <span className={`px-2 py-0.5 rounded ${actionColors[d.position_action] || 'bg-gray-700 text-gray-300'}`}>
           posiciones: {d.position_action}{d.manage_direction ? ` (${d.manage_direction})` : ''}
         </span>

@@ -115,6 +115,8 @@ export interface CoordinatorSymbolState {
   long_positions: number
   short_positions: number
   floating_pnl: number
+  long_pnl?: number
+  short_pnl?: number
   open_positions: number
   max_allocation_pct: number
   remaining_pct: number
@@ -129,6 +131,8 @@ export interface CoordinatorSnapshot {
   max_total_exposure_pct: number
   max_symbol_allocation_pct: number
   max_net_direction_pct: number
+  size_mult_min?: number
+  size_mult_max?: number
   reversal_drawdown_pct: number
   max_symbol_loss_pct: number
   hedging: boolean
@@ -148,6 +152,8 @@ export interface CoordinatorDecision {
   allocation_pct: number
   position_action: 'hold' | 'reduce' | 'close' | 'hedge'
   manage_direction?: 'BUY' | 'SELL'
+  tp_rr?: number
+  size_mult?: number
   reason: string
   clamp?: string
 }

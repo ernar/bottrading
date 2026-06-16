@@ -239,6 +239,15 @@ def get_coordinator_config() -> dict:
       (tp_rr) de cada entrada. La mesa recorta (objetivo más cercano = rotación
       más rápida) o amplía el TP del especialista; el RiskBook lo acota a este
       rango. Sin tp_rr informado se respeta el TP del especialista.
+
+    Tamaño de posición (lote) gobernado por la mesa:
+    - COORDINATOR_SIZE_MULT_MIN (float, default 0.5) y COORDINATOR_SIZE_MULT_MAX
+      (float, default 2.0): rango del multiplicador EXPLÍCITO (size_mult) que la
+      mesa puede aplicar sobre el lote base del especialista por entrada. >1 agranda
+      (convicción / piramidar ganadores), <1 encoge. El RiskBook lo acota a este
+      rango; el ajuste por margen libre y los topes de exposición recortan el lote
+      final, así que size_mult nunca sobrepasa los límites duros. Sin size_mult
+      informado (0/ausente) se respeta el lote base del especialista (×1).
     """
     return {
         "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
@@ -260,6 +269,10 @@ def get_coordinator_config() -> dict:
         # Rango del R:R objetivo (tp_rr) que la mesa puede fijar por entrada.
         "tp_rr_min": _env_float("COORDINATOR_TP_RR_MIN", 1.0),
         "tp_rr_max": _env_float("COORDINATOR_TP_RR_MAX", 4.0),
+        # Rango del multiplicador de lote (size_mult) que la mesa puede aplicar sobre
+        # el lote base del especialista por convicción/piramidación.
+        "size_mult_min": _env_float("COORDINATOR_SIZE_MULT_MIN", 0.5),
+        "size_mult_max": _env_float("COORDINATOR_SIZE_MULT_MAX", 2.0),
         # Registro persistente de antigüedad de posiciones (período de gracia):
         # {ticket: epoch del primer avistamiento}, guardado en la DB (tabla
         # risk_first_seen). Se recarga al arrancar para que la gracia NO se
