@@ -5,12 +5,13 @@ from agents.coordinator import RiskBook, CoordinatorAgent
 
 def _rb(can_close=True, max_total=0.5, max_symbol=0.4, max_net=0.6,
         max_pyramid=None, reversal=0.015, symbol_loss=0.0, min_hold=0.0,
-        llm_can_close=True, max_open_positions=0) -> RiskBook:
+        llm_can_close=True, max_open_positions=0, by_symbol=None) -> RiskBook:
     # min_hold por defecto 0 (gracia off) y llm_can_close=True (gestión
     # discrecional permitida) para no alterar los tests existentes; el default
     # real de producción es llm_can_close=False (solo fuerza mayor).
     # max_pyramid None => igual a max_net (sin piramidación extra), como el default.
     # max_open_positions 0 => sin tope de recuento (no altera los tests previos).
+    # by_symbol None => sin overrides por símbolo (todos usan el global).
     cfg = {"max_total_exposure_pct": max_total,
            "max_symbol_allocation_pct": max_symbol,
            "can_close": can_close,
@@ -19,7 +20,8 @@ def _rb(can_close=True, max_total=0.5, max_symbol=0.4, max_net=0.6,
            "max_symbol_loss_pct": symbol_loss,
            "min_hold_seconds": min_hold,
            "llm_can_close": llm_can_close,
-           "max_open_positions": max_open_positions}
+           "max_open_positions": max_open_positions,
+           "max_open_positions_by_symbol": by_symbol or {}}
     if max_pyramid is not None:
         cfg["max_pyramid_direction_pct"] = max_pyramid
     return RiskBook(cfg)
@@ -143,6 +145,21 @@ def test_clamp_max_posiciones_off_no_veta():
         remaining_pct=0.4, open_positions=9)})
     out = rb.clamp([_decision(alloc=0.2)], snap)
     assert out[0]["approve"] is True
+
+
+def test_clamp_override_por_simbolo_acota_solo_ese_simbolo():
+    # Override por símbolo: BTC limitado a 2 aunque el global sea 5. Con 2 abiertas
+    # de BTC se veta, pero EURUSD (sin override) con 3 abiertas aún cabe (global 5).
+    rb = _rb(max_open_positions=5, by_symbol={"BTCUSD": 2})
+    snap = _snapshot(equity=10000, symbols={
+        "BTCUSD": _sym(remaining_pct=0.4, open_positions=2),
+        "EURUSD": _sym(remaining_pct=0.4, open_positions=3)})
+    out = rb.clamp([_decision(symbol="BTCUSD", alloc=0.1),
+                    _decision(symbol="EURUSD", alloc=0.1)], snap)
+    by_sym = {d["symbol"]: d for d in out}
+    assert by_sym["BTCUSD"]["approve"] is False
+    assert "2" in by_sym["BTCUSD"]["clamp"] and "máximo de posiciones" in by_sym["BTCUSD"]["clamp"]
+    assert by_sym["EURUSD"]["approve"] is True
 
 
 def test_snapshot_expone_max_open_positions():

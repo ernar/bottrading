@@ -262,12 +262,32 @@ def get_coordinator_config() -> dict:
       (redondeado, mínimo 1) es el tope DURO por símbolo que el RiskBook impone en
       clamp(): una entrada aprobada que dejaría el símbolo por encima se veta.
       0 en el base = sin tope (la mesa gobierna solo por exposición).
+    - MAX_OPEN_POSITIONS_<SÍMBOLO> (int, opcional): override del tope ANTERIOR para
+      UN símbolo concreto (p. ej. MAX_OPEN_POSITIONS_BTCUSD=2 limita el apilamiento
+      de BTC sin tocar el global). Si no se define, el símbolo usa el tope global.
     """
     # Tope de posiciones por símbolo: base del perfil de RIESGO × multiplicador
     # del HORIZONTE (ambos ejes del front). 0 en el base = sin tope.
     pos_base = _env_int("MAX_OPEN_POSITIONS_DEFAULT", 3)
     pos_mult = _env_float("MAX_POSITIONS_HORIZON_MULT", 1.0)
     max_open_positions = max(1, int(pos_base * pos_mult + 0.5)) if pos_base > 0 else 0
+    # Overrides POR SÍMBOLO del tope de posiciones (MAX_OPEN_POSITIONS_<SÍMBOLO>),
+    # para acotar el apilamiento de UN símbolo (p. ej. BTCUSD en cuenta pequeña)
+    # sin tocar el tope global de la mesa. Se excluye _DEFAULT (es el base global de
+    # arriba). Las claves de modelo que pudieran existir aquí nunca casan con un
+    # símbolo, así que son inocuas. La mesa lo aplica en clamp() (ver RiskBook).
+    pos_by_symbol: dict[str, int] = {}
+    for key, raw in os.environ.items():
+        if not key.startswith("MAX_OPEN_POSITIONS_") or key == "MAX_OPEN_POSITIONS_DEFAULT":
+            continue
+        suffix = key[len("MAX_OPEN_POSITIONS_"):].strip()
+        raw = (raw or "").strip()
+        if not suffix or not raw:
+            continue
+        try:
+            pos_by_symbol[suffix.upper()] = int(float(raw))
+        except (TypeError, ValueError):
+            continue
     return {
         "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
         "model": os.getenv("COORDINATOR_MODEL", "").strip(),
@@ -294,6 +314,9 @@ def get_coordinator_config() -> dict:
         "size_mult_max": _env_float("COORDINATOR_SIZE_MULT_MAX", 2.0),
         # Tope DURO de posiciones abiertas por símbolo (perfil de riesgo × horizonte).
         "max_open_positions": max_open_positions,
+        # Overrides por símbolo de ese tope (MAX_OPEN_POSITIONS_<SÍMBOLO>): acotan
+        # un símbolo concreto sin mover el global. Vacío => todos usan el global.
+        "max_open_positions_by_symbol": pos_by_symbol,
         # Registro persistente de antigüedad de posiciones (período de gracia):
         # {ticket: epoch del primer avistamiento}, guardado en la DB (tabla
         # risk_first_seen). Se recarga al arrancar para que la gracia NO se

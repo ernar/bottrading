@@ -78,6 +78,14 @@ class RiskBook:
         # front. Es un tope DURO: una entrada aprobada que dejaría el símbolo por
         # encima se veta en clamp() (el LLM lo ve en el prompt y razona dentro de él).
         self.max_open_positions = int(config.get("max_open_positions", 0) or 0)
+        # Overrides POR SÍMBOLO del tope anterior (MAX_OPEN_POSITIONS_<SÍMBOLO>):
+        # acotan el apilamiento de UN símbolo sin mover el global. Claves en
+        # mayúsculas para casar con symbol.upper() (incluye sufijos con punto, p.
+        # ej. ".US500CASH"). _max_pos_for() resuelve override > global.
+        self.max_open_positions_by_symbol = {
+            str(k).upper(): int(v)
+            for k, v in (config.get("max_open_positions_by_symbol") or {}).items()
+        }
         # Período de gracia para posiciones recién abiertas (segundos). Mientras la
         # posición más joven de un símbolo no lo supere, las guardias deterministas
         # de reversión y los cierres/reducciones que proponga el LLM se aplazan
@@ -126,6 +134,16 @@ class RiskBook:
                     session.add(RiskFirstSeen(ticket=str(ticket), first_seen=float(seen)))
         except Exception:
             pass
+
+    def _max_pos_for(self, symbol) -> int:
+        """Tope de posiciones para un símbolo: override por símbolo
+        (MAX_OPEN_POSITIONS_<SÍMBOLO>) si existe, si no el global de la mesa.
+        0 => sin tope."""
+        if symbol:
+            override = self.max_open_positions_by_symbol.get(str(symbol).upper())
+            if override is not None:
+                return override
+        return self.max_open_positions
 
     # ----- Helpers de dirección (estáticos, reutilizados por el prompt) -----
 
@@ -635,10 +653,11 @@ class RiskBook:
             # del perfil de riesgo × horizonte): no se abre una más si el símbolo ya
             # está en su máximo. Es un guardarraíl de recuento (independiente de la
             # exposición): el LLM lo ve en el prompt y decide dentro de él.
-            if (approve and self.max_open_positions > 0
-                    and open_positions >= self.max_open_positions):
+            sym_max_pos = self._max_pos_for(sym)
+            if (approve and sym_max_pos > 0
+                    and open_positions >= sym_max_pos):
                 notes.append(f"símbolo en su máximo de posiciones "
-                             f"({open_positions}/{self.max_open_positions}): entrada vetada")
+                             f"({open_positions}/{sym_max_pos}): entrada vetada")
                 approve = False
 
             # Anti-apilamiento: no añadir más en la dirección neta ya saturada.
@@ -962,8 +981,9 @@ class CoordinatorAgent:
                      f" | Tope de dirección neta por símbolo: {snapshot.get('max_net_direction_pct', 0):.0%}")
         max_pos = snapshot.get("max_open_positions", 0) or 0
         if max_pos > 0:
-            lines.append(f"Máximo de posiciones abiertas POR SÍMBOLO: {max_pos} "
-                         f"(tope duro; no apruebes una entrada en un símbolo que ya esté en su máximo)")
+            lines.append(f"Máximo de posiciones abiertas POR SÍMBOLO: {max_pos} por defecto "
+                         f"(tope duro; cada símbolo indica abajo el suyo si difiere; "
+                         f"no apruebes una entrada en un símbolo que ya esté en su máximo)")
         lines.append(f"Multiplicador de lote (size_mult) permitido: "
                      f"{snapshot.get('size_mult_min', 0.5):.2f}x – {snapshot.get('size_mult_max', 2.0):.2f}x "
                      f"(1x = lote base del especialista)")
@@ -992,8 +1012,9 @@ class CoordinatorAgent:
             if reason:
                 lines.append(f"  Razón especialista: {reason}")
             open_pos = si.get("open_positions", 0) or 0
-            pos_label = f"{open_pos}/{max_pos} pos" if max_pos > 0 else f"{open_pos} pos"
-            at_max_tag = " ⛔ EN SU MÁXIMO (no abrir más)" if (max_pos > 0 and open_pos >= max_pos) else ""
+            sym_max = self.risk_book._max_pos_for(sym)
+            pos_label = f"{open_pos}/{sym_max} pos" if sym_max > 0 else f"{open_pos} pos"
+            at_max_tag = " ⛔ EN SU MÁXIMO (no abrir más)" if (sym_max > 0 and open_pos >= sym_max) else ""
             lines.append(f"  Exposición actual: {self._pct(si.get('exposure_pct'))} "
                          f"({pos_label}, "
                          f"P/L flotante {si.get('floating_pnl', 0):+.2f}){at_max_tag} | "
