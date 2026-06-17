@@ -61,3 +61,25 @@ code {
   0%, 100% { transform: scaleY(0.35); }
   50% { transform: scaleY(1); }
 }
+
+/* Scrollbar de la terminal: sigue la paleta oscura de la web (gris sobre
+   bg-gray-950) en lugar de la barra nativa del SO. WebKit + Firefox. */
+.terminal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #374151 transparent;   /* gray-700 sobre transparente */
+}
+.terminal-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.terminal-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.terminal-scroll::-webkit-scrollbar-thumb {
+  background: #374151;                     /* gray-700 */
+  border-radius: 9999px;
+  border: 2px solid #030712;               /* gray-950: deja aire alrededor del pulgar */
+}
+.terminal-scroll::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;                      /* gray-600 */
+}

@@ -2,7 +2,9 @@
 
 Dashboard del **MT4 Ollama Bot**: panel React + TypeScript + Tailwind (build con Vite) que
 consume el API REST + WebSocket del backend (Flask, puerto `5000`). Muestra estado del bot,
-agentes, mesa de dirección (coordinador), señales, posiciones e historial en tiempo real.
+agentes, mesa de dirección (coordinador), gráficos, posiciones, historial y la terminal del bot
+en tiempo real, e incluye un **asistente** (chatbot) para consultar el estado y dejar notas de
+dirección a la mesa.
 
 > Este README cubre **solo el frontend**. Para el backend, los agentes y la configuración
 > global del bot, ver el [README de la raíz](../README.md).
@@ -83,6 +85,87 @@ npm run preview   # sirve el build de dist/ para verificarlo
 
 El resultado queda en `dist/` (gitignored). Sírvelo con cualquier servidor estático.
 
+### Despliegue en Plesk
+
+El dashboard es una **SPA estática**: Plesk solo tiene que servir el contenido de `dist/`.
+El backend (Flask, `python main.py`) corre aparte (en la misma VPS o en otra máquina) y el
+frontend lo alcanza por su URL pública. **No subas el código fuente al hosting**, solo el build.
+
+1. **Compila apuntando al backend público.** El build inyecta `VITE_*` en tiempo de
+   compilación (ver [Configuración](#configuración)), así que define la URL real **antes** de
+   `npm run build`. En tu equipo, desde `frontend/`:
+
+   ```bash
+   # crea frontend/.env con la URL pública del backend
+   #   VITE_API_URL=https://api.tudominio.com
+   #   VITE_API_TOKEN=<mismo valor que API_TOKEN del .env de la raíz>
+   npm install
+   npm run build
+   ```
+
+   > Alternativa: deja el build neutro y fija la **URL/token desde la UI** (pestaña *Ajustes*,
+   > se guarda en `localStorage`). Útil si no quieres recompilar por cada cambio de URL.
+
+2. **Sube el contenido de `dist/`** (no la carpeta, su **contenido**: `index.html`, `assets/`,
+   `favicon`, …) al *document root* del dominio/subdominio en Plesk —normalmente
+   `httpdocs/`— vía **Administrador de archivos**, FTP o **Git** (Plesk → *Git*, apuntando a
+   `dist/`). Borra el `index.html` de bienvenida que Plesk crea por defecto.
+
+3. **Configura el fallback de SPA** (React Router usa rutas del lado cliente; sin esto, recargar
+   `/agentes` o `/mesa` da **404**):
+
+   - **Apache** (lo habitual en Plesk): crea `httpdocs/.htaccess` con:
+
+     ```apache
+     <IfModule mod_rewrite.c>
+       RewriteEngine On
+       RewriteBase /
+       RewriteRule ^index\.html$ - [L]
+       RewriteCond %{REQUEST_FILENAME} !-f
+       RewriteCond %{REQUEST_FILENAME} !-d
+       RewriteRule . /index.html [L]
+     </IfModule>
+     ```
+
+   - **Nginx** (Plesk → *Apache & nginx Settings* → *Additional nginx directives*):
+
+     ```nginx
+     location / {
+       try_files $uri $uri/ /index.html;
+     }
+     ```
+
+4. **HTTPS:** activa el certificado **Let's Encrypt** (Plesk → *SSL/TLS Certificates*) en el
+   dominio. Si el frontend va por `https://` el backend **también** debe ir por `https://`
+   (contenido mixto: un backend en `http://` se bloquea desde una web en `https://`).
+
+5. **Backend accesible y CORS.** El frontend llama directo al API (no hay proxy en producción,
+   el proxy de Vite es solo para `npm run dev`). Asegúrate de que el backend está publicado y
+   alcanzable desde el navegador:
+
+   - Arráncalo con `API_HOST=0.0.0.0` y un `API_TOKEN` definido (ver el README de la raíz);
+     **expón el `:5000` solo con token**.
+   - Recomendado: ponlo tras un **subdominio con proxy inverso** en Plesk
+     (p. ej. `api.tudominio.com` → `http://127.0.0.1:5000`) para servirlo por HTTPS y no abrir
+     el `:5000` al exterior. El WebSocket (socket.io) necesita el *upgrade* de conexión; en las
+     directivas nginx del proxy añade:
+
+     ```nginx
+     location /socket.io/ {
+       proxy_pass http://127.0.0.1:5000;
+       proxy_http_version 1.1;
+       proxy_set_header Upgrade $http_upgrade;
+       proxy_set_header Connection "upgrade";
+       proxy_set_header Host $host;
+     }
+     ```
+
+   - `VITE_API_URL` (o la URL fijada en *Ajustes*) debe apuntar a esa URL pública del backend.
+
+> **Nota:** Plesk tiene soporte "Node.js", pero **no hace falta**: esta SPA se sirve como
+> estáticos una vez compilada. El soporte Node solo sería útil si quisieras ejecutar el `build`
+> en el propio servidor; aun así, el artefacto final que se sirve sigue siendo `dist/`.
+
 ### Type-check sin compilar
 
 ```bash
@@ -98,9 +181,10 @@ frontend/
 │   ├── main.tsx            # Bootstrap de React
 │   ├── App.tsx             # Router + layout principal
 │   ├── config.ts           # Resolución de URL/token del backend + cabeceras comunes
-│   ├── pages/              # Vistas: Dashboard, Agents, Coordinator (Mesa),
-│   │   │                   #         Signals, Positions, History, Settings (Ajustes)
-│   ├── components/         # UI reutilizable (Header, Navigation, charts, modales…)
+│   ├── pages/              # Vistas: Dashboard, Agents, Coordinator (Mesa), Charts,
+│   │   │                   #         Positions, History, Terminal, Settings (Ajustes)
+│   ├── components/         # UI reutilizable (Header, Navigation, charts, ChatWidget,
+│   │   │                   #         NewsTicker, RiskProfileSelector, SpreadSettings…)
 │   ├── hooks/              # useApi (REST), useWebSocket (streaming en vivo)
 │   ├── types/              # Tipos TypeScript (bot.ts)
 │   └── index.css           # Estilos globales (Tailwind)
@@ -115,12 +199,17 @@ frontend/
 
 ## Funcionalidades
 
-- **Dashboard**: estado general del bot, cuenta y gráfico de portfolio.
+- **Dashboard**: estado general del bot, cuenta, gráfico de portfolio y teletipo de noticias.
 - **Agentes**: configuración, stats de sesión y cambio de modelo LLM en caliente.
-- **Mesa** (coordinador): snapshot de riesgo, propuestas de los especialistas y veredictos.
-- **Señales / Posiciones / Historial**: señales recientes, posiciones abiertas con P&L en
+- **Mesa** (coordinador): snapshot de riesgo, propuestas de los especialistas, veredictos,
+  nota de dirección y LLM de la mesa.
+- **Gráficos / Posiciones / Historial**: velas e indicadores, posiciones abiertas con P&L en
   vivo y trades cerrados.
-- **Ajustes**: URL/token del backend (override por navegador) y "Probar conexión".
+- **Terminal**: salida en vivo de la consola del bot.
+- **Asistente** (ChatWidget): chatbot que consulta el estado en vivo y puede dejar una nota de
+  dirección para la mesa.
+- **Ajustes**: URL/token del backend (override por navegador) y "Probar conexión", perfil de
+  riesgo/horizonte, filtro de spread por símbolo y proveedor/modelo del asistente.
 - **Tiempo real** vía WebSocket (socket.io).
 
 ## Stack

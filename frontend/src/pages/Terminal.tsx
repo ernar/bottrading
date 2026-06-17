@@ -156,7 +156,7 @@ export function TerminalPage() {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="bg-gray-950 border border-gray-800 rounded-lg overflow-auto font-mono text-xs leading-relaxed p-3"
+        className="terminal-scroll bg-gray-950 border border-gray-800 rounded-lg overflow-y-auto overflow-x-hidden font-mono text-xs leading-relaxed p-3"
         style={{ height: 'calc(100vh - 220px)', minHeight: '300px' }}
       >
         {lines.length === 0 ? (
@@ -165,7 +165,10 @@ export function TerminalPage() {
           </div>
         ) : (
           lines.map(ln => (
-            <div key={ln.seq} className="whitespace-pre">
+            <div
+              key={ln.seq}
+              className="whitespace-pre-wrap break-words pl-[9ch] -indent-[9ch]"
+            >
               <span className="text-gray-600 select-none">{ln.ts} </span>
               {renderAnsi(ln.text, ln.seq)}
             </div>
