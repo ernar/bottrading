@@ -59,11 +59,14 @@ mt4_ollama_bot/
 ├── .env.example             # Plantilla sin secretos
 ├── .env.example.advanced    # Plantilla con todos los parámetros por agente
 ├── scripts/                 # Utilidades (migrate_csv_to_db.py: importa CSV/JSON antiguos a la DB)
-├── logs/                    # Generado automáticamente (gitignored)
-│   ├── bot.db               # Base de datos SQLite: señales, trades, equity, cierres y memoria
-│   └── archive/             # Respaldo de los CSV/JSON antiguos tras migrar
-└── frontend/                # Dashboard React + TypeScript + Tailwind (ver frontend/README.md)
+└── logs/                    # Generado automáticamente (gitignored)
+    ├── bot.db               # Base de datos SQLite: señales, trades, equity, cierres y memoria
+    └── archive/             # Respaldo de los CSV/JSON antiguos tras migrar
 ```
+
+> El **dashboard** (React + TypeScript + Tailwind) vive en un repo aparte:
+> [ernar/bottrading-dashboard](https://github.com/ernar/bottrading-dashboard). Se conecta a este
+> backend por su API (`VITE_API_URL` o desde la pestaña *Ajustes*).
 
 ## Requisitos
 
@@ -129,10 +132,14 @@ pip install -r requirements.txt
 
 ### 4. Frontend (dashboard)
 
+El dashboard está en un **repo aparte**:
+[ernar/bottrading-dashboard](https://github.com/ernar/bottrading-dashboard). Clónalo donde
+quieras e instala sus dependencias allí:
+
 ```bat
-cd frontend
+git clone https://github.com/ernar/bottrading-dashboard.git
+cd bottrading-dashboard
 npm install
-cd ..
 ```
 
 ### 5. Modelo LLM
@@ -182,7 +189,7 @@ MAX_DAILY_LOSS_PCT=0.05   # cooldown si la pérdida del día supera el 5% (0 = d
 
 > Los umbrales y símbolos **no se eligen en el menú**: cada agente trae los suyos en su blueprint (`agents/registry.py`). Se pueden **sobreescribir por `.env`** con precedencia símbolo > modelo > default (p. ej. `MAX_OPEN_POSITIONS_BTCUSD`, `MIN_CONFIDENCE_BTCUSD`, `COMMISSION_PER_LOT`…); ver [`.env.example`](.env.example) y [`.env.example.advanced`](.env.example.advanced) para la lista completa. El **modelo** se elige al arrancar (menú) o en caliente desde el dashboard.
 
-> Si activas `API_TOKEN`, el dashboard debe enviarlo: define `VITE_API_TOKEN` (con el mismo valor) en `frontend/.env`.
+> Si activas `API_TOKEN`, el dashboard debe enviarlo: define `VITE_API_TOKEN` (con el mismo valor) en el `.env` del repo del dashboard ([ernar/bottrading-dashboard](https://github.com/ernar/bottrading-dashboard)) o en su pestaña *Ajustes*.
 
 > La **URL del backend** y el **token** también se configuran en caliente desde la pestaña **Ajustes** del dashboard (se guardan en el navegador y tienen prioridad sobre `VITE_API_URL`/`VITE_API_TOKEN`). Útil para apuntar el dashboard a un backend en otra máquina sin recompilar. El botón **Probar conexión** valida la URL contra `/api/state`.
 
@@ -238,9 +245,10 @@ Equivale a arrancar el bot directamente:
 python main.py
 ```
 
-El dashboard se levanta en su propio entorno:
+El dashboard se levanta en su propio entorno (repo
+[ernar/bottrading-dashboard](https://github.com/ernar/bottrading-dashboard)):
 ```bash
-cd frontend && npm install && npm run dev
+npm install && npm run dev
 ```
 
 ## Flujo de ejecución
@@ -396,7 +404,7 @@ python -m pytest -q
 
 **Señal no validada** → No alcanza la confianza o el R:R mínimo del agente, spread por encima del filtro, entry lejos del precio, o la mesa la vetó por topes de riesgo/exposición.
 
-**`401 unauthorized` desde el dashboard** → Tienes `API_TOKEN` en el `.env` pero el dashboard no lo envía: define `VITE_API_TOKEN` (mismo valor) en `frontend/.env`.
+**`401 unauthorized` desde el dashboard** → Tienes `API_TOKEN` en el `.env` pero el dashboard no lo envía: define `VITE_API_TOKEN` (mismo valor) en el `.env` del dashboard o en su pestaña *Ajustes*.
 
 **El bot dejó de abrir operaciones pero sigue corriendo** → Se alcanzó el límite de pérdida diaria (`MAX_DAILY_LOSS_PCT`): está en *cooldown*, esperando a que se cierren las posiciones abiertas. Se rearma solo al cambiar de día.
 

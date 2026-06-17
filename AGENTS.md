@@ -28,10 +28,10 @@ defecto, `qwen3:8b`) para generar y ejecutar señales basadas en análisis técn
 |---|---|
 | Bot + API (mismo proceso, puerto 5000) | `python main.py` |
 | Bot + dashboard (Windows) | `start.bat` |
-| Frontend dev | `cd frontend && npm install && npm run dev` (→ `http://localhost:3000`) |
+| Frontend dev | en su repo aparte `ernar/bottrading-dashboard`: `npm install && npm run dev` (→ `http://localhost:3000`) |
 | Tests (funciones puras) | `python -m pytest -q` |
 | Comprobar sintaxis de un archivo | `python -m py_compile <archivo>` |
-| Type-check del frontend | `cd frontend && npx tsc --noEmit` |
+| Type-check del frontend | en el repo `ernar/bottrading-dashboard`: `npx tsc --noEmit` |
 | Modelos Ollama disponibles | `ollama list` |
 | Resolver config de límites en vivo | `python examples_config.py` |
 
@@ -68,7 +68,7 @@ Copia `.env.example` a `.env` y rellena valores. Variables clave:
 > secretos en `.env.example`.
 >
 > Si activas `API_TOKEN`, el dashboard debe enviarlo: define `VITE_API_TOKEN` (mismo valor) en
-> `frontend/.env`.
+> el `.env` del repo del dashboard (`ernar/bottrading-dashboard`) o en su pestaña *Ajustes*.
 
 ---
 
@@ -107,9 +107,10 @@ se queda sin datos.
   `PythonBridge.mq4`).
 - **`api/server.py`** — Flask REST + WebSocket. `async_mode="threading"` forzado, `ping_timeout=60`.
 - **`mt4_ea/PythonBridge.mq4`** — EA puente para MT4.
-- **`frontend/`** — dashboard React. Páginas en `frontend/src/pages/` (Dashboard, Agents,
-  Coordinator/"Mesa", Positions, Signals, History). Hooks `useApi`/`useWebSocket`. Tipos en
-  `frontend/src/types/bot.ts`.
+- **Dashboard (frontend)** — repo aparte: [`ernar/bottrading-dashboard`](https://github.com/ernar/bottrading-dashboard).
+  React + TS + Tailwind (Vite). Páginas en `src/pages/` (Dashboard, Agents, Coordinator/"Mesa",
+  Positions, Signals, History). Hooks `useApi`/`useWebSocket`. Tipos en `src/types/bot.ts`.
+  Se conecta a este backend por su API (`VITE_API_URL` o su pestaña *Ajustes*).
 
 ---
 
@@ -253,7 +254,8 @@ optimización, snapshot/clamp, cadencias).
 
 - Cambios mínimos y coherentes con el estilo del archivo que tocas.
 - No subas ni imprimas `.env`. No añadas `eventlet`. No rompas el contrato de estado compartido.
-- Tras tocar lógica pura, corre `python -m pytest -q`. Tras tocar frontend, `npx tsc --noEmit`.
+- Tras tocar lógica pura, corre `python -m pytest -q`. (El frontend vive en su propio repo,
+  `ernar/bottrading-dashboard`; su type-check `npx tsc --noEmit` se corre allí.)
 - Mantén esta doc y `CLAUDE.md`/`README.md` sincronizados si cambias arquitectura, cadencias,
   endpoints o variables de `.env`.
 ```

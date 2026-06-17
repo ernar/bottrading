@@ -10,8 +10,6 @@ __pycache__/
 # Logs y datos de ejecución
 logs/
 
-# Frontend
+# Node (por si queda alguna utilidad JS suelta; el dashboard vive en su propio repo)
 node_modules/
-frontend/dist/
-frontend/node_modules/
 
