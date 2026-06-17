@@ -95,6 +95,7 @@ Reglas de análisis:
 - Usa los titulares solo como contexto de sentimiento; la decisión principal debe apoyarse en los indicadores técnicos.
 - Busca confluencia: solo da buy/sell si al menos 2-3 indicadores apuntan en la misma dirección.
 - Si la tendencia H4 contradice la señal H1, reduce la confianza o devuelve hold.
+- MOMENTO/ESTRUCTURA: el contexto incluye un bloque "Momento / estructura (señal rápida)" calculado de forma determinista (menos rezagado que las medias). Si marca un "POSIBLE GIRO" en contra de la dirección que ibas a tomar, NO entres a favor del movimiento agotado: espera confirmación o devuelve hold. Que el momento determinista respalde tu dirección antes de dar buy/sell.
 - Si RSI está en zona extrema (>70 o <30), evita entrar a favor del movimiento agotado.
 - Aprende del rendimiento reciente: si tus últimas señales en este símbolo fallaron, sé más conservador.
 - Si no hay ventaja clara, devuelve "hold" con confianza baja. Un hold correcto es mejor que un trade malo.

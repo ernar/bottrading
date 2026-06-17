@@ -27,7 +27,6 @@ defecto, `qwen3:8b`) para generar y ejecutar señales basadas en análisis técn
 | Acción | Comando |
 |---|---|
 | Bot + API (mismo proceso, puerto 5000) | `python main.py` |
-| Bot + dashboard (Windows) | `start.bat` |
 | Frontend dev | en su repo aparte `ernar/bottrading-dashboard`: `npm install && npm run dev` (→ `http://localhost:3000`) |
 | Tests (funciones puras) | `python -m pytest -q` |
 | Comprobar sintaxis de un archivo | `python -m py_compile <archivo>` |
@@ -98,7 +97,12 @@ se queda sin datos.
 - **`trade_metrics.py`** — SL/TP, tamaño de lote (`calculate_lot_size`) y métricas de trade.
 - **`reporting.py`** / **`mailer.py`** — informe (`build_report()`) + envío SMTP (`send_report()`).
 - **`console.py`** — salida de terminal centralizada (ver §6).
-- **`logger.py`** — logging de señales/trades a CSV. **`models.py`** — modelos Pydantic.
+- **`db.py`** — persistencia **SQLite** vía SQLAlchemy (`logs/bot.db`, WAL + `busy_timeout`):
+  modelos ORM (`Signal`, `Trade`, `ClosedTrade`, `EquityPoint`, `SignalMemoryRecord`,
+  `RiskFirstSeen`), `session_scope()` para escrituras atómicas, `init_db()` (en `main.py`). El
+  frontend nunca toca la DB: va por la API. NO añadir drivers async (rompería el modelo de hilos).
+- **`logger.py`** — `log_signal`/`log_trade`/`log_equity`/`log_closed_trade` (escriben en la DB) +
+  `read_equity_series` (consulta + submuestreo para el gráfico). **`models.py`** — modelos Pydantic.
 - **`config.py`** / **`llm_config.py`** — resolución de configuración y proveedores LLM.
 
 ### Otros paquetes
@@ -119,7 +123,7 @@ se queda sin datos.
 ### Agente por símbolo (`agents/`)
 
 - `base_agent.py` → `SymbolAgent` (símbolo + provider/modelo LLM + `AgentParams` + persona
-  inyectada al prompt + `SignalMemory` aislada en `logs/agents/<name>_memory.json`).
+  inyectada al prompt + `SignalMemory(scope=<name>)` aislada en la tabla `signal_memory` de la DB).
 - `registry.py` → blueprints declarativos; `build_agent(name)`. Primer agente: `btc-agent`
   (BTCUSD). **Añadir un símbolo = añadir un blueprint.**
 - `orchestrator.py` → `AgentOrchestrator` corre el loop y ejecuta señales válidas. `optimize()`
@@ -154,7 +158,7 @@ El ciclo es: **recolectar** (`_gather_signal`) → **coordinar**
 (`RiskBook.snapshot` → `decide` → `clamp`) → **ejecutar** por prioridad (`_execute_decision`).
 Estado en `coordinator_overview()` →
 `GET /api/coordinator`; `POST /api/coordinator/decide` fuerza decisión **dry-run**; evento WS
-`coordinator_decision`. Frontend: pestaña **"Mesa"** (`frontend/src/pages/Coordinator.tsx`).
+`coordinator_decision`. Frontend: pestaña **"Mesa"** (`src/pages/Coordinator.tsx` del dashboard).
 
 **Control de concentración direccional / reversión:** `snapshot()` calcula el sesgo neto por
 símbolo (`net_direction` LONG/SHORT/FLAT, `net_exposure_pct`, `net_volume`) y si la cuenta soporta
@@ -207,18 +211,22 @@ GET  /api/models                    Proveedores/modelos LLM disponibles
 POST /api/agents/{name}/model       Cambia el modelo de un agente en caliente
 GET  /api/coordinator               Estado de la mesa (coordinator_overview)
 POST /api/coordinator/decide        Fuerza una decisión dry-run (no ejecuta)
-GET  /api/csv/signals               Últimas señales del CSV (?limit=&platform=)
-GET  /api/csv/trades                Últimos trades del CSV
+GET  /api/db/signals                Histórico de señales desde la DB (?limit=&platform=)
+GET  /api/db/trades                 Histórico de órdenes desde la DB
+GET  /api/db/closed-trades          Histórico de cierres desde la DB
 POST /api/bot/start                 Iniciar bot
 POST /api/bot/stop                  Pausar bot
 POST /api/positions/{symbol}/close  Cerrar posición
 ```
 
 Las rutas **POST que mutan estado** exigen `X-API-Token` **si** `API_TOKEN` está en `.env`.
-Eventos WS incluyen `coordinator_decision`.
+Eventos WS incluyen `coordinator_decision`. Las rutas `/api/csv/*` se mantienen como **alias
+obsoletos** de `/api/db/*` por compatibilidad (ya no existe ningún CSV: todo es SQLite).
 
-**Logs (generados, gitignored):** `logs/memory.json`, `logs/agents/<name>_memory.json`,
-`logs/mt4/signals.csv`, `logs/mt4/trades.csv`.
+**Persistencia (generada, gitignored):** todo vive en `logs/bot.db` (SQLite + WAL): señales,
+trades, equity, cierres y la memoria de cada agente (tabla `signal_memory`, `scope` por agente).
+El frontend nunca toca la DB — la lee por la API. ¿Vienes de CSV/JSON antiguos?
+`python scripts/migrate_csv_to_db.py` los importa y archiva en `logs/archive/`.
 
 ---
 

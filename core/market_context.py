@@ -83,6 +83,56 @@ def _indicators_section(rates: List[dict], digits: int, label: str) -> List[str]
     return lines
 
 
+def _momentum_section(rates_h1: List[dict], rates_h4: List[dict]) -> List[str]:
+    """Bloque de MOMENTO/ESTRUCTURA determinista (calculado en Python, no por el
+    LLM) para que el especialista no dependa solo del cruce EMA20/50, que va
+    rezagado en los giros. Resume el sesgo de momento de H1 (y H4 si hay) y avisa
+    de un POSIBLE GIRO confirmado por ruptura de estructura."""
+    def _state(rates):
+        if not rates:
+            return None
+        closes = [r["close"] for r in rates]
+        highs = [r["high"] for r in rates]
+        lows = [r["low"] for r in rates]
+        return ta.trend_state(closes, highs, lows)
+
+    ts1 = _state(rates_h1)
+    if not ts1:
+        return []
+    label = {"bullish": "alcista", "bearish": "bajista", "sideways": "lateral"}
+    bos = {"up": "ruptura al alza", "down": "ruptura a la baja", None: "sin ruptura"}
+    lines = ["--- Momento / estructura (señal rápida, determinista) ---"]
+    lines.append(f"Momento H1: {label.get(ts1['direction'], ts1['direction'])} "
+                 f"(score {ts1['score']:+d}) | estructura: {bos.get(ts1['broke_structure'])}")
+    ts4 = _state(rates_h4)
+    if ts4:
+        lines.append(f"Momento H4: {label.get(ts4['direction'], ts4['direction'])} "
+                     f"(score {ts4['score']:+d})")
+    if ts1.get("reversal"):
+        lines.append(
+            f"⚠ POSIBLE GIRO {label.get(ts1['reversal'], ts1['reversal'])}: el momento H1 "
+            f"se está dando la vuelta (ruptura de estructura + momentum). No abras a favor "
+            f"del movimiento agotado; si tienes posición contraria, protégela.")
+    return lines
+
+
+def momentum_snapshot(client, symbol: str) -> Optional[dict]:
+    """``trend_state`` determinista de H1 para ADJUNTAR a la señal: lo consume la
+    mesa (RiskBook) para disparar la guardia de reversión sin esperar a que el LLM
+    relabele su tendencia (que va rezagada). Fetch único de H1; devuelve None ante
+    datos insuficientes o cualquier error (fail-safe: nunca tumba el análisis)."""
+    try:
+        rates = client.get_ohlcv(symbol, timeframe="H1", bars=120)
+        if not rates:
+            return None
+        closes = [r["close"] for r in rates]
+        highs = [r["high"] for r in rates]
+        lows = [r["low"] for r in rates]
+        return ta.trend_state(closes, highs, lows)
+    except Exception:
+        return None
+
+
 def build_market_context(client, symbol: str, positions: list = None,
                          memory_summary: str = "", news_context: str = "") -> str:
     """Contexto completo para el prompt: tick, indicadores H1 (+H4 si hay), velas, posiciones, memoria."""
@@ -104,6 +154,12 @@ def build_market_context(client, symbol: str, positions: list = None,
     if rates_h4:
         lines.append("")
         lines += _indicators_section(rates_h4, digits, "H4 (contexto de tendencia mayor)")
+
+    if rates_h1:
+        momentum_lines = _momentum_section(rates_h1, rates_h4)
+        if momentum_lines:
+            lines.append("")
+            lines += momentum_lines
 
     if rates_h1:
         lines.append("")

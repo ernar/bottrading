@@ -428,10 +428,13 @@ class RiskBook:
         las posiciones tienen su propio Stop Loss y se respeta. Las guardias
         deterministas SÍ actúan siempre (solo si ``can_close``):
         - hard-stop por símbolo (``max_symbol_loss_pct``) -> close (rompe la gracia);
-        - reversión: sesgo abierto vs tendencia nueva con pérdida flotante
-          (``reversal_drawdown_pct``) -> reduce (o close si la pérdida es grande),
-          fijando ``manage_direction`` al lado a cerrar; SE PAUSA si la posición
-          más reciente está dentro del período de gracia (``min_hold_seconds``);
+        - reversión: sesgo abierto contra la tendencia nueva —el label del LLM O
+          el MOMENTO determinista (``sig["momentum"]``, menos rezagado), lo que
+          llegue antes— con pérdida flotante (``reversal_drawdown_pct``) -> reduce
+          (o close si la pérdida es grande), fijando ``manage_direction`` al lado a
+          cerrar; SE PAUSA si la posición más reciente está dentro del período de
+          gracia (``min_hold_seconds``), SALVO que el giro esté CONFIRMADO por
+          estructura (``sig["reversal"]``), que rompe la gracia;
         - período de gracia: un ``reduce``/``close`` propuesto por el LLM sobre una
           posición recién abierta (más joven que ``min_hold_seconds``) se aplaza a
           ``hold`` — se le da tiempo a evolucionar; solo el hard-stop lo salta;
@@ -476,6 +479,20 @@ class RiskBook:
             entry_side = str(sig.get("action", "")).upper()
             entry_net = self._side_to_net(entry_side)
             trend_dir = self._trend_dir(sig.get("trend"))
+            # Señal de MOMENTO determinista que adjunta el especialista (menos
+            # rezagada que el label de tendencia del LLM): dirección de momento y,
+            # si la hay, un GIRO confirmado por estructura. La guardia de reversión
+            # las usa para reaccionar antes (sin esperar a que el LLM relabele).
+            momentum_dir = self._trend_dir(sig.get("momentum"))
+            reversal_dir = self._trend_dir(sig.get("reversal"))
+            book_open = net_direction in ("LONG", "SHORT")
+            trend_conflict = book_open and trend_dir is not None and trend_dir != net_direction
+            momentum_conflict = book_open and momentum_dir is not None and momentum_dir != net_direction
+            # Giro CONFIRMADO por estructura en contra del libro: el discriminador
+            # que justifica romper el período de gracia (no es "voy perdiendo un
+            # poco": el mercado ha girado objetivamente en mi contra).
+            confirmed_reversal = book_open and reversal_dir is not None and reversal_dir != net_direction
+            reversal_conflict = trend_conflict or momentum_conflict
 
             # 1) Asignación: nunca supera el tope del símbolo.
             if alloc < 0:
@@ -525,14 +542,15 @@ class RiskBook:
                     forced = True
                     notes.append(f"hard-stop símbolo: pérdida {loss_pct:.1%} >= "
                                  f"{self.max_symbol_loss_pct:.1%} -> {action}")
-                # 3) Reversión: conflicto sesgo-vs-tendencia con pérdida flotante.
-                elif (self.reversal_drawdown_pct > 0 and trend_dir is not None
-                        and net_direction in ("LONG", "SHORT")
-                        and trend_dir != net_direction
+                # 3) Reversión: conflicto sesgo-vs-tendencia (label del LLM O momento
+                # determinista, lo que llegue antes) con pérdida flotante.
+                elif (self.reversal_drawdown_pct > 0 and reversal_conflict
                         and loss_pct >= self.reversal_drawdown_pct):
-                    if in_grace:
-                        # Recién abierta: se le da tiempo a evolucionar antes de
-                        # forzar la reversión.
+                    # La gracia pausa la reversión SALVO que el giro esté CONFIRMADO
+                    # por estructura: una posición recién abierta justo en el techo/
+                    # suelo, con el mercado ya girado en su contra y pérdida real, sí
+                    # se corta (es exactamente el caso que se nos escapaba).
+                    if in_grace and not confirmed_reversal:
                         notes.append(f"reversión en pausa: posición reciente "
                                      f"({newest_age:.0f}s < {self.min_hold_seconds:.0f}s "
                                      f"de gracia)")
@@ -541,8 +559,17 @@ class RiskBook:
                         action = self._stronger_action(action, needed)
                         manage_direction = net_side
                         forced = True
-                        notes.append(f"reversión: libro {net_direction} vs tendencia "
-                                     f"{trend_dir.lower()}, pérdida {loss_pct:.1%} -> {action}")
+                        # Fuente del disparo (para el log): estructura confirmada,
+                        # momento determinista o el label de tendencia del LLM.
+                        if confirmed_reversal:
+                            src = "estructura"
+                        elif momentum_conflict and not trend_conflict:
+                            src = "momento"
+                        else:
+                            src = "tendencia"
+                        grace_note = " (giro confirmado rompe gracia)" if in_grace else ""
+                        notes.append(f"reversión [{src}]: libro {net_direction} en contra, "
+                                     f"pérdida {loss_pct:.1%} -> {action}{grace_note}")
 
             # 3b) Período de gracia: un reduce/close que proponga el LLM sobre una
             # posición recién abierta se aplaza (se le da tiempo a evolucionar).
@@ -1004,9 +1031,23 @@ class CoordinatorAgent:
                 lines.append(f"  P/L por lado: largos {si.get('long_pnl', 0):+.2f} / "
                              f"cortos {si.get('short_pnl', 0):+.2f} "
                              f"(neto {si.get('floating_pnl', 0):+.2f})")
+            # Momento determinista que adjunta el especialista (más rápido que su
+            # label de tendencia): se lo damos al director para razonar el giro.
+            mom = sig.get("momentum")
+            rev = sig.get("reversal")
+            if mom or rev:
+                extra = f" · ⚠ POSIBLE GIRO {rev}" if rev else ""
+                lines.append(f"  Momento (rápido): {mom or 'n/a'}{extra}")
             trend_dir = RiskBook._trend_dir(sig.get("trend"))
-            if nd in ("LONG", "SHORT") and trend_dir and trend_dir != nd:
-                lines.append(f"  ⚠ CONFLICTO: libro {nd} vs tendencia {sig.get('trend')} "
+            mom_dir = RiskBook._trend_dir(mom)
+            rev_dir = RiskBook._trend_dir(rev)
+            against = nd in ("LONG", "SHORT") and any(
+                d and d != nd for d in (trend_dir, mom_dir, rev_dir))
+            if against:
+                detalle = sig.get("trend")
+                if rev_dir and rev_dir != nd:
+                    detalle = f"{sig.get('trend')} (giro {rev} confirmado por estructura)"
+                lines.append(f"  ⚠ CONFLICTO: libro {nd} vs {detalle} "
                              f"-> considera reduce/close/hedge del lado {nd}.")
             a = perf_by_symbol.get(sym)
             p = (a or {}).get("performance") or {}

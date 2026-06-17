@@ -54,7 +54,6 @@ mt4_ollama_bot/
 ├── requirements-dev.txt     # Dependencias de test (pytest)
 ├── conftest.py              # Hace que pytest encuentre los paquetes del proyecto
 ├── examples_config.py       # Demo de resolución de límites por símbolo/modelo
-├── start.bat                # Arranque en Windows (solo main.py: bot + API en :5000)
 ├── .env                     # Credenciales + config (NO subir a git; gitignored)
 ├── .env.example             # Plantilla sin secretos
 ├── .env.example.advanced    # Plantilla con todos los parámetros por agente
@@ -233,17 +232,12 @@ python examples_config.py
 
 ## Arranque
 
-```bat
-start.bat
-```
-
-Esto lanza `main.py` (orquestador + API en el mismo proceso, puerto 5000). **El dashboard se
-ejecuta aparte** y se conecta por API; `start.bat` no lo arranca.
-
-Equivale a arrancar el bot directamente:
 ```bash
 python main.py
 ```
+
+Esto lanza el orquestador + API en el mismo proceso (puerto 5000). **El dashboard se ejecuta
+aparte** y se conecta por API; no se arranca desde aquí.
 
 El dashboard se levanta en su propio entorno (repo
 [ernar/bottrading-dashboard](https://github.com/ernar/bottrading-dashboard)):

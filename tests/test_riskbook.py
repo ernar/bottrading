@@ -587,6 +587,51 @@ def test_clamp_reversion_actua_pasada_la_gracia():
     assert out[0]["manage_direction"] == "BUY"
 
 
+# ----- Reversión por MOMENTO determinista (menos rezagado que el label del LLM) -----
+
+def test_clamp_reversion_por_momentum_aunque_el_label_no_giro():
+    # El LLM aún ve la tendencia "bullish" (rezagada) pero el momento determinista
+    # ya marca "bearish" contra el libro LONG: la guardia dispara igual.
+    rb = _rb(reversal=0.015)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=3, floating_pnl=-200.0)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD",
+                          "trend": "bullish", "momentum": "bearish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "reduce"
+    assert out[0]["manage_direction"] == "BUY"
+    assert "momento" in out[0]["clamp"]
+
+
+def test_clamp_giro_confirmado_rompe_la_gracia():
+    # Posición recién abierta (30s < 300s) que normalmente quedaría en pausa, pero
+    # el giro está CONFIRMADO por estructura (reversal): se corta igualmente.
+    rb = _rb(reversal=0.015, min_hold=300)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=2,
+        floating_pnl=-200.0, newest_position_age=30)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD",
+                          "trend": "bearish", "reversal": "bearish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "reduce"
+    assert out[0]["manage_direction"] == "BUY"
+    assert "estructura" in out[0]["clamp"]
+
+
+def test_clamp_gracia_sigue_pausando_sin_giro_confirmado():
+    # Mismo escenario en gracia pero SIN giro confirmado (solo el label/momento):
+    # la pausa de gracia se mantiene (no se rompe por un giro no confirmado).
+    rb = _rb(reversal=0.015, min_hold=300)
+    snap = _snapshot(equity=10000, symbols={"BTCUSD": _sym(
+        net_direction="LONG", net_exposure_pct=0.3, open_positions=2,
+        floating_pnl=-200.0, newest_position_age=30)})
+    signals = {"BTCUSD": {"symbol": "BTCUSD", "action": "HOLD",
+                          "trend": "bearish", "momentum": "bearish"}}
+    out = rb.clamp([_decision(approve=False, action="hold")], snap, signals)
+    assert out[0]["position_action"] == "hold"
+    assert "gracia" in out[0]["clamp"]
+
+
 # ----- Coherencia entre símbolos correlacionados (BTC/ETH) -----
 
 def _sig(action, confidence=0.6, trend=None):

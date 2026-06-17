@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from core.models import BotConfig
 from core.strategy import StrategyEngine
 from core.memory import SignalMemory
-from core.market_context import build_market_context
+from core.market_context import build_market_context, momentum_snapshot
 from core.news import news_provider
 from core.logger import log_signal
 from core.config import get_commission_per_lot
@@ -143,6 +143,16 @@ class SymbolAgent:
         signal = self.strategy.generate_signal(symbol, market_data=market_data)
         if not signal:
             return None
+
+        # Momento/estructura DETERMINISTA (menos rezagado que el cruce EMA del
+        # prompt): se adjunta a la señal para que la mesa dispare la guardia de
+        # reversión sin esperar a que el LLM relabele la tendencia. Campos extra
+        # ignorados por log_signal/update_signal (cherry-pick de campos conocidos).
+        ts = momentum_snapshot(client, symbol)
+        if ts:
+            signal["momentum"] = ts.get("direction")
+            if ts.get("reversal"):
+                signal["reversal"] = ts["reversal"]
 
         self._fill_sl_tp(client, signal, tick)
         signal["platform"] = platform.upper()
