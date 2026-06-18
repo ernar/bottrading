@@ -331,7 +331,11 @@ Devuelve solo el JSON con el formato especificado."""
                 return reject(f"niveles incoherentes para SELL (TP={tp}, entry={entry}, SL={sl})")
             risk = abs(entry - sl)
             reward = abs(tp - entry)
-            if risk and reward / risk < effective_min_rr:
+            # Tolerancia mínima: el TP se redondea a los dígitos del símbolo
+            # (p. ej. _apply_tp_rr de la mesa), lo que puede dejar el R:R efectivo
+            # un pelo por debajo del objetivo (1.4998 < 1.5) y autovetar una entrada
+            # que la propia mesa construyó para ese R:R. El epsilon evita ese rechazo.
+            if risk and reward / risk < effective_min_rr - 1e-6:
                 return reject(f"R:R 1:{reward / risk:.2f} por debajo del mínimo 1:{effective_min_rr}")
 
         return True
