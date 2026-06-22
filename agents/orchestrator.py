@@ -699,13 +699,28 @@ class AgentOrchestrator:
                 current[str(ticket)] = p
 
         prev = self._prev_positions.get(symbol, {})
-        disappeared = [snap for ticket, snap in prev.items() if ticket not in current]
+        disappeared = [(ticket, snap) for ticket, snap in prev.items()
+                       if ticket not in current]
         if disappeared:
             # El motivo pendiente (si lo hay) lo fijó el bot al cerrar/reducir; se
             # consume una vez y se aplica a todas las posiciones cerradas esta pasada.
             pending = self._pending_close_reasons.pop(symbol, "")
-            for snap in disappeared:
-                self._record_closed_trade(symbol, snap, pending)
+            # Reconciliación con el historial REAL del bróker (P/L realizado +
+            # comisión + swap), casando por ticket: el flotante que vimos antes de
+            # que la posición desapareciera NO es el realizado (el SL gapea por
+            # debajo del último tick visto). Fail-safe: si el EA no soporta el
+            # comando o falla, el lookup queda vacío y se cae al flotante (previo).
+            deals_by_ticket = {}
+            try:
+                for d in (self.client.get_closed_deals() or []):
+                    tk = str(d.get("ticket", "")).strip()
+                    if tk:
+                        deals_by_ticket[tk] = d
+            except Exception:
+                deals_by_ticket = {}
+            for ticket, snap in disappeared:
+                self._record_closed_trade(symbol, snap, pending,
+                                          deal=deals_by_ticket.get(str(ticket)))
 
         # Reconstruye la instantánea arrastrando `seen_at` (reloj de pared local
         # del primer avistamiento) para medir la duración sin depender del epoch
@@ -754,33 +769,69 @@ class AgentOrchestrator:
                 return "Take Profit"
         return "Cierre"
 
-    def _record_closed_trade(self, symbol: str, snap: dict, reason: str = ""):
+    def _record_closed_trade(self, symbol: str, snap: dict, reason: str = "",
+                             deal: dict = None):
         """Registra en el estado una posición que ya no aparece.
 
-        El P/L es el último flotante observado antes de desaparecer (aprox. del
-        realizado; el broker podría diferir por el último tick/slippage). `reason`
-        viene de la mesa cuando el bot la cerró a propósito; si está vacío, el
-        cierre lo provocó el bróker y se infiere del SL/TP."""
-        # Apertura y duración ancladas al RELOJ LOCAL (primer avistamiento por el
-        # bot), NO al open_time del bróker: su epoch viene en la zona del servidor
-        # MT y, mezclado con datetime.now() local, daba horas desplazadas y
-        # duraciones NEGATIVAS (open posterior a close). Para posiciones ya
-        # abiertas al arrancar, seen_at = primer avistamiento (sesgo conservador),
-        # nunca una duración negativa.
+        Si ``deal`` (del historial del bróker, casado por ticket) está presente, se
+        usa el P/L REALIZADO + comisión + swap reales y los precios/tiempos exactos:
+        ``pnl`` se guarda NETO (profit+comisión+swap) para que ``SUM(closed_trades)``
+        cuadre con el libro de balance, y ``commission`` guarda el coste (signo del
+        bróker). Sin ``deal`` (EA antiguo o deal aún no visible) se cae al FLOTANTE
+        observado antes de desaparecer (aprox., comportamiento previo).
+
+        `reason` viene de la mesa cuando el bot la cerró a propósito; si está vacío,
+        el cierre lo provocó el bróker y se infiere del SL/TP."""
+        # Apertura/duración ancladas al RELOJ LOCAL (primer avistamiento) salvo que
+        # el deal traiga los epochs del bróker (mismo reloj para open y close => sin
+        # duraciones negativas). Mezclar el epoch del bróker con el reloj local daba
+        # horas desplazadas y duraciones NEGATIVAS, de ahí el doble criterio.
         now = broker_now()
         seen_at = snap.get("seen_at")
         open_dt = seen_at if isinstance(seen_at, datetime) else now
+
+        direction = snap.get("direction", "?")
+        volume = snap.get("volume", 0.0)
+        entry_price = snap.get("open_price", 0.0)
+
+        if deal:
+            profit = float(deal.get("profit", 0.0) or 0.0)
+            comm = float(deal.get("commission", 0.0) or 0.0)
+            swap = float(deal.get("swap", 0.0) or 0.0)
+            pnl = round(profit + comm + swap, 2)       # NET realizado (= Δbalance)
+            cost = round(comm + swap, 2)               # coste (signo del bróker)
+            direction = deal.get("direction") or direction
+            try:
+                volume = float(deal.get("volume", volume) or volume)
+                entry_price = float(deal.get("open_price", entry_price) or entry_price)
+            except (TypeError, ValueError):
+                pass
+            exit_price = (float(deal.get("close_price", 0.0) or 0.0)
+                          or snap.get("current_price") or entry_price)
+            ot, ct = deal.get("open_time"), deal.get("close_time")
+            try:
+                duration = (max(0, int(int(ct) - int(ot))) if ot and ct
+                            else max(0, int((now - open_dt).total_seconds())))
+            except (TypeError, ValueError):
+                duration = max(0, int((now - open_dt).total_seconds()))
+            close_reason = reason or self._infer_close_reason(
+                {"direction": direction, "sl": snap.get("sl"), "tp": snap.get("tp")},
+                exit_price)
+        else:
+            duration = max(0, int((now - open_dt).total_seconds()))
+            exit_price = snap.get("current_price") or snap.get("open_price") or 0
+            pnl = snap.get("profit", 0.0)
+            cost = 0.0
+            close_reason = reason or self._infer_close_reason(snap, exit_price)
+
         open_iso = open_dt.isoformat()
-        duration = max(0, int((now - open_dt).total_seconds()))
-        exit_price = snap.get("current_price") or snap.get("open_price") or 0
-        close_reason = reason or self._infer_close_reason(snap, exit_price)
         trade = Trade(
             symbol=symbol,
-            action=snap.get("direction", "?"),
-            entry_price=snap.get("open_price", 0.0),
+            action=direction,
+            entry_price=entry_price,
             exit_price=exit_price or None,
-            volume=snap.get("volume", 0.0),
-            pnl=snap.get("profit", 0.0),
+            volume=volume,
+            pnl=pnl,
             open_time=open_iso,
             close_time=now.isoformat(),
             duration_seconds=duration,
@@ -789,18 +840,19 @@ class AgentOrchestrator:
         # Persistir en la DB para que el rendimiento sobreviva al reinicio.
         log_closed_trade(
             symbol=symbol,
-            action=snap.get("direction", "?"),
-            volume=snap.get("volume", 0.0),
-            entry_price=snap.get("open_price", 0.0),
+            action=direction,
+            volume=volume,
+            entry_price=entry_price,
             exit_price=exit_price,
-            pnl=snap.get("profit", 0.0),
-            commission=0.0,  # se rellenará cuando el broker lo devuelva
+            pnl=pnl,
+            commission=cost,
             duration_seconds=duration,
             close_reason=close_reason,
             platform=self.platform,
         )
-        print(f"  {console.accent('⟳ Cierre registrado')}: {console.side(trade.action)} "
-              f"{symbol} | P/L≈{console.pnl(trade.pnl)} | {console.dim(close_reason)}")
+        tag = "Cierre registrado" if deal else "Cierre registrado (flotante)"
+        print(f"  {console.accent('⟳ ' + tag)}: {console.side(trade.action)} "
+              f"{symbol} | P/L {console.pnl(trade.pnl)} | {console.dim(close_reason)}")
 
     def _print_positions_summary(self, symbol: str, positions: list):
         """Resumen de posiciones abiertas con su profit no realizado."""
@@ -1048,6 +1100,48 @@ class AgentOrchestrator:
                     pass
         return 1.0
 
+    def _projected_notional_ok(self, symbol: str, add_volume: float,
+                               order_type: str, tick, positions: list,
+                               entry_price: float = 0.0) -> bool:
+        """Guardarraíl PRE-orden por NOCIONAL relativo al equity (apalancamiento).
+
+        Los topes de la mesa miden MARGEN (used_margin/equity), que en instrumentos
+        muy apalancados oculta el riesgo de precio: 0.01 lote de BTC es poco margen
+        pero un nocional de DECENAS de veces una cuenta pequeña (un 3% en contra la
+        vacía). Este veto OPCIONAL (`RiskBook.max_notional_exposure_pct`, 0 = off)
+        rechaza una entrada cuyo nocional proyectado del símbolo —lo ya abierto + lo
+        nuevo— superaría ese múltiplo del equity. Default off: no cambia el
+        comportamiento salvo que se active (pensado para cuentas pequeñas). Devuelve
+        True si la entrada cabe (o si el guardarraíl está desactivado / sin datos)."""
+        cap = float(getattr(self.risk_book, "max_notional_exposure_pct", 0.0) or 0.0)
+        if cap <= 0:
+            return True
+        account = self.client.get_account_info() or {}
+        equity = float(account.get("equity") or 0.0)
+        if equity <= 0:
+            return True
+        cs = self._contract_size(symbol)
+        price = 0.0
+        if tick:
+            price = tick.ask if str(order_type).upper() == "BUY" else tick.bid
+        if price <= 0:
+            price = float(entry_price or 0.0)
+        if price <= 0:
+            return True  # sin precio fiable: no bloqueamos (lo acotan otros topes)
+        new_notional = add_volume * price * cs
+        cur_notional = 0.0
+        for p in positions or []:
+            vol = _pos_to_float(_pos_get(p, "volume"))
+            pprice = _pos_to_float(_pos_get(p, "current_price", "open_price", "price_open"))
+            cur_notional += vol * pprice * cs
+        projected_pct = (cur_notional + new_notional) / equity
+        if projected_pct > cap:
+            print("  " + console.warn(
+                f"⚠ Nocional proyectado {projected_pct:.0%} del equity > tope "
+                f"{cap:.0%} ({symbol}): entrada vetada (riesgo de apalancamiento)."))
+            return False
+        return True
+
     def _fit_volume_to_margin(self, symbol: str, volume: float,
                               order_type: str, tick) -> float:
         """Acota el volumen al margen libre para evitar el error 134 (fondos
@@ -1152,6 +1246,13 @@ class AgentOrchestrator:
         if fitted < volume:
             print(console.dim(f"  Lote ajustado por margen libre: {volume} → {fitted}"))
             volume = fitted
+
+        # Guardarraíl de NOCIONAL (apalancamiento) relativo al equity: veta la
+        # entrada si su nocional proyectado del símbolo reventaría el tope (opcional,
+        # 0 = off). Se evalúa con el lote FINAL (ya recortado por margen).
+        if not self._projected_notional_ok(symbol, volume, signal["action"], tick,
+                                           positions, signal.get("entry") or 0.0):
+            return False
 
         result = self.client.place_order(
             symbol=symbol,
@@ -1675,12 +1776,22 @@ class AgentOrchestrator:
             snapshot = None
         state = bot_state.get_state()
 
+        # Rendimiento REAL reconciliado contra el libro de balance (P/L realizado,
+        # no el flotante de closed_trades). Fail-safe: un fallo aquí no tumba el
+        # reporte ni el loop.
+        try:
+            from core.performance import performance_summary
+            performance = performance_summary(self.platform)
+        except Exception:
+            performance = None
+
         from core.reporting import build_report
         report = build_report(
             account=account, snapshot=snapshot,
             coordination=self.last_coordination,
             agents_overview=self.agents_overview(),
-            closed_trades=state.get("closed_trades", []))
+            closed_trades=state.get("closed_trades", []),
+            performance=performance)
         self.last_report = report
         self.last_report_at = time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -2013,6 +2124,7 @@ class AgentOrchestrator:
         cfg = get_coordinator_config()
         self.risk_book.max_total_exposure_pct = float(cfg["max_total_exposure_pct"])
         self.risk_book.max_symbol_allocation_pct = float(cfg["max_symbol_allocation_pct"])
+        self.risk_book.max_notional_exposure_pct = float(cfg["max_notional_exposure_pct"])
         self.risk_book.can_close = bool(cfg["can_close"])
         self.risk_book.llm_can_close = bool(cfg["llm_can_close"])
         self.risk_book.max_net_direction_pct = float(cfg["max_net_direction_pct"])
@@ -2065,6 +2177,7 @@ class AgentOrchestrator:
             "llm_can_close": self.risk_book.llm_can_close,
             "max_total_exposure_pct": self.risk_book.max_total_exposure_pct,
             "max_symbol_allocation_pct": self.risk_book.max_symbol_allocation_pct,
+            "max_notional_exposure_pct": getattr(self.risk_book, "max_notional_exposure_pct", 0.0),
             "max_net_direction_pct": self.risk_book.max_net_direction_pct,
             "max_pyramid_direction_pct": self.risk_book.max_pyramid_direction_pct,
             "reversal_drawdown_pct": self.risk_book.reversal_drawdown_pct,

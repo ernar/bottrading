@@ -96,6 +96,7 @@ string HandleCommand(string cmd)
    if(op == "TICK"        && count >= 2)  return GetTick(parts[1]);
    if(op == "OHLCV"       && count >= 3)  return GetOHLCV(parts[1], (int)StringToInteger(parts[2]), count >= 4 ? parts[3] : "H1");
    if(op == "POSITIONS")  return GetPositions(count >= 2 ? parts[1] : "");
+   if(op == "GET_CLOSED_DEALS") return GetClosedDeals(count >= 2 ? (int)StringToInteger(parts[1]) : 50);
    if(op == "ORDERS")     return GetOrders();
    if(op == "PLACE_ORDER" && count >= 5)  return PlaceOrder(parts);
    if(op == "CLOSE_POSITION" && count >= 2) return ClosePosition(parts);
@@ -232,6 +233,33 @@ string GetPositions(string symbol)
          OrderOpenPrice(), OrderStopLoss(), OrderTakeProfit(),
          OrderProfit(), OrderCommission(), OrderSwap(), (int)OrderOpenTime(), OrderComment()
       );
+   }
+   return result;
+}
+
+//+------------------------------------------------------------------+
+// Historial de operaciones CERRADAS (deals realizados), del más reciente al más
+// antiguo, hasta `count`. Devuelve el P/L REALIZADO + comisión + swap reales del
+// bróker (no el flotante aproximado). Excluye depósitos/retiros (OrderType > 1):
+// solo BUY/SELL cerrados. Lo usa Python para reconciliar closed_trades por ticket.
+string GetClosedDeals(int count)
+{
+   string result = "OK|";
+   bool first = true;
+   int total = OrdersHistoryTotal();
+   int collected = 0;
+   for(int i = total - 1; i >= 0 && collected < count; i--) {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
+      if(OrderType() > 1) continue;  // solo BUY/SELL cerrados (no balance/credit)
+      if(!first) result += ";";
+      first = false;
+      result += StringFormat(
+         "ticket=%d,symbol=%s,type=%d,volume=%.2f,open_price=%.10f,close_price=%.10f,profit=%.2f,commission=%.2f,swap=%.2f,open_time=%d,close_time=%d",
+         OrderTicket(), OrderSymbol(), OrderType(), OrderLots(),
+         OrderOpenPrice(), OrderClosePrice(), OrderProfit(), OrderCommission(),
+         OrderSwap(), (int)OrderOpenTime(), (int)OrderCloseTime()
+      );
+      collected++;
    }
    return result;
 }

@@ -296,6 +296,14 @@ def get_coordinator_config() -> dict:
         "temperature": _env_float("COORDINATOR_TEMPERATURE", 0.2),
         "max_total_exposure_pct": _env_float("MAX_TOTAL_EXPOSURE_PCT", 0.5),
         "max_symbol_allocation_pct": _env_float("MAX_SYMBOL_ALLOCATION_PCT", 0.4),
+        # Tope DURO de NOCIONAL por símbolo relativo al equity (0 = off). Los topes
+        # de exposición miden MARGEN (used_margin/equity), que en instrumentos muy
+        # apalancados oculta el riesgo de precio: 0.01 lote de BTC es poco margen
+        # pero un nocional de decenas de veces una cuenta pequeña (un 3% en contra
+        # la vacía). Este guardarraíl veta antes de abrir una entrada cuyo nocional
+        # proyectado del símbolo (lo abierto + lo nuevo) superaría este múltiplo del
+        # equity. Pensado para cuentas pequeñas; default 0 = no cambia nada.
+        "max_notional_exposure_pct": _env_float("MAX_NOTIONAL_EXPOSURE_PCT", 0.0),
         "max_net_direction_pct": _env_float("MAX_NET_DIRECTION_PCT", 0.6),
         # Tope superior del sesgo neto tolerado SOLO al piramidar ganadores (posición
         # en ganancia + tendencia confirma). Default = max_net_direction_pct (sin

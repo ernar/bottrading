@@ -141,6 +141,61 @@ def test_apply_tp_rr_no_actua_sin_niveles_o_rr_cero():
     assert orch._apply_tp_rr(agent, sig2, 1.5) is False
 
 
+# ----- Guardarraíl de nocional (apalancamiento) -----
+
+class _NotionalClient:
+    def __init__(self, equity, contract_size=1.0, ask=100.0, bid=100.0):
+        self._equity = equity
+        self._cs = contract_size
+        self._ask, self._bid = ask, bid
+
+    def get_account_info(self):
+        return {"equity": self._equity}
+
+    def get_symbol_info(self, symbol):
+        return SimpleNamespace(contract_size=self._cs)
+
+    def get_tick(self, symbol):
+        return SimpleNamespace(ask=self._ask, bid=self._bid)
+
+
+def _orch_notional(cap, **client_kw):
+    client = _NotionalClient(**client_kw)
+    return AgentOrchestrator([], client=client, platform="mt4",
+                             coordinator=SimpleNamespace(),
+                             risk_book=SimpleNamespace(max_notional_exposure_pct=cap))
+
+
+def test_notional_guard_off_permite_todo():
+    orch = _orch_notional(0.0, equity=20.0, ask=100000.0)
+    # Aunque el nocional sea enorme, con el tope a 0 (off) no veta.
+    assert orch._projected_notional_ok("BTCUSD", 1.0, "BUY",
+                                       orch.client.get_tick("BTCUSD"), []) is True
+
+
+def test_notional_guard_veta_entrada_sobredimensionada():
+    # equity 20, precio 100, lote 1 -> nocional 100 = 500% del equity > tope 200%.
+    orch = _orch_notional(2.0, equity=20.0, ask=100.0)
+    assert orch._projected_notional_ok("BTCUSD", 1.0, "BUY",
+                                       orch.client.get_tick("BTCUSD"), []) is False
+
+
+def test_notional_guard_suma_lo_ya_abierto():
+    # equity 20, tope 200%. Ya abierto: 0.2 @ 100 = 20 (100%). Nueva 0.3 @ 100 = 30.
+    # Proyectado (20+30)/20 = 250% > 200% -> veta.
+    orch = _orch_notional(2.0, equity=20.0, ask=100.0)
+    positions = [{"volume": 0.2, "current_price": 100.0}]
+    assert orch._projected_notional_ok("BTCUSD", 0.3, "BUY",
+                                       orch.client.get_tick("BTCUSD"), positions) is False
+
+
+def test_notional_guard_permite_entrada_pequena():
+    # equity 1000, precio 100, lote 1 -> nocional 100 = 10% << tope 200%.
+    orch = _orch_notional(2.0, equity=1000.0, ask=100.0)
+    assert orch._projected_notional_ok("BTCUSD", 1.0, "BUY",
+                                       orch.client.get_tick("BTCUSD"), []) is True
+
+
 # ----- Trailing stop: el SL nunca afloja (_improves_sl) -----
 
 def test_improves_sl_buy_solo_sube():
@@ -207,6 +262,63 @@ def test_lifecycle_parcial_una_vez_y_trailing():
     orch._manage_position_lifecycle()
     assert client.closed == [("BTCUSD", 0.05, 7)]  # sigue una sola vez
     assert client.modified and client.modified[-1][2] == 104.0  # nuevo SL
+
+
+# ----- Reconciliación de cierres con el historial REAL del bróker -----
+
+class _DealClient:
+    """Cliente falso que expone get_closed_deals (historial del bróker)."""
+    def __init__(self, deals):
+        self._deals = deals
+
+    def get_closed_deals(self, count=50):
+        return list(self._deals)
+
+
+def _closed_snap(seen_at):
+    return {"direction": "BUY", "volume": 0.01, "open_price": 64500.0,
+            "current_price": 64490.0, "profit": -0.10, "sl": 64000.0,
+            "tp": 65000.0, "seen_at": seen_at}
+
+
+def test_cierre_reconciliado_usa_pnl_real_del_broker():
+    from datetime import datetime
+    from core.db import ClosedTrade, get_session
+    deal = {"ticket": "7", "symbol": "BTCUSD", "direction": "BUY", "volume": 0.01,
+            "open_price": 64500.0, "close_price": 64000.0, "profit": -5.0,
+            "commission": -0.7, "swap": -0.3, "open_time": 1000, "close_time": 4600}
+    orch = AgentOrchestrator([], client=_DealClient([deal]), platform="mt4",
+                             coordinator=SimpleNamespace(), risk_book=SimpleNamespace())
+    orch._prev_positions["BTCUSD"] = {"7": _closed_snap(datetime(2026, 6, 20, 10, 0, 0))}
+    orch._detect_closed_trades("BTCUSD", [])  # ticket 7 desaparece
+
+    session = get_session()
+    try:
+        row = session.query(ClosedTrade).filter(ClosedTrade.symbol == "BTCUSD").one()
+    finally:
+        session.close()
+    # pnl NETO = profit + comisión + swap = -5 -0.7 -0.3 = -6.0 (no el flotante -0.10).
+    assert row.pnl == -6.0
+    assert row.commission == -1.0
+    assert row.duration_seconds == 3600   # close_time - open_time (epochs del bróker)
+    assert row.exit_price == 64000.0
+
+
+def test_cierre_sin_deal_cae_al_flotante():
+    from datetime import datetime
+    from core.db import ClosedTrade, get_session
+    orch = AgentOrchestrator([], client=_DealClient([]), platform="mt4",
+                             coordinator=SimpleNamespace(), risk_book=SimpleNamespace())
+    orch._prev_positions["BTCUSD"] = {"9": _closed_snap(datetime(2026, 6, 20, 10, 0, 0))}
+    orch._detect_closed_trades("BTCUSD", [])
+
+    session = get_session()
+    try:
+        row = session.query(ClosedTrade).filter(ClosedTrade.symbol == "BTCUSD").one()
+    finally:
+        session.close()
+    assert row.pnl == -0.10          # flotante (fallback, sin historial del bróker)
+    assert row.commission == 0.0
 
 
 def test_lifecycle_sin_agentes_activos_no_hace_nada():

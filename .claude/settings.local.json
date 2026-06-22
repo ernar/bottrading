@@ -46,7 +46,10 @@
       "Bash(echo \"EXIT: $?\")",
       "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('package.json','utf8'\\)\\); console.log\\('package.json: JSON valido'\\)\")",
       "Bash(NODE_OPTIONS=\"--use-system-ca\" npm remove @tanstack/react-table zustand)",
-      "Bash(NODE_OPTIONS=\"--use-system-ca\" npx tsc --noEmit)"
+      "Bash(NODE_OPTIONS=\"--use-system-ca\" npx tsc --noEmit)",
+      "Bash(python -m py_compile core/performance.py)",
+      "Bash(python -m pytest tests/test_performance.py -q)",
+      "Bash(python -)"
     ],
     "additionalDirectories": [
       "c:\\Users\\luism\\Desktop\\mt5_ollama_bot"

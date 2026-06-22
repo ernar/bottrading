@@ -39,6 +39,11 @@ class RiskBook:
     def __init__(self, config: dict):
         self.max_total_exposure_pct = float(config.get("max_total_exposure_pct", 0.5))
         self.max_symbol_allocation_pct = float(config.get("max_symbol_allocation_pct", 0.4))
+        # Tope DURO de NOCIONAL por símbolo relativo al equity (0 = off). Complementa
+        # a los topes de MARGEN (que ocultan el riesgo de apalancamiento): veta una
+        # entrada cuyo nocional proyectado del símbolo superaría este múltiplo del
+        # equity. Lo impone el orquestador antes de place_order (_projected_notional_ok).
+        self.max_notional_exposure_pct = float(config.get("max_notional_exposure_pct", 0.0))
         self.can_close = bool(config.get("can_close", True))
         # Si False (default), la mesa NO ejecuta la gestión DISCRECIONAL del LLM
         # (reduce/close/hedge propuestos "por criterio"): solo cierra por FUERZA

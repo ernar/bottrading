@@ -467,6 +467,32 @@ def get_stats():
     return jsonify(stats), 200
 
 
+@app.route("/api/performance", methods=["GET"])
+def get_performance():
+    """Rendimiento REAL reconciliado contra el libro de balance (P/L realizado de
+    trading, no el flotante registrado en closed_trades), más la discrepancia y
+    banderas de calidad de datos. Solo lectura.
+
+    Flujos de caja (depósitos/retiros): por defecto el env ``KNOWN_CASH_FLOWS``;
+    se puede sobrescribir con ``?cash_flows=50,-20`` (signo: depósito +, retiro −)."""
+    from core.performance import performance_summary
+
+    platform = request.args.get("platform", "mt4")
+    cf_raw = request.args.get("cash_flows")
+    cash_flows = None
+    if cf_raw is not None:
+        cash_flows = []
+        for tok in cf_raw.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            try:
+                cash_flows.append(float(tok))
+            except ValueError:
+                pass
+    return jsonify(performance_summary(platform, cash_flows=cash_flows)), 200
+
+
 @app.route("/api/agents", methods=["GET"])
 def get_agents():
     """Resumen de agentes activos: config, stats de sesión, rendimiento y

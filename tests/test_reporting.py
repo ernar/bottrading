@@ -72,6 +72,24 @@ def test_build_report_sections():
     assert rep["html"].startswith("<pre")
 
 
+def test_build_report_includes_performance_section():
+    perf = {
+        "ledger": {"start_balance": 100.0, "end_balance": 60.0, "net_change": -40.0,
+                   "cash_flows_known": True, "cash_flow_total": 50.0,
+                   "trading_pnl": -90.0, "profit_factor": 0.6},
+        "closed_trades": {"total_pnl": -10.0, "count": 50, "win_rate": 0.4,
+                          "profit_factor": 0.9, "expectancy": -0.2},
+        "recorded_vs_real": {"recorded_pnl": -10.0, "real_trading_pnl": -90.0,
+                             "discrepancy": -80.0, "reliable": False},
+        "data_quality": {"commission_all_zero": True, "negative_durations": 3},
+    }
+    rep = build_report(account={"equity": 60.0}, snapshot=_snapshot(),
+                       coordination=_coordination(), agents_overview=_agents_overview(),
+                       closed_trades=[], performance=perf)
+    assert "RENDIMIENTO REAL" in rep["text"]
+    assert "DISCREPANCIA" in rep["text"]
+
+
 def test_build_report_tolerates_none():
     rep = build_report(account=None, snapshot=None, coordination=None,
                        agents_overview=None, closed_trades=None)

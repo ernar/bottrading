@@ -426,6 +426,39 @@ class MT4Client(BaseMTClient):
             orders.append(data)
         return orders
 
+    _CLOSED_DEAL_FIELDS = ["ticket", "symbol", "type", "volume", "open_price",
+                           "close_price", "profit", "commission", "swap",
+                           "open_time", "close_time"]
+    _CLOSED_DEAL_NUMERIC = ("volume", "open_price", "close_price", "profit",
+                            "commission", "swap")
+
+    def get_closed_deals(self, count: int = 50) -> List[dict]:
+        """Historial de operaciones cerradas del bróker (P/L realizado + comisión
+        + swap reales). Requiere el EA con el comando GET_CLOSED_DEALS."""
+        resp = self._send(f"GET_CLOSED_DEALS|{count}")
+        if not resp.startswith("OK|"):
+            return []
+        payload = resp[3:]
+        if not payload:
+            return []
+        deals = []
+        for entry in payload.split(";"):
+            if not entry:
+                continue
+            data = self._parse_record(entry, self._CLOSED_DEAL_FIELDS)
+            for field in self._CLOSED_DEAL_NUMERIC:
+                if field in data:
+                    try:
+                        data[field] = float(data[field])
+                    except (ValueError, TypeError):
+                        pass
+            # Dirección legible (el EA da type 0=BUY/1=SELL).
+            raw_type = str(data.get("type", "")).upper()
+            data["direction"] = "BUY" if raw_type in ("0", "BUY") else (
+                "SELL" if raw_type in ("1", "SELL") else raw_type)
+            deals.append(data)
+        return deals
+
     def get_atr(self, symbol: str, period: int = 14) -> float:
         resp = self._send(f"OHLCV|{symbol}|{period + 1}")
         if not resp.startswith("OK|"):

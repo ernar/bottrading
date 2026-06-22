@@ -41,6 +41,7 @@ def build_report(
     agents_overview: Optional[dict],
     closed_trades: Optional[list] = None,
     generated_at: Optional[str] = None,
+    performance: Optional[dict] = None,
 ) -> dict:
     """Arma el reporte de estado global.
 
@@ -82,6 +83,12 @@ def build_report(
         f"  Cobertura (hedge): {'disponible' if snapshot.get('hedging') else 'no disponible'}"
         f" · cierre automático: {'sí' if snapshot.get('can_close') else 'no'}"
     )
+
+    # --- Rendimiento REAL reconciliado (libro de balance vs registrado) ---
+    if performance:
+        from core.performance import format_summary_lines
+        lines.append("")
+        lines.extend(format_summary_lines(performance))
 
     # --- Por símbolo (sesgo neto + P/L flotante + exposición) ---
     symbols = snapshot.get("symbols", {}) or {}

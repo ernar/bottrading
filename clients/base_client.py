@@ -47,6 +47,17 @@ class BaseMTClient(ABC):
         """
         return None
 
+    def get_closed_deals(self, count: int = 50) -> List[dict]:
+        """Historial de operaciones CERRADAS del bróker (P/L realizado + comisión
+        + swap reales), del más reciente al más antiguo, hasta ``count``.
+
+        Cada deal: ``{ticket, symbol, type, volume, open_price, close_price,
+        profit, commission, swap, open_time, close_time}``. Lo usa el orquestador
+        para reconciliar ``closed_trades`` por ticket (el flotante aproximado que
+        registra al detectar el cierre no es el realizado). Las subclases que no lo
+        soporten devuelven ``[]`` (el caller cae al flotante)."""
+        return []
+
     @abstractmethod
     def get_orders(self, symbol: Optional[str] = None) -> List: ...
 
