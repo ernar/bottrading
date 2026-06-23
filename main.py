@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import threading
 import socket as _socket
@@ -85,7 +86,7 @@ def _build_saved_agents() -> list:
     return agents
 
 
-def select_agents(ask_llm: bool = True) -> list:
+def select_agents(ask_llm: bool = True, auto: bool = False) -> list:
     """Lista los agentes especializados disponibles y, para cada uno elegido,
     pregunta el provider/modelo LLM. Devuelve los agentes instanciados.
 
@@ -95,7 +96,11 @@ def select_agents(ask_llm: bool = True) -> list:
 
     `ask_llm=False` (perfil DETERMINISTA, SIGNAL_MODE=deterministic): la señal no usa
     LLM, así que NO se pregunta el modelo y NO se requiere ninguna API key — los
-    agentes se construyen con el default del blueprint (provider/modelo irrelevantes)."""
+    agentes se construyen con el default del blueprint (provider/modelo irrelevantes).
+
+    `auto=True` (no interactivo: VPS/servicio o AUTO_START): usa la selección guardada
+    SIN preguntar; si no hay ACTIVE_AGENTS, aborta con instrucciones (no puede elegir
+    a mano sin terminal)."""
     saved_agents = _build_saved_agents()
     if saved_agents:
         print("\n" + console.header("SELECCIÓN DE AGENTES GUARDADA"))
@@ -103,10 +108,20 @@ def select_agents(ask_llm: bool = True) -> list:
             estado = console.ok("ON") if getattr(a, "enabled", True) else console.dim("OFF")
             print(f"  {console.ok('✓')} {console.bold(f'{a.name:<12}')} [{console.info(a.symbol)}] "
                   f"{a.params.provider.upper()}/{a.params.model} · {estado}")
+        if auto:
+            print(console.dim("  Modo no interactivo: usando la selección guardada (sin preguntar)."))
+            return saved_agents
         ans = input("\n¿Usar esta selección guardada? [S/n] (n = elegir manualmente): ").strip().lower()
         if ans in ("", "s", "si", "sí", "y", "yes"):
             return saved_agents
         print(console.dim("  Selección manual..."))
+    elif auto:
+        # No interactivo y sin selección guardada: no se puede elegir a mano.
+        print(console.err(
+            "✗ Arranque no interactivo sin ACTIVE_AGENTS. Define la selección en el .env, p. ej.:\n"
+            '   ACTIVE_AGENTS=[{"name":"btc-agent","enabled":true},{"name":"eth-agent","enabled":true}]\n'
+            "   (o ejecútalo en una terminal interactiva para elegir a mano)."))
+        sys.exit(1)
 
     blueprints = list_agents()
 
@@ -273,7 +288,11 @@ def main():
     # ¿Señales DETERMINISTAS? (SIGNAL_MODE). Si lo son, la señal NO usa LLM, así que
     # no se pregunta el modelo de los agentes al arrancar ni se exige API key.
     deterministic_signals = os.getenv("SIGNAL_MODE", "").strip().lower() == "deterministic"
-    agents = select_agents(ask_llm=not deterministic_signals)
+    # Arranque NO INTERACTIVO (VPS/servicio): si AUTO_START=true o stdin no es una
+    # terminal, no se pregunta nada — se usa la selección guardada (ACTIVE_AGENTS).
+    auto_start = (os.getenv("AUTO_START", "").strip().lower() in ("1", "true", "yes", "on")
+                  or not sys.stdin.isatty())
+    agents = select_agents(ask_llm=not deterministic_signals, auto=auto_start)
     # Perfil de trading (.env): motor de señal + timeframe (p. ej. D1 determinista).
     apply_trading_profile(agents)
 
