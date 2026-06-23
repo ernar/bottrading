@@ -30,10 +30,15 @@ SignalFn = Callable[[object, str], Optional[dict]]
 
 # ----- Motores de señal -----
 
-def make_baseline_signal_fn(atr_sl_mult: float = 1.5, atr_tp_mult: float = 2.0,
-                            lot: float = 0.01) -> SignalFn:
+def make_baseline_signal_fn(atr_sl_mult: float = 1.5, atr_tp_mult: float = 3.0,
+                            lot: float = 0.01, confidence: float = 0.99) -> SignalFn:
     """Señal DETERMINISTA desde ``trend_state``: BUY si alcista, SELL si bajista,
-    nada en lateral. SL/TP por múltiplos de ATR. Es la base de comparación."""
+    nada en lateral. SL/TP por múltiplos de ATR. Es la base de comparación.
+
+    ``confidence`` alta (0.99) y R:R ~2 (sl 1.5×ATR / tp 3×ATR) a propósito: la base
+    no tiene "confianza" calibrable como el LLM, así que debe SUPERAR los umbrales
+    (min_confidence/min_rr) que el optimizador haya subido en los agentes; si no, el
+    ``validate_trade`` del especialista la rechazaría y mediríamos 0 operaciones."""
     def fn(client, symbol):
         rates = client.get_ohlcv(symbol, "H1", 150)
         if len(rates) < 40:
@@ -59,7 +64,7 @@ def make_baseline_signal_fn(atr_sl_mult: float = 1.5, atr_tp_mult: float = 2.0,
             "action": action, "entry": entry,
             "stop_loss": round(entry - sign * atr_sl_mult * atr, digits),
             "take_profit": round(entry + sign * atr_tp_mult * atr, digits),
-            "confidence": 0.6, "volume": lot, "reason": "baseline trend_state",
+            "confidence": confidence, "volume": lot, "reason": "baseline trend_state",
         }
     return fn
 
@@ -209,6 +214,8 @@ def run_coordinated_backtest(client, agents, coordinator, risk_book, signal_fns,
     client.set_cursor(min(warmup, n - 1))
     equity_curve = [client.equity()]
     bars = 0
+    diag_signals = 0      # señales accionables generadas por los especialistas
+    diag_approved = 0     # entradas accionables aprobadas por la mesa
 
     class _Null:
         def write(self, *_a):
@@ -244,6 +251,8 @@ def run_coordinated_backtest(client, agents, coordinator, risk_book, signal_fns,
                         sig["reversal"] = ts["reversal"]
                 sig.setdefault("symbol", agent.symbol)
                 signals[agent.symbol] = sig
+                if sig.get("action") in ("BUY", "SELL"):
+                    diag_signals += 1
 
             if manage_lifecycle:
                 orch._manage_position_lifecycle()
@@ -252,6 +261,10 @@ def run_coordinated_backtest(client, agents, coordinator, risk_book, signal_fns,
             has_positions = snapshot.get("open_positions_total", 0) > 0
             if signals or (has_positions and risk_book.can_close):
                 result = coordinator.decide(snapshot, signals, {"agents": []}, news_context="")
+                for d in result.get("decisions", []):
+                    sg = signals.get(d.get("symbol")) or {}
+                    if d.get("approve") and sg.get("action") in ("BUY", "SELL"):
+                        diag_approved += 1
                 orch._execute_decisions(result, signals)
 
             client.step()
@@ -262,7 +275,90 @@ def run_coordinated_backtest(client, agents, coordinator, risk_book, signal_fns,
             for p in list(client.get_positions(agent.symbol)):
                 client.close_position(agent.symbol, ticket=p["ticket"])
     equity_curve[-1] = client.equity()
-    return _summarize(client, equity_curve, bars)
+    res = _summarize(client, equity_curve, bars)
+    res["diagnostics"] = {
+        "candles": n, "bars": bars,
+        "actionable_signals": diag_signals,
+        "approved_by_mesa": diag_approved,
+        "orders_placed": client._next_ticket - 1,
+    }
+    return res
+
+
+# ----- Carga de histórico + un experimento (para el runner de barridos) -----
+
+def load_history(path: str):
+    """Carga un JSON de histórico y devuelve ``(series, infos)``.
+
+    Acepta el formato multi (``{"series": {...}, "infos": {...}}``, de
+    ``scripts/dump_history.py``) o el single (``{"symbol", "candles"}``)."""
+    import json
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if "series" in data:
+        return data["series"], (data.get("infos") or {})
+    sym = data.get("symbol", "SYM")
+    return {sym: data["candles"]}, {}
+
+
+def _apply_overrides(agent, overrides: dict):
+    """Sobreescribe params del agente (min_confidence/min_rr/atr_*) y los aplica en
+    caliente (apply_params re-sincroniza el StrategyEngine). Override determinista,
+    independiente del tuning persistido en .env, para que el barrido sea limpio."""
+    upd = {k: v for k, v in (overrides or {}).items() if v is not None}
+    if not upd:
+        return
+    try:
+        new = agent.params.model_copy(update=upd)   # pydantic v2
+    except AttributeError:
+        new = agent.params.copy(update=upd)          # pydantic v1
+    agent.apply_params(new)
+
+
+def run_one(series: dict, infos: dict, engines: list, *, signal: str = "baseline",
+            coord: str = "deterministic", overrides: dict = None,
+            warmup: int = 120, balance: float = 1000.0) -> dict:
+    """Corre UN backtest coordinado para una configuración concreta (conjunto de
+    agentes + motor de señal + mesa + overrides de params) y devuelve su resumen.
+    Requiere que la DB esté inicializada (el ejecutor real escribe en ella)."""
+    from agents.registry import build_agent
+    from agents.coordinator import RiskBook, CoordinatorAgent
+    from core.config import get_coordinator_config
+    from clients.replay_client import MultiSymbolReplayClient
+
+    agents = [build_agent(n) for n in engines]
+    for a in agents:
+        _apply_overrides(a, overrides)
+
+    syms = [a.symbol for a in agents]
+    missing = [s for s in syms if s not in series]
+    sub_series = {s: series[s] for s in syms if s in series}
+    if missing or not sub_series:
+        return {"ok": False, "error": f"faltan series para {missing or syms}"}
+    sub_infos = {s: infos.get(s, {}) for s in sub_series}
+    client = MultiSymbolReplayClient(sub_series, sub_infos, starting_balance=balance)
+
+    risk_book = RiskBook(get_coordinator_config())
+    if coord == "llm":
+        cfg = get_coordinator_config()
+        coordinator = CoordinatorAgent(provider=cfg.get("provider") or "gemini",
+                                       model=cfg.get("model") or "gemini-2.0-flash",
+                                       risk_book=risk_book, temperature=cfg["temperature"])
+    else:
+        coordinator = DeterministicCoordinator(risk_book)
+
+    if signal == "llm":
+        signal_fns = {a.symbol: make_llm_signal_fn(a) for a in agents}
+    else:
+        ov = overrides or {}
+        signal_fns = {a.symbol: make_baseline_signal_fn(
+            atr_sl_mult=ov.get("atr_sl_mult", 1.5) or 1.5,
+            atr_tp_mult=ov.get("atr_tp_mult", 3.0) or 3.0) for a in agents}
+
+    res = run_coordinated_backtest(client, agents, coordinator, risk_book, signal_fns,
+                                   warmup=warmup, quiet=True)
+    res["ok"] = True
+    return res
 
 
 # ----- Carga de datos + CLI (runner A/B) -----
@@ -454,6 +550,26 @@ def _main_coordinated(args):
     print("\nPor símbolo (P/L realizado · nº cierres):")
     for sym, (pnl, n) in sorted(by_sym.items()):
         print(f"  {sym:<12} {pnl:>+8.2f}  ({n})")
+
+    # Diagnóstico: explica un resultado de 0 operaciones (lo más confuso).
+    d = res.get("diagnostics", {})
+    print(f"\nDiagnóstico: {d.get('candles')} velas comunes · {d.get('bars')} barras recorridas · "
+          f"{d.get('actionable_signals')} señales accionables · "
+          f"{d.get('approved_by_mesa')} aprobadas por la mesa · "
+          f"{d.get('orders_placed')} órdenes colocadas.")
+    if res.get("trades", 0) == 0 and d.get("orders_placed", 0) == 0:
+        if (d.get("candles") or 0) <= args.warmup:
+            print(f"  → Pocas velas comunes ({d.get('candles')}) para el warmup ({args.warmup}): "
+                  "baja --warmup o vuelca símbolos de la MISMA clase (la intersección por "
+                  "timestamp entre cripto y forex/índices deja muy pocas velas).")
+        elif (d.get("actionable_signals") or 0) == 0:
+            print("  → 0 señales accionables: la tendencia quedó 'lateral' o faltan datos "
+                  "(prueba --signal llm, o revisa que las velas tengan recorrido).")
+        elif (d.get("approved_by_mesa") or 0) == 0:
+            print("  → La MESA vetó todo (exposición/correlación/cooldown/nocional). Revisa los topes.")
+        else:
+            print("  → La mesa aprobó pero el ESPECIALISTA rechazó en validación "
+                  "(min_confidence/min_rr/max_spread del agente demasiado estrictos).")
     return 0
 
 

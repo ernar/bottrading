@@ -182,6 +182,31 @@ def test_deterministic_coordinator_vetoes_opposite_correlated_pair():
     assert "correlacionado" in decisions["ETHUSD"]["clamp"]
 
 
+def test_run_one_sweeps_config_and_trades():
+    """run_one corre un combo coordinado con overrides y devuelve resumen + diagnóstico."""
+    from core.backtest import run_one
+    btc = [_bar(i, 100 + i, 101 + i, 99 + i, 100 + i) for i in range(60)]
+    eth = [_bar(i, 50 + i * 0.5, 51 + i * 0.5, 49 + i * 0.5, 50 + i * 0.5) for i in range(60)]
+    series = {"BTCUSD": btc, "ETHUSD": eth}
+    infos = {s: {"point": 1.0, "digits": 2, "contract_size": 1.0,
+                 "spread_points": 0, "commission_per_lot": 0} for s in series}
+    res = run_one(series, infos, ["btc-agent", "eth-agent"], signal="baseline",
+                  coord="deterministic",
+                  overrides={"min_confidence": 0.5, "min_rr": 1.0, "atr_tp_mult": 3.0},
+                  warmup=30)
+    assert res["ok"] is True
+    assert res["trades"] >= 1
+    assert res["diagnostics"]["actionable_signals"] > 0
+
+
+def test_run_one_missing_series_returns_error():
+    from core.backtest import run_one
+    series = {"BTCUSD": [_bar(i, 100, 101, 99, 100) for i in range(40)]}
+    res = run_one(series, {}, ["eurusd-agent"], signal="baseline", coord="deterministic")
+    assert res["ok"] is False
+    assert "EURUSD" in res["error"]
+
+
 def test_ohlcv_respects_cursor():
     candles = [_bar(i, 100, 101, 99, 100) for i in range(10)]
     client = _client(candles)
