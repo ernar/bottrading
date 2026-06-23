@@ -18,7 +18,7 @@ from clients.base_client import BaseMTClient
 from api.server import socketio, app, set_mt_client, set_orchestrator
 from agents.registry import list_agents, build_agent
 from agents.orchestrator import AgentOrchestrator
-from agents.coordinator import RiskBook, CoordinatorAgent
+from agents.coordinator import RiskBook, CoordinatorAgent, DeterministicCoordinator
 from core.llm_config import available_providers
 from core.config import get_coordinator_config, get_schedule_config, get_active_agents
 from agents.registry import AGENT_BLUEPRINTS
@@ -183,6 +183,47 @@ def select_coordinator_llm(agents: list, cfg: dict) -> tuple:
     return provider, model
 
 
+def apply_trading_profile(agents: list) -> None:
+    """Aplica el perfil de trading desde .env a los agentes seleccionados: motor de
+    señal (SIGNAL_MODE=llm|deterministic), timeframe (AGENT_TIMEFRAME / AGENT_HIGHER_TIMEFRAME)
+    y, en determinista, selectividad (DET_MIN_SCORE) y R:R (ATR_TP_MULT). No-op si no hay
+    nada configurado → el comportamiento por defecto (LLM/H1) no cambia.
+
+    Perfil D1 de bajo coste recomendado en .env:
+      SIGNAL_MODE=deterministic · AGENT_TIMEFRAME=D1 · AGENT_HIGHER_TIMEFRAME=W1
+      COORDINATOR_MODE=deterministic · ATR_TP_MULT=4 · ACTIVE_AGENTS=btc-agent,eth-agent"""
+    mode = os.getenv("SIGNAL_MODE", "").strip().lower()
+    tf = os.getenv("AGENT_TIMEFRAME", "").strip().upper()
+    htf = os.getenv("AGENT_HIGHER_TIMEFRAME", "").strip().upper()
+    if not (mode or tf or htf):
+        return
+    for a in agents:
+        upd = {}
+        if mode:
+            upd["signal_mode"] = mode
+        if tf:
+            upd["timeframe"] = tf
+        if htf:
+            upd["higher_timeframe"] = htf
+        if mode == "deterministic":
+            for env_key, field, cast in (("DET_MIN_SCORE", "det_min_score", int),
+                                          ("ATR_TP_MULT", "atr_tp_mult", float),
+                                          ("ATR_SL_MULT", "atr_sl_mult", float)):
+                raw = os.getenv(env_key, "").strip()
+                if raw:
+                    try:
+                        upd[field] = cast(raw)
+                    except ValueError:
+                        pass
+        try:
+            new = a.params.model_copy(update=upd)       # pydantic v2
+        except AttributeError:
+            new = a.params.copy(update=upd)              # pydantic v1
+        a.apply_params(new)
+        print(f"  {console.ok('✓')} {a.name}[{a.symbol}] → señal "
+              f"{console.bold(new.signal_mode)} · timeframe {console.bold(new.timeframe)}")
+
+
 def _is_port_in_use(port: int) -> bool:
     with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
         return s.connect_ex(("127.0.0.1", port)) == 0
@@ -220,10 +261,16 @@ def main():
     init_db()
 
     agents = select_agents()
+    # Perfil de trading (.env): motor de señal + timeframe (p. ej. D1 determinista).
+    apply_trading_profile(agents)
 
-    # LLM del coordinador (prompt de consola, va con el resto de la selección).
+    # Coordinador: mesa LLM (default) o determinista (sin coste de LLM) según
+    # COORDINATOR_MODE. En determinista no se pregunta el modelo por consola.
     coordinator_cfg = get_coordinator_config()
-    coord_provider, coord_model = select_coordinator_llm(agents, coordinator_cfg)
+    coord_deterministic = coordinator_cfg.get("mode") == "deterministic"
+    coord_provider = coord_model = None
+    if not coord_deterministic:
+        coord_provider, coord_model = select_coordinator_llm(agents, coordinator_cfg)
 
     # Relogin de la cuenta MT4: cierra y relanza el terminal con auto-login
     # (credenciales del .env). Se omite si MT4_TERMINAL_PATH no está configurado.
@@ -287,11 +334,17 @@ def main():
     # tesorería; el CoordinatorAgent (LLM, con fail-safe determinista) reparte
     # capital y decide go/no-go por símbolo. Todo el flujo es coordinado.
     risk_book = RiskBook(coordinator_cfg)
-    coordinator = CoordinatorAgent(
-        provider=coord_provider, model=coord_model,
-        risk_book=risk_book, temperature=coordinator_cfg["temperature"])
-    print(console.kv("Mesa de dirección",
-                     f"{console.ok('activa')} con {console.bold(f'{coord_provider.upper()}/{coord_model}')}"))
+    if coord_deterministic:
+        coordinator = DeterministicCoordinator(risk_book)
+        print(console.kv("Mesa de dirección",
+                         f"{console.ok('activa')} {console.bold('DETERMINISTA')} "
+                         f"{console.dim('(sin LLM, solo topes/guardias)')}"))
+    else:
+        coordinator = CoordinatorAgent(
+            provider=coord_provider, model=coord_model,
+            risk_book=risk_book, temperature=coordinator_cfg["temperature"])
+        print(console.kv("Mesa de dirección",
+                         f"{console.ok('activa')} con {console.bold(f'{coord_provider.upper()}/{coord_model}')}"))
 
     # Planificador de cadencias: rotación (tick base), sonda de noticias RED,
     # junta horaria y reporte periódico. Ver get_schedule_config().

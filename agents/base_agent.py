@@ -43,6 +43,17 @@ class AgentParams(BaseModel):
     reasoning_effort: str = ""
     min_confidence: float = 0.6
     min_rr: float = 1.0
+    # Motor de señal: "llm" (genera con el LLM, default) o "deterministic"
+    # (trend_state en `timeframe`, SIN LLM — el edge validado en backtest, coste $0).
+    signal_mode: str = "llm"
+    # Timeframe base de análisis ("H1" default; "D1" para el perfil diario) y el mayor
+    # de contexto ("H4"/"W1"). Lo usan build_market_context/momentum/ATR.
+    timeframe: str = "H1"
+    higher_timeframe: str = "H4"
+    # Selectividad del modo determinista: voto mínimo de trend_state (2 = base, 4-5 =
+    # solo tendencias fuertes) y, si True, exige ruptura de estructura confirmada.
+    det_min_score: int = 2
+    det_require_break: bool = False
     atr_sl_mult: float = 1.5
     atr_tp_mult: float = 2.0
     lot_size: float = 0.01
@@ -133,14 +144,24 @@ class SymbolAgent:
             self.memory.evaluate_pending(symbol, (tick.ask + tick.bid) / 2)
 
         positions = client.get_positions(symbol)
-        market_data = build_market_context(
-            client, symbol,
-            positions=positions,
-            memory_summary=self.memory.get_summary(symbol),
-            news_context=news_provider.get_news_context(symbol),
-        )
-
-        signal = self.strategy.generate_signal(symbol, market_data=market_data)
+        if self.params.signal_mode == "deterministic":
+            # Edge VALIDADO en backtest, sin LLM (coste $0): trend_state en el
+            # timeframe del agente con SL/TP por ATR. No usa market_data/noticias.
+            from core.signals import deterministic_signal
+            signal = deterministic_signal(
+                client, symbol, timeframe=self.params.timeframe,
+                atr_sl_mult=self.params.atr_sl_mult, atr_tp_mult=self.params.atr_tp_mult,
+                min_score=self.params.det_min_score, require_break=self.params.det_require_break,
+                lot=self.params.lot_size)
+        else:
+            market_data = build_market_context(
+                client, symbol,
+                positions=positions,
+                memory_summary=self.memory.get_summary(symbol),
+                news_context=news_provider.get_news_context(symbol),
+                base_tf=self.params.timeframe, higher_tf=self.params.higher_timeframe,
+            )
+            signal = self.strategy.generate_signal(symbol, market_data=market_data)
         if not signal:
             return None
 
@@ -148,7 +169,7 @@ class SymbolAgent:
         # prompt): se adjunta a la señal para que la mesa dispare la guardia de
         # reversión sin esperar a que el LLM relabele la tendencia. Campos extra
         # ignorados por log_signal/update_signal (cherry-pick de campos conocidos).
-        ts = momentum_snapshot(client, symbol)
+        ts = momentum_snapshot(client, symbol, timeframe=self.params.timeframe)
         if ts:
             signal["momentum"] = ts.get("direction")
             if ts.get("reversal"):
@@ -174,7 +195,7 @@ class SymbolAgent:
         has_tp = bool(signal.get("take_profit"))
         if has_sl and has_tp:
             return
-        atr = client.get_atr(self.symbol)
+        atr = client.get_atr(self.symbol, timeframe=self.params.timeframe)
         if atr <= 0:
             return
         sym_info = client.get_symbol_info(self.symbol)

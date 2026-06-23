@@ -459,8 +459,8 @@ class MT4Client(BaseMTClient):
             deals.append(data)
         return deals
 
-    def get_atr(self, symbol: str, period: int = 14) -> float:
-        resp = self._send(f"OHLCV|{symbol}|{period + 1}")
+    def get_atr(self, symbol: str, period: int = 14, timeframe: str = "H1") -> float:
+        resp = self._send(f"OHLCV|{symbol}|{period + 1}|{timeframe}")
         if not resp.startswith("OK|"):
             return 0.0
         candles = resp[3:].split(";")
@@ -482,10 +482,10 @@ class MT4Client(BaseMTClient):
         return sum(trs) / len(trs) if trs else 0.0
 
     def get_ohlcv(self, symbol: str, timeframe: str = "H1", bars: int = 120) -> List[dict]:
-        # El EA bridge solo entrega velas H1 (comando OHLCV sin timeframe)
-        if timeframe.upper() != "H1":
-            return []
-        resp = self._send(f"OHLCV|{symbol}|{bars}")
+        # El EA mapea el timeframe (TimeframeToPeriod) y CAPA a 500 velas por
+        # petición (bars fuera de [1,500] -> 20). Pedimos como mucho 500.
+        bars = max(1, min(int(bars), 500))
+        resp = self._send(f"OHLCV|{symbol}|{bars}|{timeframe}")
         if not resp.startswith("OK|"):
             return []
         result = []

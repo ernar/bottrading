@@ -141,6 +141,28 @@ def test_apply_tp_rr_no_actua_sin_niveles_o_rr_cero():
     assert orch._apply_tp_rr(agent, sig2, 1.5) is False
 
 
+# ----- Edición en caliente de señal/timeframe (integración front) -----
+
+def test_set_agent_params_signal_mode_and_timeframe():
+    from agents.registry import build_agent
+    orch = AgentOrchestrator([build_agent("btc-agent")], client=SimpleNamespace(),
+                             coordinator=SimpleNamespace(), risk_book=SimpleNamespace())
+    res = orch.set_agent_params("btc-agent", {"signal_mode": "deterministic", "timeframe": "d1"})
+    a = orch.agents[0]
+    assert a.params.signal_mode == "deterministic"
+    assert a.params.timeframe == "D1"          # canónico en mayúsculas pese al "d1"
+    assert res["params"]["timeframe"] == "D1"
+
+
+def test_set_agent_params_rejects_bad_timeframe():
+    from agents.registry import build_agent
+    import pytest
+    orch = AgentOrchestrator([build_agent("btc-agent")], client=SimpleNamespace(),
+                             coordinator=SimpleNamespace(), risk_book=SimpleNamespace())
+    with pytest.raises(ValueError):
+        orch.set_agent_params("btc-agent", {"timeframe": "H7"})
+
+
 # ----- Guardarraíl de nocional (apalancamiento) -----
 
 class _NotionalClient:

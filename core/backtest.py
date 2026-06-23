@@ -31,41 +31,31 @@ SignalFn = Callable[[object, str], Optional[dict]]
 # ----- Motores de señal -----
 
 def make_baseline_signal_fn(atr_sl_mult: float = 1.5, atr_tp_mult: float = 3.0,
-                            lot: float = 0.01, confidence: float = 0.99) -> SignalFn:
+                            lot: float = 0.01, confidence: float = 0.99,
+                            min_score: int = 2, require_break: bool = False) -> SignalFn:
     """Señal DETERMINISTA desde ``trend_state``: BUY si alcista, SELL si bajista,
     nada en lateral. SL/TP por múltiplos de ATR. Es la base de comparación.
 
     ``confidence`` alta (0.99) y R:R ~2 (sl 1.5×ATR / tp 3×ATR) a propósito: la base
     no tiene "confianza" calibrable como el LLM, así que debe SUPERAR los umbrales
     (min_confidence/min_rr) que el optimizador haya subido en los agentes; si no, el
-    ``validate_trade`` del especialista la rechazaría y mediríamos 0 operaciones."""
+    ``validate_trade`` del especialista la rechazaría y mediríamos 0 operaciones.
+
+    Selectividad de régimen (para NO operar el chop, que es donde el seguidor de
+    tendencia se deja barrer a stops): ``min_score`` exige una mayoría más amplia del
+    voto de ``trend_state`` (|score| >= min_score; 2 = comportamiento original, 4-5 =
+    solo tendencias fuertes); ``require_break`` exige además ruptura de estructura
+    confirmada en el sentido de la entrada.
+
+    Reusa ``core.signals.deterministic_signal`` (la MISMA lógica que opera el agente en
+    vivo en modo determinista), para que backtest y real midan/operen lo mismo."""
+    from core.signals import deterministic_signal
+
     def fn(client, symbol):
-        rates = client.get_ohlcv(symbol, "H1", 150)
-        if len(rates) < 40:
-            return None
-        closes = [r["close"] for r in rates]
-        highs = [r["high"] for r in rates]
-        lows = [r["low"] for r in rates]
-        ts = ta.trend_state(closes, highs, lows)
-        if not ts:
-            return None
-        direction = ts["direction"]
-        action = "BUY" if direction == "bullish" else "SELL" if direction == "bearish" else None
-        if not action:
-            return None
-        tick = client.get_tick(symbol)
-        atr = client.get_atr(symbol)
-        if not tick or atr <= 0:
-            return None
-        digits = getattr(client.get_symbol_info(symbol), "digits", 2)
-        entry = tick.ask if action == "BUY" else tick.bid
-        sign = 1 if action == "BUY" else -1
-        return {
-            "action": action, "entry": entry,
-            "stop_loss": round(entry - sign * atr_sl_mult * atr, digits),
-            "take_profit": round(entry + sign * atr_tp_mult * atr, digits),
-            "confidence": confidence, "volume": lot, "reason": "baseline trend_state",
-        }
+        return deterministic_signal(
+            client, symbol, timeframe="H1", atr_sl_mult=atr_sl_mult,
+            atr_tp_mult=atr_tp_mult, min_score=min_score, require_break=require_break,
+            confidence=confidence, lot=lot)
     return fn
 
 
@@ -157,27 +147,9 @@ def _summarize(client: ReplayClient, equity_curve: List[float], bars: int) -> di
 
 # ----- Modo COORDINADO (la mesa en el bucle) -----
 
-class DeterministicCoordinator:
-    """Mesa SIN LLM para backtests coordinados gratis/reproducibles: aprueba las
-    señales accionables (fallback determinista de ``CoordinatorAgent``) y deja que el
-    ``RiskBook`` (clamp + guardias deterministas: exposición, anti-apilamiento,
-    reversión, grupo correlacionado, nocional) imponga los topes. Misma interfaz que
-    ``CoordinatorAgent.decide``, así que el ejecutor real la usa igual."""
-
-    def __init__(self, risk_book):
-        self.risk_book = risk_book
-        self.director_note = ""
-        self.risk_directive = ""
-        self.engine = None
-        self.last_rationale = ""
-
-    def decide(self, snapshot, signals, agents_overview, news_context=""):
-        from agents.coordinator import CoordinatorAgent
-        decisions = CoordinatorAgent._fallback(self, signals)
-        decisions = CoordinatorAgent._ensure_coverage(decisions, snapshot)
-        clamped = self.risk_book.clamp(decisions, snapshot, signals)
-        self.last_rationale = "mesa determinista (sin LLM)"
-        return {"rationale": self.last_rationale, "decisions": clamped}
+# La mesa determinista (sin LLM) vive en agents/coordinator.py para reusarla TAMBIÉN
+# en vivo (main.py). Se re-exporta aquí por compatibilidad con el backtest y sus tests.
+from agents.coordinator import DeterministicCoordinator  # noqa: E402
 
 
 def run_coordinated_backtest(client, agents, coordinator, risk_book, signal_fns, *,

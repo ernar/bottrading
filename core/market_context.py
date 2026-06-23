@@ -116,13 +116,13 @@ def _momentum_section(rates_h1: List[dict], rates_h4: List[dict]) -> List[str]:
     return lines
 
 
-def momentum_snapshot(client, symbol: str) -> Optional[dict]:
-    """``trend_state`` determinista de H1 para ADJUNTAR a la señal: lo consume la
-    mesa (RiskBook) para disparar la guardia de reversión sin esperar a que el LLM
-    relabele su tendencia (que va rezagada). Fetch único de H1; devuelve None ante
+def momentum_snapshot(client, symbol: str, timeframe: str = "H1") -> Optional[dict]:
+    """``trend_state`` determinista del ``timeframe`` base para ADJUNTAR a la señal: lo
+    consume la mesa (RiskBook) para disparar la guardia de reversión sin esperar a que
+    el LLM relabele su tendencia (que va rezagada). Fetch único; devuelve None ante
     datos insuficientes o cualquier error (fail-safe: nunca tumba el análisis)."""
     try:
-        rates = client.get_ohlcv(symbol, timeframe="H1", bars=120)
+        rates = client.get_ohlcv(symbol, timeframe=timeframe, bars=120)
         if not rates:
             return None
         closes = [r["close"] for r in rates]
@@ -134,8 +134,11 @@ def momentum_snapshot(client, symbol: str) -> Optional[dict]:
 
 
 def build_market_context(client, symbol: str, positions: list = None,
-                         memory_summary: str = "", news_context: str = "") -> str:
-    """Contexto completo para el prompt: tick, indicadores H1 (+H4 si hay), velas, posiciones, memoria."""
+                         memory_summary: str = "", news_context: str = "",
+                         base_tf: str = "H1", higher_tf: str = "H4") -> str:
+    """Contexto completo para el prompt: tick, indicadores del timeframe base
+    (+ el mayor si hay), velas, posiciones, memoria. Un agente D1 pasa
+    ``base_tf="D1"``, ``higher_tf="W1"``; por defecto H1/H4 (sin cambios)."""
     sym_info = client.get_symbol_info(symbol)
     digits = getattr(sym_info, "digits", 5) if sym_info else 5
     tick = client.get_tick(symbol)
@@ -145,15 +148,15 @@ def build_market_context(client, symbol: str, positions: list = None,
         spread = (tick.ask - tick.bid) / (getattr(sym_info, "point", 1) or 1) if sym_info else 0
         lines.append(f"Precio actual: Ask={tick.ask} Bid={tick.bid} | Spread: {spread:.0f} puntos")
 
-    rates_h1 = client.get_ohlcv(symbol, timeframe="H1", bars=120)
+    rates_h1 = client.get_ohlcv(symbol, timeframe=base_tf, bars=120)
     if rates_h1:
         lines.append("")
-        lines += _indicators_section(rates_h1, digits, "H1")
+        lines += _indicators_section(rates_h1, digits, base_tf)
 
-    rates_h4 = client.get_ohlcv(symbol, timeframe="H4", bars=80)
+    rates_h4 = client.get_ohlcv(symbol, timeframe=higher_tf, bars=80)
     if rates_h4:
         lines.append("")
-        lines += _indicators_section(rates_h4, digits, "H4 (contexto de tendencia mayor)")
+        lines += _indicators_section(rates_h4, digits, f"{higher_tf} (contexto de tendencia mayor)")
 
     if rates_h1:
         momentum_lines = _momentum_section(rates_h1, rates_h4)

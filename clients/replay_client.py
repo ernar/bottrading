@@ -219,7 +219,8 @@ class ReplayClient(BaseMTClient):
             })
         return out
 
-    def get_atr(self, symbol: str, period: int = 14) -> float:
+    def get_atr(self, symbol: str, period: int = 14, timeframe: str = "H1") -> float:
+        # La serie cargada YA es del timeframe de interés; timeframe es cosmético aquí.
         window = self._candles[: self._cursor + 1]
         if len(window) < period + 1:
             return 0.0
@@ -480,7 +481,7 @@ class MultiSymbolReplayClient(BaseMTClient):
             window = ReplayClient._aggregate_h4(window)
         return window[-bars:] if bars else window
 
-    def get_atr(self, symbol: str, period: int = 14) -> float:
+    def get_atr(self, symbol: str, period: int = 14, timeframe: str = "H1") -> float:
         window = self._series.get(symbol, [])[: self._cursor + 1]
         if len(window) < period + 1:
             return 0.0

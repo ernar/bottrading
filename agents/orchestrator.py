@@ -49,6 +49,15 @@ RISK_COOLDOWN_ANALYSIS_INTERVAL = 15 * 60
 # eso el back-off se dispara con el rechazo real del broker.
 TRADE_DISABLED_BACKOFF_SECONDS = 30 * 60
 
+# Segundos por timeframe (para el gate de análisis por vela: un agente D1 decide
+# ~1×/día, la gestión intradía corre aparte en _manage_position_lifecycle).
+_TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600,
+               "H4": 14400, "D1": 86400, "W1": 604800, "MN1": 2592000}
+
+
+def _timeframe_seconds(tf: str) -> int:
+    return _TF_SECONDS.get(str(tf or "H1").upper(), 3600)
+
 
 def _clamp(value: float, key: str) -> float:
     lo, hi = PARAM_BOUNDS[key]
@@ -994,6 +1003,17 @@ class AgentOrchestrator:
             print("  " + console.warn("⚡ análisis forzado por noticia pese al cooldown "
                                        "(la ejecución sigue sujeta a validación/mesa)."))
 
+        # Gate por TIMEFRAME: un agente de timeframe alto (D1/H4/W1) decide UNA vez por
+        # vela, no en cada rotación. La GESTIÓN intradía (trailing/hard-stop/reversión)
+        # corre aparte cada rotación en _manage_position_lifecycle, así que un giro
+        # brusco sigue protegido por el SL vivo y las guardias. Una noticia lo salta.
+        tf_secs = _timeframe_seconds(getattr(getattr(agent, "params", None), "timeframe", "H1"))
+        if tf_secs > self.rotation_seconds and not force and self._throttled(symbol, tf_secs):
+            restante = int((tf_secs - (time.time() - self._last_analysis_at.get(symbol, 0))) // 60)
+            print(console.dim(f"  ⏳ {symbol}: timeframe alto; análisis 1×/vela "
+                              f"(próxima decisión en ~{max(0, restante)} min). Gestión intradía sigue activa."))
+            return None
+
         with _Spinner("  Generando análisis" + (" (forzado por noticia)" if force else "")):
             signal = agent.analyze(self.client, platform=self.platform)
         self._last_analysis_at[symbol] = time.time()
@@ -1909,6 +1929,11 @@ class AgentOrchestrator:
     EDITABLE_CHOICE_PARAMS = {
         "thinking": ("auto", "enabled", "disabled"),
         "reasoning_effort": ("", "high", "max"),
+        # Motor de señal y timeframe, editables en caliente desde el dashboard
+        # (apply_params los recoge; el gate por vela y el ATR usan el nuevo timeframe
+        # en el siguiente análisis). Cambiar de H1↔D1 reajusta la cadencia de entradas.
+        "signal_mode": ("llm", "deterministic"),
+        "timeframe": ("M15", "M30", "H1", "H4", "D1", "W1"),
     }
 
     def set_agent_params(self, name: str, updates: dict) -> dict:
@@ -1937,11 +1962,14 @@ class AgentOrchestrator:
                 if num < lo or num > hi:
                     print(f"  [{name}] {key}={num} recortado a {clean[key]} (rango {lo}–{hi})")
             elif key in self.EDITABLE_CHOICE_PARAMS:
-                val = ("" if value is None else str(value)).strip().lower()
+                val = ("" if value is None else str(value)).strip()
                 allowed = self.EDITABLE_CHOICE_PARAMS[key]
-                if val not in allowed:
+                # Match case-insensitive pero guardando la forma canónica (p. ej.
+                # "d1" -> "D1", "AUTO" -> "auto"), porque timeframe es mayúsculas.
+                match = next((a for a in allowed if a.lower() == val.lower()), None)
+                if match is None:
                     raise ValueError(f"valor inválido para {key}: {value!r} (válidos: {allowed})")
-                clean[key] = val
+                clean[key] = match
         if not clean:
             raise ValueError("no se recibió ningún parámetro editable válido")
         new_params = agent.params.model_copy(update=clean)
@@ -2065,6 +2093,12 @@ class AgentOrchestrator:
                     "lot_size": p.lot_size,
                     "thinking": p.thinking,
                     "reasoning_effort": p.reasoning_effort,
+                    # Motor de señal y timeframe (para que el front muestre p. ej.
+                    # "Determinista · D1" y oculte el modelo LLM cuando no aplica).
+                    "signal_mode": getattr(p, "signal_mode", "llm"),
+                    "timeframe": getattr(p, "timeframe", "H1"),
+                    "higher_timeframe": getattr(p, "higher_timeframe", "H4"),
+                    "det_min_score": getattr(p, "det_min_score", 2),
                 },
                 "stats": self.stats[agent.name],
                 "performance": agent.memory.get_performance(agent.symbol),
@@ -2168,6 +2202,9 @@ class AgentOrchestrator:
         está siempre activa (`enabled` se mantiene por compatibilidad del API)."""
         return {
             "enabled": True,
+            # "deterministic" = mesa sin LLM (solo RiskBook+guardias); "llm" = CoordinatorAgent.
+            # El front oculta el selector de modelo y muestra un badge si es determinista.
+            "mode": "deterministic" if getattr(self.coordinator, "provider", "") == "deterministic" else "llm",
             "provider": self.coordinator.provider,
             "model": self.coordinator.model,
             # Nota de dirección activa (instrucción del responsable que la mesa

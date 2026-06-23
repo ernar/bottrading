@@ -1180,3 +1180,36 @@ class CoordinatorAgent:
                 "reason": "aprobada por defecto (coordinador LLM no disponible)",
             })
         return decisions
+
+
+class DeterministicCoordinator:
+    """Mesa SIN LLM (coste $0): aprueba las señales accionables con reparto igual del
+    capital (``CoordinatorAgent._fallback``) y deja que el ``RiskBook`` (``clamp`` +
+    guardias deterministas: exposición, anti-apilamiento, reversión, grupo
+    correlacionado BTC/ETH, nocional) imponga los topes. Misma interfaz que
+    ``CoordinatorAgent.decide``, así que el orquestador la usa igual.
+
+    Tiene sentido con VARIOS símbolos (asignación + correlación); con uno solo se
+    limita a aprobar y dejar actuar a las guardias. Pensada para el perfil de bajo
+    coste (D1, sin gastar LLM ni en señal ni en mesa)."""
+
+    def __init__(self, risk_book: RiskBook):
+        self.risk_book = risk_book
+        self.director_note = ""
+        self.risk_directive = ""
+        self.engine = None
+        self.last_rationale = ""
+        self.provider = "deterministic"
+        self.model = "rule-based"
+
+    def decide(self, snapshot: dict, signals: dict, agents_overview: dict,
+               news_context: str = "") -> dict:
+        decisions = CoordinatorAgent._fallback(self, signals)
+        decisions = CoordinatorAgent._ensure_coverage(decisions, snapshot)
+        clamped = self.risk_book.clamp(decisions, snapshot, signals)
+        self.last_rationale = "mesa determinista (sin LLM)"
+        return {"rationale": self.last_rationale, "decisions": clamped}
+
+    def set_model(self, provider: str, model: str):
+        """No-op: la mesa determinista no usa LLM (el dashboard puede llamarlo)."""
+        return {"ok": False, "error": "mesa determinista: sin modelo LLM"}

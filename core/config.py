@@ -291,6 +291,9 @@ def get_coordinator_config() -> dict:
     return {
         "provider": os.getenv("COORDINATOR_PROVIDER", "").strip(),
         "model": os.getenv("COORDINATOR_MODEL", "").strip(),
+        # Mesa: "llm" (CoordinatorAgent, default) o "deterministic" (sin LLM, solo
+        # RiskBook+guardias). El perfil D1 de bajo coste usa "deterministic".
+        "mode": os.getenv("COORDINATOR_MODE", "llm").strip().lower(),
         "can_close": _env_bool("COORDINATOR_CAN_CLOSE", True),
         "llm_can_close": _env_bool("COORDINATOR_LLM_CAN_CLOSE", False),
         "temperature": _env_float("COORDINATOR_TEMPERATURE", 0.2),
