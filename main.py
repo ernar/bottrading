@@ -85,13 +85,17 @@ def _build_saved_agents() -> list:
     return agents
 
 
-def select_agents() -> list:
+def select_agents(ask_llm: bool = True) -> list:
     """Lista los agentes especializados disponibles y, para cada uno elegido,
     pregunta el provider/modelo LLM. Devuelve los agentes instanciados.
 
     Si hay una selección guardada (ACTIVE_AGENTS en .env, desde el botón
     "Guardar selección" del dashboard), la ofrece como opción por defecto para no
-    tener que reelegir en cada arranque."""
+    tener que reelegir en cada arranque.
+
+    `ask_llm=False` (perfil DETERMINISTA, SIGNAL_MODE=deterministic): la señal no usa
+    LLM, así que NO se pregunta el modelo y NO se requiere ninguna API key — los
+    agentes se construyen con el default del blueprint (provider/modelo irrelevantes)."""
     saved_agents = _build_saved_agents()
     if saved_agents:
         print("\n" + console.header("SELECCIÓN DE AGENTES GUARDADA"))
@@ -143,6 +147,12 @@ def select_agents() -> list:
     agents = []
     shared_provider = shared_model = None
     for i, bp in enumerate(chosen):
+        if not ask_llm:
+            # Determinista: la señal no usa LLM, no se pregunta el modelo.
+            agents.append(build_agent(bp.name))
+            print(f"  {console.ok('✓')} {bp.name} [{bp.symbol}] "
+                  f"{console.dim('(señal determinista, sin LLM)')}")
+            continue
         if shared_provider is not None:
             provider, model = shared_provider, shared_model
         else:
@@ -260,7 +270,10 @@ def main():
     from core.db import init_db
     init_db()
 
-    agents = select_agents()
+    # ¿Señales DETERMINISTAS? (SIGNAL_MODE). Si lo son, la señal NO usa LLM, así que
+    # no se pregunta el modelo de los agentes al arrancar ni se exige API key.
+    deterministic_signals = os.getenv("SIGNAL_MODE", "").strip().lower() == "deterministic"
+    agents = select_agents(ask_llm=not deterministic_signals)
     # Perfil de trading (.env): motor de señal + timeframe (p. ej. D1 determinista).
     apply_trading_profile(agents)
 
@@ -328,6 +341,20 @@ def main():
     activos = ", ".join(f"{a.name}[{a.symbol}]" for a in agents)
     print("\n" + console.header("BOT EN MARCHA"))
     print(console.kv("Agentes activos", console.bold(activos)))
+    # Resumen claro de USO DE LLM: en el perfil determinista, el trading (señales +
+    # mesa) NO usa LLM (coste $0); el LLM solo intervendría en el chat del asistente.
+    señal_llm = any(getattr(a.params, "signal_mode", "llm") != "deterministic" for a in agents)
+    mesa_llm = not coord_deterministic
+    if not señal_llm and not mesa_llm:
+        print(console.kv("Uso de LLM", console.ok("NINGUNO en el trading")
+                         + console.dim(" (señales y mesa deterministas; solo el chat del asistente usaría LLM)")))
+    else:
+        partes = []
+        if señal_llm:
+            partes.append("señales")
+        if mesa_llm:
+            partes.append("mesa")
+        print(console.kv("Uso de LLM", console.warn("activo en " + " y ".join(partes))))
     print(console.dim("  Presiona Ctrl+C para detener"))
 
     # Mesa de dirección (SIEMPRE activa): el RiskBook (topes duros) es la
